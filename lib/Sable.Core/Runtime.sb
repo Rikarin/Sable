@@ -721,6 +721,58 @@ public struct Runtime {
     @builtin("signal_raise")
     public static fn raiseSignal(_ signal: Int) -> Bool
 
+    /// Whether a standard stream (0, 1 or 2) is a terminal.
+    @builtin("terminal_is")
+    public static fn isTerminal(_ stream: Int) -> Bool
+
+    /// Whether it is a terminal that reads escape sequences, asked to if it
+    /// must be (Windows).
+    @builtin("terminal_styles")
+    public static fn terminalStyles(_ stream: Int) -> Bool
+
+    /// Its columns, shifted left by 32, and its rows; 0 where there is no
+    /// saying.
+    @builtin("terminal_size")
+    public static fn terminalSize(_ stream: Int) -> Int
+
+    /// Standard input's terminal put in a mode: 0 as it was found, 1 raw, 2
+    /// raw with the interrupt's keys as any others. The mode it had; -1
+    /// where there is no terminal. Undone however the program ends.
+    @builtin("terminal_mode")
+    public static fn terminalMode(_ mode: Int) -> Int
+
+    /// What standard output's terminal is about to show, undone however the
+    /// program ends: 1 the alternate screen, 2 no cursor.
+    @builtin("terminal_show")
+    public static fn terminalShow(_ shown: Int)
+
+    /// A byte typed at standard input's terminal, within so many
+    /// milliseconds, or however long for less than none: -1 when there will
+    /// be no more, -2 when there was none in that time.
+    @builtin("terminal_read")
+    public static fn terminalRead(_ milliseconds: Int) -> Int
+
+    /// A pseudoterminal, for the tests of what needs a terminal: 0 where the
+    /// system has none such.
+    @builtin("pty_open")
+    public static fn ptyOpen() -> Int
+
+    /// The file a program's streams are to be for it to be their terminal.
+    @builtin("pty_name")
+    public static fn ptyName(_ pty: Int) -> String
+
+    /// A call on it: 0 closes it; 1 reads a byte of what was written to the
+    /// terminal, as terminalRead; 2 types a byte; 3 sets its size, as
+    /// terminalSize has it; 4 gives its mode (1 whole lines, 2 echo, 4 the
+    /// interrupt's keys).
+    @builtin("pty_call")
+    public static fn ptyCall(_ pty: Int, _ call: Int, _ argument: Int) -> Int
+
+    /// This program's streams made the pseudoterminal's of the name, and it
+    /// the program's controlling terminal if that is asked.
+    @builtin("pty_attach")
+    public static fn ptyAttach(_ name: String, _ controlling: Bool) -> Bool
+
     /// The message sent as a datagram to the Unix socket named, as systemd's
     /// sd_notify does: a path, or '@' and an abstract name (Linux). 0 sent, 1
     /// the system has none such, 2 it could not be sent.

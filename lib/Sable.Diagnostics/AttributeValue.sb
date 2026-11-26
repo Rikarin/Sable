@@ -1,0 +1,26 @@
+module Sable.Diagnostics
+
+/// What an attribute of a span, an event or a measurement holds: text, an
+/// integer, a number, a truth, as OpenTelemetry's attributes do.
+///
+/// ```sable
+/// assert(AttributeValue.Integer(200).description() == "200")
+/// assert(AttributeValue.Text("GET").description() == "GET")
+/// ```
+@derive(Equatable, Hashable, Debug)
+public union AttributeValue {
+    Text(String)
+    Integer(Int)
+    Number(F64)
+    Boolean(Bool)
+
+    /// As a log line or the console exporter writes it.
+    public fn description() -> String {
+        return match self {
+            case .Text(let text) => text
+            case .Integer(let n) => "\(n)"
+            case .Number(let x)  => "\(x)"
+            case .Boolean(let b) => b ? "true" : "false"
+        }
+    }
+}

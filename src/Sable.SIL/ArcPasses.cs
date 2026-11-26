@@ -401,6 +401,9 @@ public sealed class BorrowLoads : ISilPass {
     internal static SilValue? ExclusiveOf(SilValue address) =>
         address switch {
             AllocStackInst slot => slot,
+            // A global 'let' is written as the program starts and destroyed as
+            // it ends, and by nothing between: no call can change it.
+            GlobalAddrInst global when global.Block?.Function.Module?.ConstantGlobals.Contains(global.Global) == true => global,
             SilArgument { Type: AddressType } parameter when parameter.Block == parameter.Block.Function.Entry => parameter,
             StructElementAddrInst element => ExclusiveOf(element.Address),
             TupleElementAddrInst element => ExclusiveOf(element.Address),
@@ -440,11 +443,15 @@ public sealed class BorrowLoads : ISilPass {
         };
 
     /// <summary>True when an instruction might change what the storage holds, or free it.</summary>
+    // The same slot, or the same global, wherever its address was taken.
+    static bool SameStorage(SilValue? a, SilValue b) =>
+        ReferenceEquals(a, b) || a is GlobalAddrInst x && b is GlobalAddrInst y && x.Global == y.Global;
+
     internal static bool MayWrite(SilInstruction instruction, SilValue? slot, SilValue? owner) {
         if (slot is not null) {
             // A stack slot, or an inout parameter, is written only by something given its address.
             foreach (var operand in instruction.Operands) {
-                if (operand.Type is AddressType && ReferenceEquals(ExclusiveOf(operand), slot)
+                if (operand.Type is AddressType && SameStorage(ExclusiveOf(operand), slot)
                     && instruction is not (LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or StructElementAddrInst or TupleElementAddrInst)) {
                     return true;
                 }

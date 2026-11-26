@@ -38,9 +38,10 @@ public sealed class InlineClosures : ISilPass {
             changed = false;
             foreach (var closure in function.Blocks.SelectMany(static b => b.Instructions).OfType<PartialApplyInst>().ToList()) {
                 if (closure is { Function: FunctionRefInst code, ThickType.Signature.IsAsync: false }
-                    && module.Find(code.Function) is { Inline: SilInline.Always, Blocks.Count: > 0 } callee
+                    && module.Find(code.Function) is { Blocks.Count: > 0 } callee
                     && callee != function
-                    && OnlyCalled(closure, new Uses(function)) is { } uses) {
+                    && OnlyCalled(closure, new Uses(function)) is { } uses
+                    && (callee.Inline == SilInline.Always || !function.IsUnspecialised && OnceAndSmall(callee, uses))) {
                     Unclose(function, closure, code, callee, uses);
                     changed = true;
                 }
@@ -51,6 +52,17 @@ public sealed class InlineClosures : ISilPass {
             }
         }
     }
+
+    /// <summary>
+    ///     Whether a closure that is no autoclosure is unclosed all the same:
+    ///     called in no more than two places — the two ways of an inlined
+    ///     function's branch — and code the inliner would inline there. A
+    ///     trailing closure given to an inlined function, as
+    ///     <c>tracer.withSpan("a") { … }</c> with nothing listening, then
+    ///     allocates no context.
+    /// </summary>
+    static bool OnceAndSmall(SilFunction callee, List<SilInstruction> uses) =>
+        uses.Count(static u => u is ApplyInst) <= 2 && Inliner.WouldInline(callee);
 
     /// <summary>
     ///     The calls, destroys and copies of a closure — each copy only

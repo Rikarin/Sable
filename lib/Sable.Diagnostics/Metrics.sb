@@ -1,0 +1,37 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+
+/// The program's meters, and whether anything collects them: until a
+/// reader does (`MetricReader`), instruments record nothing, each asking
+/// one atomic load first. What is recorded from then on is kept, summed
+/// from that start, for every reader to collect.
+public struct Metrics {
+    // How many readers there are, in a cell of its own (Tracing.listening).
+    static let readers: Int = flagCell()
+    static let meters: Mutex<Meter[>..]> = Mutex([])
+
+    /// Whether a reader collects the instruments.
+    public static var isCollecting: Bool {
+        @inline(always)
+        get {
+            return Int.atomicLoad(Metrics.readers, 0) != 0
+        }
+    }
+
+    static fn add(_ meter: Meter) {
+        Metrics.meters.withLock { $0.append(meter) }
+    }
+
+    /// Every instrument of every meter, as it is now; the observable ones'
+    /// callbacks asked.
+    public static fn collect() -> MetricData[>..] {
+        let time = Runtime.wallClockNanoseconds()
+        let meters = Metrics.meters.withLock { $0 }
+        var all: MetricData[>..] = []
+        for meter in meters {
+            all.append(contentsOf: meter.collect(time))
+        }
+        return all
+    }
+}

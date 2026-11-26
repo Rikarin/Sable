@@ -1,0 +1,28 @@
+module Sable.Diagnostics
+
+/// How a histogram counts its values: in buckets whose bounds are given, or
+/// in buckets of a size that grows by a constant ratio, as many as fit,
+/// that follow the values wherever they fall (OpenTelemetry's base-2
+/// exponential histogram).
+///
+/// ```sable
+/// let latency = HistogramBuckets.Explicit(boundaries: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
+/// assert(HistogramBuckets.standard != latency)
+/// ```
+@derive(Equatable, Debug)
+public union HistogramBuckets {
+    /// A bucket up to each bound, the bound in it, and one above the last.
+    Explicit(boundaries: F64[>..])
+    /// At most 'maxSize' buckets, each 2^(2^-scale) times the one before,
+    /// the scale no more than 'maxScale' (and no more than 6, which the
+    /// values are recorded at: buckets 1.1% wide), as small as the values'
+    /// spread needs.
+    Exponential(maxSize: Int, maxScale: Int)
+
+    /// OpenTelemetry's default bounds: 0, 5, 10, 25, 50, 75, 100, 250, 500,
+    /// 750, 1000, 2500, 5000, 7500, 10000.
+    public static var standard: HistogramBuckets => .Explicit(boundaries: [0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0, 10000.0])
+
+    /// Exponential, as OpenTelemetry's default: 160 buckets.
+    public static var exponential: HistogramBuckets => .Exponential(maxSize: 160, maxScale: 20)
+}

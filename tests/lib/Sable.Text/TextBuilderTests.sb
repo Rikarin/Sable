@@ -212,3 +212,17 @@ fn buildingText(_ b: Bencher) {
         return builder.build()
     })
 }
+
+@test
+fn aShortBuildKeepsTheBufferForTheNextUse() {
+    let builder = TextBuilder(capacity: 64)
+    builder.append("first")
+    expect(builder.build() == "first")
+    let room = builder.capacity
+    builder.append(" and more")
+    expect(builder.build() == "first and more")
+    builder.reset()
+    expect(builder.isEmpty && builder.capacity == room)
+    builder.append("again")
+    expect(builder.build() == "again")
+}

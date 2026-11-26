@@ -1,0 +1,66 @@
+module ResettableTests
+
+// Resettable (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+struct Scratch: Resettable {
+    var lines: String[>..]
+    var resets: Int
+
+    mutating fn reset() {
+        lines.removeAll(keepingCapacity: true)
+        resets += 1
+    }
+}
+
+final class Board: Resettable {
+    var marks: Int[>..] = []
+
+    init() { }
+
+    fn reset() {
+        marks.removeAll(keepingCapacity: true)
+    }
+}
+
+// What a pool does with what comes back: resets it through the protocol.
+fn recycled<T: Resettable>(_ value: inout T) {
+    value.reset()
+}
+
+fn resetAll(_ values: inout (any Resettable)[>..]) {
+    var i = 0
+    while i < values.count {
+        values[i].reset()
+        i += 1
+    }
+}
+
+@test
+fn aValueIsResetThroughTheProtocolKeepingItsRoom() {
+    var scratch = Scratch { lines: [], resets: 0 }
+    scratch.lines.reserveCapacity(64)
+    scratch.lines.append("used")
+    recycled(&scratch)
+    expect(scratch.lines.isEmpty && scratch.lines.capacity >= 64)
+    assertEqual(scratch.resets, 1)
+}
+
+@test
+fn aClassIsResetThroughTheProtocol() {
+    var board = Board()
+    board.marks.append(3)
+    recycled(&board)
+    expect(board.marks.isEmpty)
+}
+
+@test
+fn anExistentialIsResetToo() {
+    let board = Board()
+    board.marks.append(1)
+    var values: (any Resettable)[>..] = [Scratch { lines: ["a"], resets: 0 }, board]
+    resetAll(&values)
+    expect(board.marks.isEmpty)
+}

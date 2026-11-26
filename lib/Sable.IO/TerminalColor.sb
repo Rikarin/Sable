@@ -1,0 +1,201 @@
+module Sable.IO
+
+/// A colour a terminal shows text, or what is behind it, in (`Style`): one of
+/// the sixteen every terminal has, one of the 256 most have, or any at all.
+/// A terminal that has fewer is given the nearest it has (`ColorSupport`).
+/// .NET's `ConsoleColor`, crossterm's `Color`.
+///
+/// ```sable
+/// let warning = TerminalColor.yellow
+/// assert(warning == TerminalColor.Basic(index: 3))
+/// assert(TerminalColor.Rgb(red: 255, green: 0, blue: 0).nearest(for: .Basic) == TerminalColor.brightRed)
+/// assert(TerminalColor.Rgb(red: 128, green: 128, blue: 128).nearest(for: .Extended) == TerminalColor.Indexed(index: 244))
+/// ```
+@derive(Equatable, Debug)
+public union TerminalColor {
+    /// One of the sixteen, by number: 0 black, 1 red, 2 green, 3 yellow, 4
+    /// blue, 5 magenta, 6 cyan, 7 white, and 8 to 15 their bright forms,
+    /// as the terminal's palette has them.
+    Basic(index: Int)
+    /// One of 256: the sixteen, a cube of 6 × 6 × 6 colours (16 to 231) and
+    /// 24 greys (232 to 255).
+    Indexed(index: Int)
+    /// Red, green and blue, each 0 to 255.
+    Rgb(red: Int, green: Int, blue: Int)
+
+    public static var black: TerminalColor => .Basic(index: 0)
+    public static var red: TerminalColor => .Basic(index: 1)
+    public static var green: TerminalColor => .Basic(index: 2)
+    public static var yellow: TerminalColor => .Basic(index: 3)
+    public static var blue: TerminalColor => .Basic(index: 4)
+    public static var magenta: TerminalColor => .Basic(index: 5)
+    public static var cyan: TerminalColor => .Basic(index: 6)
+    public static var white: TerminalColor => .Basic(index: 7)
+    public static var brightBlack: TerminalColor => .Basic(index: 8)
+    public static var brightRed: TerminalColor => .Basic(index: 9)
+    public static var brightGreen: TerminalColor => .Basic(index: 10)
+    public static var brightYellow: TerminalColor => .Basic(index: 11)
+    public static var brightBlue: TerminalColor => .Basic(index: 12)
+    public static var brightMagenta: TerminalColor => .Basic(index: 13)
+    public static var brightCyan: TerminalColor => .Basic(index: 14)
+    public static var brightWhite: TerminalColor => .Basic(index: 15)
+
+    /// The colour of a CSS-style '#rrggbb', or none for anything else.
+    ///
+    /// ```sable
+    /// assert(TerminalColor.hex("#1e90ff") == TerminalColor.Rgb(red: 30, green: 144, blue: 255))
+    /// assert(TerminalColor.hex("blue") == none)
+    /// ```
+    public static fn hex(_ text: String) -> TerminalColor? {
+        let bytes = text.utf8.toArray()
+        if bytes.count != 7 || bytes[0] != 0x23 {
+            return none
+        }
+        var value = 0
+        for byte in bytes[1...] {
+            let digit = TerminalColor.hexDigit(byte)
+            if digit < 0 {
+                return none
+            }
+            value = value * 16 + digit
+        }
+        return .Rgb(red: value >> 16, green: (value >> 8) & 0xFF, blue: value & 0xFF)
+    }
+
+    static fn hexDigit(_ byte: U8) -> Int {
+        let b = Int(byte)
+        if b >= 0x30 && b <= 0x39 {
+            return b - 0x30
+        }
+        if b >= 0x61 && b <= 0x66 {
+            return b - 0x61 + 10
+        }
+        if b >= 0x41 && b <= 0x46 {
+            return b - 0x41 + 10
+        }
+        return -1
+    }
+
+    /// The colour a terminal with so many shows for it: this one, or the
+    /// nearest it has. Any for a terminal of none.
+    public fn nearest(for support: ColorSupport) -> TerminalColor {
+        return match self {
+            case .Basic(let index) => .Basic(index: index & 15)
+            case .Indexed(let index) => {
+                if support.rank >= ColorSupport.Extended.rank || index < 16 {
+                    return index < 16 && support.rank < ColorSupport.Extended.rank ? .Basic(index: index) : .Indexed(index: index & 255)
+                }
+                let (r, g, b) = TerminalColor.rgbOf(index & 255)
+                return TerminalColor.nearestBasic(r, g, b)
+            }
+            case .Rgb(let r, let g, let b) => {
+                if support.rank >= ColorSupport.TrueColor.rank {
+                    return self
+                }
+                if support.rank >= ColorSupport.Extended.rank {
+                    return .Indexed(index: TerminalColor.nearestIndexed(r, g, b))
+                }
+                return TerminalColor.nearestBasic(r, g, b)
+            }
+        }
+    }
+
+    // The levels of each of the cube's colours, as xterm has them.
+    static fn level(_ step: Int) -> Int {
+        return step == 0 ? 0 : 55 + step * 40
+    }
+
+    static fn step(_ value: Int) -> Int {
+        if value < 48 {
+            return 0
+        }
+        if value < 115 {
+            return 1
+        }
+        return (value - 35) / 40
+    }
+
+    static fn distance(_ r: Int, _ g: Int, _ b: Int, _ r2: Int, _ g2: Int, _ b2: Int) -> Int {
+        return (r - r2) * (r - r2) + (g - g2) * (g - g2) + (b - b2) * (b - b2)
+    }
+
+    // Of the cube or the greys, whichever is nearer.
+    static fn nearestIndexed(_ r: Int, _ g: Int, _ b: Int) -> Int {
+        let (rs, gs, bs) = (TerminalColor.step(r), TerminalColor.step(g), TerminalColor.step(b))
+        let cube = 16 + 36 * rs + 6 * gs + bs
+        let cubeDistance = TerminalColor.distance(r, g, b, TerminalColor.level(rs), TerminalColor.level(gs), TerminalColor.level(bs))
+        let average = (r + g + b) / 3
+        let grey = average > 238 ? 23 : average < 8 ? 0 : (average - 8) / 10
+        let greyLevel = 8 + grey * 10
+        let greyDistance = TerminalColor.distance(r, g, b, greyLevel, greyLevel, greyLevel)
+        return greyDistance < cubeDistance ? 232 + grey : cube
+    }
+
+    // The sixteen as xterm shows them.
+    static fn basicRgb(_ index: Int) -> (Int, Int, Int) {
+        return match index {
+            case 0  => (0, 0, 0)
+            case 1  => (205, 0, 0)
+            case 2  => (0, 205, 0)
+            case 3  => (205, 205, 0)
+            case 4  => (0, 0, 238)
+            case 5  => (205, 0, 205)
+            case 6  => (0, 205, 205)
+            case 7  => (229, 229, 229)
+            case 8  => (127, 127, 127)
+            case 9  => (255, 0, 0)
+            case 10 => (0, 255, 0)
+            case 11 => (255, 255, 0)
+            case 12 => (92, 92, 255)
+            case 13 => (255, 0, 255)
+            case 14 => (0, 255, 255)
+            default => (255, 255, 255)
+        }
+    }
+
+    static fn rgbOf(_ index: Int) -> (Int, Int, Int) {
+        if index < 16 {
+            return TerminalColor.basicRgb(index)
+        }
+        if index >= 232 {
+            let level = 8 + (index - 232) * 10
+            return (level, level, level)
+        }
+        let cube = index - 16
+        return (TerminalColor.level(cube / 36), TerminalColor.level((cube / 6) % 6), TerminalColor.level(cube % 6))
+    }
+
+    static fn nearestBasic(_ r: Int, _ g: Int, _ b: Int) -> TerminalColor {
+        var best = 0
+        var bestDistance = Int.max
+        for index in 0..<16 {
+            let (r2, g2, b2) = TerminalColor.basicRgb(index)
+            let d = TerminalColor.distance(r, g, b, r2, g2, b2)
+            if d < bestDistance {
+                best = index
+                bestDistance = d
+            }
+        }
+        return .Basic(index: best)
+    }
+
+    /// The parameters of the escape sequence (SGR) that sets it: for text,
+    /// or with 'background' for what is behind it. As it is, whatever the
+    /// terminal has: `nearest` first.
+    ///
+    /// ```sable
+    /// assert(TerminalColor.red.parameters(background: false) == "31")
+    /// assert(TerminalColor.Indexed(index: 208).parameters(background: true) == "48;5;208")
+    /// ```
+    public fn parameters(background: Bool) -> String {
+        return match self {
+            case .Basic(let index) => {
+                let i = index & 15
+                let base = i < 8 ? (background ? 40 : 30) : (background ? 100 : 90)
+                return "\(base + (i & 7))"
+            }
+            case .Indexed(let index)       => "\(background ? 48 : 38);5;\(index & 255)"
+            case .Rgb(let r, let g, let b) => "\(background ? 48 : 38);2;\(r & 255);\(g & 255);\(b & 255)"
+        }
+    }
+}

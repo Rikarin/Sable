@@ -1,0 +1,53 @@
+module Sable.Concurrency
+
+/// Three async sequences' elements as they come, interleaved, until all
+/// have ended: as `merge(_:_:)`, of three.
+///
+/// ```sable
+/// let a = Channel<Int>()
+/// let b = Channel<Int>()
+/// let c = Channel<Int>()
+/// for (channel, value) in [(a, 1), (b, 2), (c, 3)] {
+///     await channel.send(value)
+///     await channel.close()
+/// }
+/// var total = 0
+/// for await value in merge(a, b, c) {
+///     total += value
+/// }
+/// assert(total == 6)
+/// ```
+public fn merge<First: AsyncSequence, Second: AsyncSequence, Third: AsyncSequence>(_ first: First, _ second: Second, _ third: Third) -> AsyncMerge3Sequence<First, Second, Third>
+    where First: Sendable, Second: Sendable, Third: Sendable, First.Element: Sendable,
+    Second.Element == First.Element, Second.Failure == First.Failure, Third.Element == First.Element, Third.Failure == First.Failure {
+    return AsyncMerge3Sequence<First, Second, Third> { first: first, second: second, third: third }
+}
+
+/// What 'merge(_:_:_:)' makes: three async sequences' elements as they come.
+public struct AsyncMerge3Sequence<First: AsyncSequence, Second: AsyncSequence, Third: AsyncSequence>: AsyncSequence
+    where First: Sendable, Second: Sendable, Third: Sendable, First.Element: Sendable,
+    Second.Element == First.Element, Second.Failure == First.Failure, Third.Element == First.Element, Third.Failure == First.Failure {
+    let first: First
+    let second: Second
+    let third: Third
+
+    /// An iterator of the elements from now on: the tasks that go through
+    /// the three sequences are started.
+    public fn makeAsyncIterator() -> AsyncMergeIterator<First.Element, First.Failure> {
+        let merged = ThrowingChannel<First.Element, First.Failure>(capacity: 1)
+        let remaining = Atomic(3)
+        let first = self.first
+        let second = self.second
+        let third = self.third
+        let one = Task.detached {
+            await pumpInto(merged, first, remaining)
+        }
+        let two = Task.detached {
+            await pumpInto(merged, second, remaining)
+        }
+        let three = Task.detached {
+            await pumpInto(merged, third, remaining)
+        }
+        return AsyncMergeIterator<First.Element, First.Failure> { merged: merged.makeAsyncIterator(), pumps: TaskCanceller([one, two, three]) }
+    }
+}

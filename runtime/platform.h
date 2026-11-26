@@ -795,6 +795,53 @@ static void signal_arrived(int signal);
 // The signal sent to this process.
 static bool signal_raise(int signal);
 
+// ---- The terminal ----------------------------------------------------------
+
+// Whether a standard stream (0, 1, 2) is a terminal; whether it is one that
+// reads escape sequences, asked to if it must be; and its size, where it says.
+static bool terminal_is(int stream);
+static bool terminal_styles(int stream);
+static bool terminal_size(int stream, int *columns, int *rows);
+
+// The mode of standard input's terminal: 0 as it was found, or raw — keys as
+// they are typed, shown nowhere, the interrupt's doing what they do or, in
+// TERMINAL_RAW_ALL, coming as keys too. The mode it had; -1 where there is
+// no terminal to change.
+enum { TERMINAL_RAW = 1, TERMINAL_RAW_ALL = 2 };
+static int terminal_mode(int mode);
+
+// What standard output's terminal shows that is to be undone.
+enum { TERMINAL_ALTERNATE = 1, TERMINAL_NO_CURSOR = 2 };
+static void terminal_show(int shown);
+
+// The terminal as it was found, whatever was done to it: what a trap, the
+// program's end and a signal that ends it do first. Safe in a signal's
+// handler.
+static void terminal_restore(void);
+
+// The signals that would end the program watched, when there is anything to
+// undo: called where one is no longer caught.
+static void terminal_watch(void);
+
+// A byte of what is typed, within so many milliseconds (however long for
+// less than none): or that there was none, or will be no more.
+enum { TERMINAL_ENDED = -1, TERMINAL_NOTHING = -2 };
+static int terminal_read(int64_t milliseconds);
+
+// A pseudoterminal: a terminal whose other end is this program's, which
+// types at it and reads what is written to it. NULL where there is none.
+typedef struct Pty Pty;
+enum { PTY_LINES = 1, PTY_ECHO = 2, PTY_SIGNALS = 4 };
+static Pty *pty_open(void);
+static const char *pty_name(const Pty *pty);
+static void pty_close(Pty *pty);
+static int pty_read(Pty *pty, int64_t milliseconds);
+static bool pty_write(Pty *pty, int byte);
+static bool pty_resize(Pty *pty, int columns, int rows);
+// PTY_LINES, PTY_ECHO and PTY_SIGNALS as they are; -1 where it does not say.
+static int pty_mode(const Pty *pty);
+static bool pty_attach(const char *name, bool controlling);
+
 static char *current_directory(void);
 static bool change_directory(const char *name);
 static int64_t process_id(void);

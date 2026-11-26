@@ -1,0 +1,99 @@
+module Sable.Concurrency
+
+/// A dataflow block that makes any number of items of each it takes in:
+/// .NET's `TransformManyBlock<TInput, TOutput>`. It works on up to `parallelism` items
+/// at once, and gives what it makes in the order the items came, unless
+/// told it need not. It holds at most `capacity` items waiting to be worked
+/// on, and as many made and not yet taken, so that a send to it waits
+/// while it is full and a slow consumer slows what feeds it. What the
+/// transform throws faults it, and the blocks it propagates completion to.
+///
+/// ```sable
+/// let words = TransformManyBlock<String, String> { line in line.split(separator: ' ') }
+/// for line in ["a b", "c"] {
+///     await words.send(line)
+/// }
+/// words.complete()
+/// var all: String[>..] = []
+/// while let word = try! await words.receive() {
+///     all.append(word)
+/// }
+/// assert(all == ["a", "b", "c"])
+/// ```
+@immutable
+public final class TransformManyBlock<Input: Sendable, Output: Sendable>: DataflowTarget, AsyncSequence {
+    public alias Iter = DataflowIterator<Output>
+
+    let engine: BlockEngine<Input, Output>
+    let outlet: BlockOutlet<Output>
+
+    /// A block that makes items of each item it takes in, holding at most so
+    /// many (none: as many as come) and working on so many at once. What it
+    /// makes of one item is given together, in order.
+    public init(capacity: Int? = none, parallelism: Int = 1, ordered: Bool = true, _ transform: @escaping @Sendable async (Input) throws -> Output[>..]) {
+        let outlet = BlockOutlet<Output>(capacity, toEvery: false)
+        self.outlet = outlet
+        engine = BlockEngine<Input, Output>(capacity: capacity, parallelism: parallelism, ordered: ordered, outlet: outlet, atEnd: { .Nothing }, work: { item in
+            return .Many(try await transform(item))
+        })
+    }
+
+    public fn send(_ item: Input) async -> SendResult {
+        return await engine.send(item)
+    }
+
+    public fn trySend(_ item: Input) -> SendResult {
+        return engine.trySend(item)
+    }
+
+    public fn complete() {
+        engine.complete()
+    }
+
+    public fn fault(_ error: any Error) {
+        engine.fault(error)
+    }
+
+    public var failure: (any Error)? => engine.status.failure
+
+    /// Waits until the block has worked on every item and its own are
+    /// taken; throws what it faulted with.
+    public fn completion() async throws {
+        try await engine.status.completion(outlet.drained)
+    }
+
+    /// What it makes given to the target, if the predicate takes it: to
+    /// the first of its links that takes it and has room, or else, once it
+    /// has, to the first that takes it. With `propagateCompletion`, the
+    /// target is completed — or faulted — once this block has given its
+    /// last item, and the target faulting faults this one. A link with
+    /// `maxMessages` goes after so many.
+    public fn link<Target: DataflowTarget>(to target: Target, propagateCompletion: Bool = false, maxMessages: Int? = none, where accepts: @escaping @Sendable (Output) -> Bool = { _ in true })
+        where Target.Input == Output, Target: Sendable {
+        let engine = self.engine
+        let options = DataflowLinkOptions { propagateCompletion: propagateCompletion, maxMessages: maxMessages }
+        outlet.link(DataflowLink<Output>(target, options, accepts), fault: { engine.fault($0) })
+    }
+
+    /// The next item it makes that no link takes, waiting for it; none once
+    /// it has completed. Throws what it faulted with.
+    public fn receive() async throws -> Output? {
+        return try await outlet.receive()
+    }
+
+    /// An item it has made, if one is waiting now.
+    public fn tryReceive() -> Output? {
+        return outlet.tryReceive()
+    }
+
+    /// The items it makes, as they come: as `receive()`.
+    public fn makeAsyncIterator() -> DataflowIterator<Output> {
+        return DataflowIterator<Output>(outlet)
+    }
+
+    /// How many items wait to be worked on.
+    public var inputCount: Int => engine.input.count
+
+    /// How many it has made that are not yet taken.
+    public var outputCount: Int => outlet.buffer.count
+}

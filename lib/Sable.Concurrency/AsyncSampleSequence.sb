@@ -1,0 +1,134 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+extension AsyncSequence where Self: Sendable, Element: Sendable {
+    /// The newest element at each tick of an interval, if one came since
+    /// the tick before: Rx's `Sample`, Combine's `throttle(latest:)` on a
+    /// timer. The one waiting is given as the sequence ends.
+    ///
+    /// ```sable
+    /// fn readings(_ sensor: Channel<F64>) async -> Int {
+    ///     var shown = 0
+    ///     for await _ in sensor.sample(every: Duration.milliseconds(250)) {
+    ///         shown += 1   // at most four a second, however fast it reads
+    ///     }
+    ///     return shown
+    /// }
+    /// ```
+    public fn sample(every interval: Duration) -> AsyncSampleSequence<Self, MonotonicClock> {
+        return sample(every: interval, clock: MonotonicClock())
+    }
+
+    /// As `sample(every:)`, the ticks on the clock.
+    ///
+    /// ```sable
+    /// let clock = TestClock()
+    /// let input = Channel<Int>()
+    /// let sampled = Task.spawn {
+    ///     return await input.sample(every: Duration.seconds(1), clock: clock).collect()
+    /// }
+    /// await input.send(1)
+    /// await input.send(2)
+    /// await clock.advance(by: Duration.seconds(1))
+    /// await input.close()
+    /// assert(await sampled.value == [2])
+    /// ```
+    public fn sample<C: Clock>(every interval: Duration, clock: C) -> AsyncSampleSequence<Self, C> {
+        precondition(interval > Duration.zero, "a sample every \(interval)")
+        return AsyncSampleSequence<Self, C> { base: self, interval: interval, clock: clock }
+    }
+}
+
+/// What `sample(every:clock:)` makes: the newest element at each tick.
+public struct AsyncSampleSequence<Base: AsyncSequence, C: Clock>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+    let base: Base
+    let interval: Duration
+    let clock: C
+
+    /// An iterator of the samples from now on: the tasks that go through
+    /// the sequence and tick are started.
+    public fn makeAsyncIterator() -> AsyncTimedIterator<Base.Element, Base.Failure> {
+        let (stream, continuation) = AsyncThrowingStream<Base.Element, Base.Failure>.make(bufferingPolicy: .BufferingNewest(1))
+        let latest = SampleLatest<Base.Element, Base.Failure>(continuation)
+        let ticks = Interval(every: interval, clock: clock)
+        let ticker = Task.detached {
+            for await _ in ticks {
+                latest.tick()
+            }
+        }
+        let base = self.base
+        let pump = Task.detached {
+            var iterator = base.makeAsyncIterator()
+            do {
+                while let value = try await iterator.next() {
+                    latest.got(value)
+                }
+            } catch {
+                ticker.cancel()
+                latest.end(error)
+                return
+            }
+            ticker.cancel()
+            latest.end(none)
+        }
+        continuation.onTermination { reason in
+            pump.cancel()
+            ticker.cancel()
+        }
+        return AsyncTimedIterator<Base.Element, Base.Failure> { output: stream.makeAsyncIterator(), pump: TaskCanceller([pump, ticker]) }
+    }
+}
+
+// The newest element not yet given, and the stream it is given to — at a
+// tick, or as the sequence ends — under one lock, so that neither gives it
+// after the other has ended the stream.
+struct SampleState<E> {
+    var newest: E? = none
+    var ended: Bool = false
+
+    init() { }
+}
+
+@immutable
+final class SampleLatest<E: Sendable, Failure: Error> {
+    let state: Mutex<SampleState<E>>
+    let output: StreamContinuation<E, Failure>
+
+    init(_ output: StreamContinuation<E, Failure>) {
+        state = Mutex(SampleState<E>())
+        self.output = output
+    }
+
+    fn got(_ value: E) {
+        state.withLock { $0.newest = value }
+    }
+
+    fn tick() {
+        let output = self.output
+        state.withLock { (state: inout SampleState<E>) -> Void in
+            if !state.ended {
+                if let value = state.newest {
+                    state.newest = none
+                    _ = output.yield(value)
+                }
+            }
+        }
+    }
+
+    fn end(_ error: Failure?) {
+        let output = self.output
+        state.withLock { (state: inout SampleState<E>) -> Void in
+            state.ended = true
+            if let value = state.newest {
+                state.newest = none
+                _ = output.yield(value)
+            }
+            if let error = error {
+                output.finish(throwing: error)
+            } else {
+                output.finish()
+            }
+        }
+    }
+}

@@ -1,0 +1,168 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+
+/// The spans of the program: who listens for them, and which is current.
+/// The current span is a task-local, so it is the same across every `await`
+/// and in the tasks spawned under it (`TaskLocal`); a detached task and a
+/// thread start with none.
+///
+/// ```sable
+/// let tracer = Tracer("checkout")
+/// let exporter = InMemorySpanExporter()
+/// let listening = Tracing.addListener(SimpleSpanProcessor(exporter))
+/// tracer.withSpan("pay") { span in
+///     assert(Tracing.currentSpan.context == span.context)
+/// }
+/// listening.cancel()
+/// assert(exporter.spans.map { $0.name } == ["pay"])
+/// ```
+public struct Tracing {
+    // How many listen: what each span asks first, one atomic load.
+    // The count is in a cell of its own, read by its address: a load of the
+    // global and one of the cell, as .NET's check is one field's.
+    static let listening: Int = flagCell()
+    static let listeners: Mutex<(any SpanListener)[>..]> = Mutex([])
+    // The current span is a task-local of its own key, bound and unbound
+    // here as TaskLocal's 'withValue' does, but with no closure: so that
+    // 'withSpan' calls its body in one place.
+    static let key: Int = Runtime.taskLocalKey()
+
+    static fn push(_ span: Span) {
+        unsafe {
+            let place = RawPtr<Span>.allocate(count: 1)
+            place.initialize(to: span)
+            Runtime.pushTaskLocal(Tracing.key, place.address) {
+                unsafe {
+                    place.deinitialize()
+                    place.deallocate()
+                }
+            }
+        }
+    }
+
+    static fn pop() {
+        Runtime.popTaskLocal()
+    }
+
+    /// Whether anything listens for spans.
+    public static var isListening: Bool {
+        @inline(always)
+        get {
+            return Int.atomicLoad(Tracing.listening, 0) != 0
+        }
+    }
+
+    /// The listener told of spans from now on, until the registration is
+    /// cancelled.
+    @discardable
+    public static fn addListener(_ listener: any SpanListener) -> ListenerRegistration {
+        let id = Tracing.nextId.add(1)
+        Tracing.listeners.withLock { listeners in
+            listeners.append(listener)
+            Tracing.ids.withLock { $0.append(id) }
+            _ = Int.atomicAdd(Tracing.listening, 1, 4)
+        }
+        return ListenerRegistration(id: id)
+    }
+
+    static let nextId: Atomic<Int> = Atomic<Int>(1)
+    static let ids: Mutex<Int[>..]> = Mutex([])
+
+    static fn remove(_ id: Int) {
+        // Both under the one lock of the listeners, as they are added.
+        Tracing.listeners.withLock { listeners in
+            let index: Int? = Tracing.ids.withLock { ids in
+                guard let at = ids.firstIndex(of: id) else {
+                    return none
+                }
+                var left: Int[>..] = []
+                for (i, other) in ids.enumerated() {
+                    if i != at {
+                        left.append(other)
+                    }
+                }
+                ids = left
+                return at
+            }
+            if let at = index {
+                var left: (any SpanListener)[>..] = []
+                for (i, listener) in listeners.enumerated() {
+                    if i != at {
+                        left.append(listener)
+                    }
+                }
+                listeners = left
+                _ = Int.atomicSub(Tracing.listening, 1, 4)
+            }
+        }
+    }
+
+    /// The span current where this is asked: `Span.invalid` where there is
+    /// none.
+    public static var currentSpan: Span {
+        get {
+            let place = Runtime.taskLocalFind(Tracing.key)
+            if place == 0 {
+                return Span.invalid
+            }
+            unsafe {
+                return RawPtr<Span>(address: place).load()
+            }
+        }
+    }
+
+    /// The current span's context, or a remote one made current
+    /// (`withContext`); none where there is neither.
+    public static var currentContext: SpanContext? {
+        get {
+            let context = Tracing.currentSpan.context
+            return context.isValid ? context : none
+        }
+    }
+
+    /// The body run with the context current, as the parent of the spans it
+    /// starts: what came in a request's 'traceparent'
+    /// (`TraceContextPropagator.extract`).
+    ///
+    /// ```sable
+    /// let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    /// Tracing.withContext(remote) {
+    ///     assert(Tracing.currentContext == remote)
+    /// }
+    /// ```
+    public static fn withContext<R, E: Error>(_ context: SpanContext, _ body: () throws(E) -> R) throws(E) -> R {
+        Tracing.push(Span(context: context, state: none))
+        do {
+            let result = try body()
+            Tracing.pop()
+            return result
+        } catch {
+            Tracing.pop()
+            throw error
+        }
+    }
+
+    /// The async body run with the context current.
+    public static fn withContext<R, E: Error>(_ context: SpanContext, _ body: async () throws(E) -> R) async throws(E) -> R {
+        Tracing.push(Span(context: context, state: none))
+        do {
+            let result = try await body()
+            Tracing.pop()
+            return result
+        } catch {
+            Tracing.pop()
+            throw error
+        }
+    }
+}
+
+// A cell of raw memory for a count many threads read, kept for as long as
+// the program runs: its address.
+fn flagCell() -> Int {
+    unsafe {
+        let cell = RawPtr<Int>.allocate(count: 1)
+        cell.initialize(to: 0)
+        return cell.address
+    }
+}

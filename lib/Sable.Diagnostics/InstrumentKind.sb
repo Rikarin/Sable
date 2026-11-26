@@ -1,0 +1,35 @@
+module Sable.Diagnostics
+
+/// What an instrument is (`MetricData.kind`), as OpenTelemetry names them.
+@derive(Equatable, Debug)
+public enum InstrumentKind {
+    /// A sum that only grows: requests served, bytes sent.
+    Counter
+    /// A sum that grows and shrinks: items queued, connections open.
+    UpDownCounter
+    /// How values were spread: request durations, sizes.
+    Histogram
+    /// The last value set: a temperature, a setting.
+    Gauge
+    /// A sum that only grows, asked for as it is collected.
+    ObservableCounter
+    /// A sum that grows and shrinks, asked for as it is collected.
+    ObservableUpDownCounter
+    /// A value asked for as it is collected: memory in use.
+    ObservableGauge
+
+    /// Its name, as OpenTelemetry writes it: "counter", "histogram".
+    public var name: String {
+        get {
+            return match self {
+                case .Counter                 => "counter"
+                case .UpDownCounter           => "updowncounter"
+                case .Histogram               => "histogram"
+                case .Gauge                   => "gauge"
+                case .ObservableCounter       => "observable_counter"
+                case .ObservableUpDownCounter => "observable_updowncounter"
+                case .ObservableGauge         => "observable_gauge"
+            }
+        }
+    }
+}

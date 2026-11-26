@@ -1,0 +1,31 @@
+module DiagnosticsDisabled
+
+import Sable.Diagnostics
+import Sable.Testing
+
+// What tracing and metrics cost with nothing listening: a span started and
+// ended, a counter added to with an attribute and a histogram recorded, a
+// million times each, none of them listened for. .NET's ActivitySource with
+// no ActivityListener, and Meter instruments with no MeterListener.
+
+let tracer = Tracer("bench")
+let meter = Meter("bench")
+let requests: Counter<Int> = meter.counter("requests")
+let durations: Histogram<F64> = meter.histogram("durations")
+
+fn run() -> String {
+    var total = 0
+    for i in 0..<1_000_000 {
+        total += tracer.withSpan("operation", attributes: [KeyValue("i", i)]) { span in
+            return span.isRecording ? 0 : i & 7
+        }
+        requests.add(1, [KeyValue("route", i & 3)])
+        durations.record(F64(i & 1023))
+    }
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
+}

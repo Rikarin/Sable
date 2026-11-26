@@ -1,0 +1,86 @@
+module Sable.Diagnostics
+
+// Raw memory of Ints that many threads add to at once, without a lock: what
+// an instrument's measurements are recorded in. A cell is changed by one
+// atomic instruction, or for an F64's sum, min and max by a compare and
+// exchange tried again until no other thread changed it in between.
+@immutable
+final class AtomicCells {
+    let base: Int
+    let count: Int
+
+    init(count: Int, initial: Int = 0) {
+        self.count = count
+        unsafe {
+            let cells = RawPtr<Int>.allocate(count: count < 1 ? 1 : count)
+            cells.initialize(repeating: initial, count: count < 1 ? 1 : count)
+            base = cells.address
+        }
+    }
+
+    deinit {
+        unsafe {
+            RawPtr<Int>(address: base).deallocate()
+        }
+    }
+
+    @inline(always)
+    fn address(_ i: Int) -> Int {
+        return base + i * 8
+    }
+
+    @inline(always)
+    fn add(_ i: Int, _ amount: Int) {
+        _ = Int.atomicAdd(address(i), amount, 0)
+    }
+
+    @inline(always)
+    fn load(_ i: Int) -> Int {
+        return Int.atomicLoad(address(i), 1)
+    }
+
+    @inline(always)
+    fn store(_ i: Int, _ value: Int) {
+        Int.atomicStore(address(i), value, 2)
+    }
+
+    // The cell as an F64's bits.
+    fn loadF64(_ i: Int) -> F64 {
+        return F64.fromBits(load(i) unchecked as U64)
+    }
+
+    fn storeF64(_ i: Int, _ value: F64) {
+        store(i, value.bits unchecked as Int)
+    }
+
+    fn addF64(_ i: Int, _ amount: F64) {
+        let at = address(i)
+        var current = Int.atomicLoad(at, 0)
+        while true {
+            let next = (F64.fromBits(current unchecked as U64) + amount).bits unchecked as Int
+            let (found, exchanged) = Int.atomicCompareExchangeWeak(at, current, next, 0)
+            if exchanged {
+                return
+            }
+            current = found
+        }
+    }
+
+    // The cell made the value, if that is less (or, 'greater', more) than
+    // what it holds.
+    fn boundF64(_ i: Int, _ value: F64, greater: Bool) {
+        let at = address(i)
+        var current = Int.atomicLoad(at, 0)
+        while true {
+            let held = F64.fromBits(current unchecked as U64)
+            if greater ? !(value > held) : !(value < held) {
+                return
+            }
+            let (found, exchanged) = Int.atomicCompareExchangeWeak(at, current, value.bits unchecked as Int, 0)
+            if exchanged {
+                return
+            }
+            current = found
+        }
+    }
+}

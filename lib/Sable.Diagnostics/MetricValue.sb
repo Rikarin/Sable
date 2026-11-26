@@ -1,0 +1,12 @@
+module Sable.Diagnostics
+
+/// What a point holds, by the instrument's kind.
+@derive(Debug)
+public union MetricValue {
+    /// A counter's, or an up-down counter's.
+    Sum(F64)
+    /// A gauge's last value.
+    Gauge(F64)
+    Histogram(HistogramData)
+    ExponentialHistogram(ExponentialHistogramData)
+}

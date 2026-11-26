@@ -1,0 +1,22 @@
+module Sable.Diagnostics
+
+/// How a span's work went: unsaid, said to be fine, or failed and why.
+/// OpenTelemetry's Status, .NET's `ActivityStatusCode`.
+///
+/// ```sable
+/// assert(SpanStatus.Error("timed out").description() == "error: timed out")
+/// ```
+@derive(Equatable, Debug)
+public union SpanStatus {
+    Unset
+    Ok
+    Error(String)
+
+    public fn description() -> String {
+        return match self {
+            case .Unset          => "unset"
+            case .Ok             => "ok"
+            case .Error(let why) => why.isEmpty ? "error" : "error: \(why)"
+        }
+    }
+}

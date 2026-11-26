@@ -1,0 +1,488 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+
+// What every instrument is made of: its description, a series of cells for
+// its measurements without attributes, and a table of series for those
+// with, made the first time each set of attributes is recorded. Recording
+// takes no lock: a series is found in the table by reads alone, and its
+// cells are changed by atomic instructions (AtomicCells). Only a new set of
+// attributes takes the table's lock, to add its series.
+
+// The most sets of attributes an instrument keeps apart (OpenTelemetry's
+// cardinality limit); those after it are counted together, under
+// otel.metric.overflow=true.
+let cardinalityLimit = 2000
+let tableSize = 4096
+
+// The scale exponential histograms record at: 2^6 buckets an octave.
+let recordedScale = 6
+
+@immutable
+final class Instrument {
+    let meter: String
+    let meterVersion: String
+    let name: String
+    let unit: String
+    let description: String
+    let kind: InstrumentKind
+    let isInteger: Bool
+    let boundaries: F64[>..]
+    // For an exponential histogram: the most buckets, the most scale, and
+    // the bounds within an octave at the scale recorded; else maxSize 0.
+    let maxSize: Int
+    let maxScale: Int
+    let octave: F64[>..]
+    let plain: MetricSeries
+    // The address of the table's cell, once there is one: 0 until a set of
+    // attributes is first recorded.
+    let tableCell: AtomicCells
+    let lock: Mutex<Int>
+    let observe: (() -> (F64, KeyValue[>..])[>..])?
+
+    init(meter: Meter, name: String, unit: String, description: String, kind: InstrumentKind, isInteger: Bool, buckets: HistogramBuckets = HistogramBuckets.standard, observe: (() -> (F64, KeyValue[>..])[>..])? = none) {
+        self.meter = meter.name
+        self.meterVersion = meter.version
+        self.name = name
+        self.unit = unit
+        self.description = description
+        self.kind = kind
+        self.isInteger = isInteger
+        self.observe = observe
+        var boundaries: F64[>..] = []
+        var maxSize = 0
+        var maxScale = 0
+        var octave: F64[>..] = []
+        if kind == .Histogram {
+            match buckets {
+                case .Explicit(let bounds) => {
+                    boundaries = bounds
+                }
+                case .Exponential(let size, let scale) => {
+                    maxSize = size < 2 ? 2 : size
+                    maxScale = scale
+                    // 2^(j / 2^scale) for j from 1: the square root of two
+                    // taken as often as the scale says, and its powers.
+                    var ratio = 2.0
+                    for _ in 0..<recordedScale {
+                        ratio = ratio.squareRoot()
+                    }
+                    var bound = 1.0
+                    for _ in 1..<(1 << recordedScale) {
+                        bound = bound * ratio
+                        octave.append(bound)
+                    }
+                }
+            }
+        }
+        self.boundaries = boundaries
+        self.maxSize = maxSize
+        self.maxScale = maxScale
+        self.octave = octave
+        self.plain = MetricSeries(attributes: [], cellCount: Instrument.cells(kind, boundaries), exponential: maxSize > 0)
+        self.tableCell = AtomicCells(count: 1)
+        self.lock = Mutex(0)
+    }
+
+    deinit {
+        let table = tableCell.load(0)
+        if table != 0 {
+            unsafe {
+                let held = RawPtr<SeriesTable>(address: table)
+                held.deinitialize()
+                held.deallocate()
+            }
+        }
+    }
+
+    // How many cells a series of the kind has: a sum; a gauge's value and
+    // whether it was set; a histogram's count, sum, min, max (and, for an
+    // exponential one, what was zero), then its buckets.
+    static fn cells(_ kind: InstrumentKind, _ boundaries: F64[>..]) -> Int {
+        if kind == .Histogram {
+            return 5 + boundaries.count + 1
+        }
+        return 2
+    }
+
+    // ---- Recording ---------------------------------------------------------
+
+    @inline(always)
+    fn series(_ attributes: KeyValue[>..]) -> MetricSeries {
+        if attributes.isEmpty {
+            return plain
+        }
+        return table().find(attributes, self)
+    }
+
+    fn table() -> SeriesTable {
+        var address = tableCell.load(0)
+        if address == 0 {
+            unsafe {
+                let made = RawPtr<SeriesTable>.allocate(count: 1)
+                made.initialize(to: SeriesTable(exponential: maxSize > 0, cellCount: Instrument.cells(kind, boundaries)))
+                let (found, exchanged) = Int.atomicCompareExchange(tableCell.address(0), 0, made.address, 3)
+                if exchanged {
+                    address = made.address
+                } else {
+                    made.deinitialize()
+                    made.deallocate()
+                    address = found
+                }
+            }
+        }
+        unsafe {
+            return RawPtr<SeriesTable>(address: address).load()
+        }
+    }
+
+    fn add(_ integer: Int, _ number: F64, _ series: MetricSeries) {
+        if isInteger {
+            series.cells.add(0, integer)
+        } else {
+            series.cells.addF64(0, number)
+        }
+    }
+
+    fn set(_ integer: Int, _ number: F64, _ series: MetricSeries) {
+        if isInteger {
+            series.cells.store(0, integer)
+        } else {
+            series.cells.storeF64(0, number)
+        }
+        series.cells.store(1, 1)
+    }
+
+    fn record(_ value: F64, _ series: MetricSeries) {
+        if value.isNaN || value.isInfinite {
+            return
+        }
+        let cells = series.cells
+        if maxSize > 0 {
+            if value < 0.0 {
+                return
+            }
+            if value == 0.0 {
+                cells.add(4, 1)
+            } else {
+                series.countExponential(position(value))
+            }
+        } else {
+            cells.add(5 + bucket(value), 1)
+        }
+        cells.add(0, 1)
+        cells.addF64(1, value)
+        cells.boundF64(2, value, greater: false)
+        cells.boundF64(3, value, greater: true)
+    }
+
+    // The explicit bucket of the value: the first whose bound it is no more
+    // than, or the last.
+    fn bucket(_ value: F64) -> Int {
+        var low = 0
+        var high = boundaries.count
+        while low < high {
+            let middle = (low + high) / 2
+            if value <= boundaries[middle] {
+                high = middle
+            } else {
+                low = middle + 1
+            }
+        }
+        return low
+    }
+
+    // The exponential bucket of a positive value, at the scale recorded, as a
+    // place from the smallest octave's: the bucket (base^i, base^(i+1)]
+    // with i this less 1023 << scale.
+    fn position(_ value: F64) -> Int {
+        let bits = value.bits
+        var exponent = Int((bits >> 52) & 0x7FF) - 1023
+        let fraction = bits & 0x000F_FFFF_FFFF_FFFF
+        if exponent == -1023 {
+            // Too small to have an exponent of its own: the first bucket.
+            return 0
+        }
+        if fraction == 0 {
+            return ((exponent + 1023) << recordedScale) - 1
+        }
+        let mantissa = F64.fromBits(fraction | 0x3FF0_0000_0000_0000)
+        var low = 0
+        var high = octave.count
+        while low < high {
+            let middle = (low + high) / 2
+            if octave[middle] < mantissa {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        exponent = exponent + 1023
+        return (exponent << recordedScale) + low
+    }
+
+    // ---- Collecting ----------------------------------------------------------
+
+    fn collect(_ time: Int) -> MetricData {
+        var points: MetricPoint[>..] = []
+        if let observe = observe {
+            for (value, attributes) in observe() {
+                points.append(MetricPoint(attributes: attributes, value: kind == .ObservableGauge ? .Gauge(value) : .Sum(value)))
+            }
+        } else {
+            var all: MetricSeries[>..] = [plain]
+            if tableCell.load(0) != 0 {
+                all.append(contentsOf: table().all())
+            }
+            for series in all {
+                if let value = point(series) {
+                    points.append(MetricPoint(attributes: series.attributes, value: value))
+                }
+            }
+        }
+        return MetricData {
+            meter: meter, meterVersion: meterVersion, name: name, unit: unit, description: description, kind: kind,
+            isInteger: isInteger, points: points, time: time,
+        }
+    }
+
+    // What a series came to; none for one nothing was recorded in.
+    fn point(_ series: MetricSeries) -> MetricValue? {
+        let cells = series.cells
+        if kind == .Histogram {
+            let count = cells.load(0)
+            if count == 0 {
+                return none
+            }
+            let sum = cells.loadF64(1)
+            let min = cells.loadF64(2)
+            let max = cells.loadF64(3)
+            if maxSize > 0 {
+                return .ExponentialHistogram(series.exponential(count: count, sum: sum, min: min, max: max, zeroCount: cells.load(4), maxSize: maxSize, maxScale: maxScale))
+            }
+            var counts: Int[>..] = []
+            for i in 0...boundaries.count {
+                counts.append(cells.load(5 + i))
+            }
+            return .Histogram(HistogramData { count: count, sum: sum, min: min, max: max, boundaries: boundaries, counts: counts })
+        }
+        if kind == .Gauge {
+            if cells.load(1) == 0 {
+                return none
+            }
+            return .Gauge(isInteger ? F64(cells.load(0)) : cells.loadF64(0))
+        }
+        if series.attributes.isEmpty && cells.load(0) == 0 && cells.load(1) == 0 {
+            return none
+        }
+        return .Sum(isInteger ? F64(cells.load(0)) : cells.loadF64(0))
+    }
+}
+
+// The measurements of one set of attributes.
+@immutable
+final class MetricSeries {
+    let attributes: KeyValue[>..]
+    let cells: AtomicCells
+    // An exponential histogram's: the address of each chunk of 8 octaves'
+    // buckets, made as a value first falls in it; 0 for none yet.
+    let chunks: AtomicCells?
+
+    init(attributes: KeyValue[>..], cellCount: Int, exponential: Bool) {
+        self.attributes = attributes
+        self.cells = AtomicCells(count: cellCount)
+        // A histogram's min and max start where any value passes them.
+        if cellCount > 4 {
+            cells.storeF64(2, F64.infinity)
+            cells.storeF64(3, -F64.infinity)
+        }
+        self.chunks = exponential ? AtomicCells(count: 256) : none
+    }
+
+    deinit {
+        if let chunks = chunks {
+            for i in 0..<256 {
+                let chunk = chunks.load(i)
+                if chunk != 0 {
+                    unsafe {
+                        RawPtr<Int>(address: chunk).deallocate()
+                    }
+                }
+            }
+        }
+    }
+
+    // The bucket at the place counted.
+    fn countExponential(_ place: Int) {
+        let chunks = self.chunks!
+        let size = 8 << recordedScale
+        let at = place / size
+        var chunk = chunks.load(at)
+        if chunk == 0 {
+            unsafe {
+                let made = RawPtr<Int>.allocate(count: size)
+                made.initialize(repeating: 0, count: size)
+                let (found, exchanged) = Int.atomicCompareExchange(chunks.address(at), 0, made.address, 3)
+                if exchanged {
+                    chunk = made.address
+                } else {
+                    made.deallocate()
+                    chunk = found
+                }
+            }
+        }
+        _ = Int.atomicAdd(chunk + (place % size) * 8, 1, 0)
+    }
+
+    // The buckets made coarser, each two one, until there are no more than
+    // maxSize from the first counted to the last and the scale is no more
+    // than maxScale.
+    fn exponential(count: Int, sum: F64, min: F64, max: F64, zeroCount: Int, maxSize: Int, maxScale: Int) -> ExponentialHistogramData {
+        let chunks = self.chunks!
+        let size = 8 << recordedScale
+        var indexes: Int[>..] = []
+        var counts: Int[>..] = []
+        for c in 0..<256 {
+            let chunk = chunks.load(c)
+            if chunk == 0 {
+                continue
+            }
+            for i in 0..<size {
+                let n = Int.atomicLoad(chunk + i * 8, 0)
+                if n != 0 {
+                    indexes.append(c * size + i - (1023 << recordedScale))
+                    counts.append(n)
+                }
+            }
+        }
+        var scale = recordedScale
+        if indexes.isEmpty {
+            return ExponentialHistogramData { count: count, sum: sum, min: min, max: max, scale: scale < maxScale ? scale : maxScale, zeroCount: zeroCount, offset: 0, counts: [] }
+        }
+        var first = indexes[0]
+        var last = indexes[indexes.count - 1]
+        while scale > -10 && (last - first + 1 > maxSize || scale > maxScale) {
+            first = first >> 1
+            last = last >> 1
+            scale -= 1
+        }
+        var dense: Int[>..] = []
+        for _ in first...last {
+            dense.append(0)
+        }
+        let shift = recordedScale - scale
+        for (i, index) in indexes.enumerated() {
+            dense[(index >> shift) - first] += counts[i]
+        }
+        return ExponentialHistogramData { count: count, sum: sum, min: min, max: max, scale: scale, zeroCount: zeroCount, offset: first, counts: dense }
+    }
+}
+
+// The series of each set of attributes an instrument was recorded with,
+// found without a lock: a set's place is where its hash leads, or after it,
+// and is published, its series there first, by a release store of its tag.
+@immutable
+final class SeriesTable {
+    let tags: AtomicCells
+    let slots: RawPtr<MetricSeries?>
+    let count: Mutex<Int>
+    let overflow: MetricSeries
+    let exponential: Bool
+    let cellCount: Int
+
+    init(exponential: Bool, cellCount: Int) {
+        self.exponential = exponential
+        self.cellCount = cellCount
+        tags = AtomicCells(count: tableSize)
+        unsafe {
+            slots = RawPtr<MetricSeries?>.allocate(count: tableSize)
+            slots.initialize(repeating: none, count: tableSize)
+        }
+        count = Mutex(0)
+        overflow = MetricSeries(attributes: [KeyValue("otel.metric.overflow", true)], cellCount: cellCount, exponential: exponential)
+    }
+
+    deinit {
+        unsafe {
+            slots.deinitialize(count: tableSize)
+            slots.deallocate()
+        }
+    }
+
+    // Whatever their order.
+    static fn hash(_ attributes: KeyValue[>..]) -> Int {
+        var hash = 0
+        for attribute in attributes {
+            hash = hash ^ attribute.hashValue
+        }
+        return hash | 1
+    }
+
+    fn find(_ attributes: KeyValue[>..], _ instrument: Instrument) -> MetricSeries {
+        let tag = SeriesTable.hash(attributes)
+        var at = (tag >> 1) & (tableSize - 1)
+        while true {
+            let found = tags.load(at)
+            if found == 0 {
+                return add(attributes, tag, at)
+            }
+            if found == tag {
+                unsafe {
+                    let series = slots.load(at: at)!
+                    if sameAttributes(series.attributes, attributes) {
+                        return series
+                    }
+                }
+            }
+            at = (at + 1) & (tableSize - 1)
+        }
+    }
+
+    // A new set's series, under the lock: another may have added it, or
+    // something else may have taken the place, since it was looked for.
+    fn add(_ attributes: KeyValue[>..], _ tag: Int, _ from: Int) -> MetricSeries {
+        return count.withLock { added in
+            var at = from
+            while true {
+                let found = tags.load(at)
+                if found == 0 {
+                    break
+                }
+                if found == tag {
+                    unsafe {
+                        let series = slots.load(at: at)!
+                        if sameAttributes(series.attributes, attributes) {
+                            return series
+                        }
+                    }
+                }
+                at = (at + 1) & (tableSize - 1)
+            }
+            if added >= cardinalityLimit {
+                return overflow
+            }
+            let series = MetricSeries(attributes: attributes, cellCount: cellCount, exponential: exponential)
+            unsafe {
+                slots.store(.Some(series), at: at)
+            }
+            tags.store(at, tag)
+            added += 1
+            return series
+        }
+    }
+
+    fn all() -> MetricSeries[>..] {
+        var all: MetricSeries[>..] = []
+        for at in 0..<tableSize {
+            if tags.load(at) != 0 {
+                unsafe {
+                    all.append(slots.load(at: at)!)
+                }
+            }
+        }
+        if count.withLock({ $0 }) >= cardinalityLimit {
+            all.append(overflow)
+        }
+        return all
+    }
+}

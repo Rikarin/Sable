@@ -1,0 +1,35 @@
+module Sable.Diagnostics
+
+/// A span that has ended, as listeners and exporters are given it: all it
+/// came to, fixed. OpenTelemetry's ReadableSpan, what .NET's `Activity` is
+/// once stopped.
+@derive(Debug)
+public struct SpanRecord {
+    public let name: String
+    public let context: SpanContext
+    /// The span it is part of, if any: its id, which may be another process's.
+    public let parentSpanId: SpanId?
+    public let kind: SpanKind
+    /// The tracer that made it, and its version.
+    public let tracer: String
+    public let tracerVersion: String
+    /// When it started and ended, in nanoseconds since 1970 (UTC).
+    public let startTime: Int
+    public let endTime: Int
+    public let attributes: KeyValue[>..]
+    public let events: SpanEvent[>..]
+    public let status: SpanStatus
+
+    /// How long it took, in nanoseconds, by the monotonic clock.
+    public let duration: Int
+
+    /// The value of the attribute of the key, if it has one.
+    public fn attribute(_ key: String) -> AttributeValue? {
+        for attribute in attributes {
+            if attribute.key == key {
+                return attribute.value
+            }
+        }
+        return none
+    }
+}

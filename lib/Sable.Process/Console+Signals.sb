@@ -1,0 +1,47 @@
+module Sable.Process
+
+import Sable.IO
+
+// The signals a terminal sends its program, as Console's: Ctrl+C and the
+// window resized.
+extension Console {
+    /// Ctrl+C, each time it is pressed from now on, in place of ending the
+    /// program (`Signals.on(.Interrupt)`): .NET's `CancelKeyPress`. In raw
+    /// mode, as `withRawMode` leaves it, it still comes so; asked to read
+    /// it as a key (`interruptsAsKeys`), `readKey` has it instead.
+    ///
+    /// ```sable
+    /// fn work() async throws(ProcessError) {
+    ///     let interrupts = try Console.interrupts()
+    ///     let job = Task.spawn {
+    ///         while !Task.isCancelled {
+    ///             await Task.yield()
+    ///         }
+    ///     }
+    ///     for await _ in interrupts {
+    ///         job.cancel()
+    ///         break
+    ///     }
+    /// }
+    /// ```
+    public static fn interrupts() throws(ProcessError) -> SignalSequence {
+        return try Signals.on(.Interrupt)
+    }
+
+    /// The body run, in a task of its own, each time Ctrl+C is pressed, until
+    /// the registration is cancelled or let go.
+    public static fn onInterrupt(_ body: @Sendable async () -> Void) throws(ProcessError) -> SignalRegistration {
+        return try Signals.handle(.Interrupt) { _ in await body() }
+    }
+
+    /// The terminal's window, each time it is resized from now on
+    /// (SIGWINCH), for `Console.size` to be asked again. Throws Unsupported
+    /// on Windows, which says nothing of it.
+    public static fn resizes() throws(ProcessError) -> SignalSequence {
+        #if os(windows)
+        throw ProcessError.Unsupported
+        #else
+        return try Signals.on(.WindowChange)
+        #endif
+    }
+}

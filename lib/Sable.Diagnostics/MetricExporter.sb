@@ -1,0 +1,8 @@
+module Sable.Diagnostics
+
+/// Where collected metrics go: the console, memory for a test, or a
+/// collector (OTLP, Prometheus: #249). OpenTelemetry's MetricExporter. Given
+/// what a reader collected (`MetricReader.export`), cumulative.
+public protocol MetricExporter: Sendable {
+    fn export(_ metrics: MetricData[>..])
+}

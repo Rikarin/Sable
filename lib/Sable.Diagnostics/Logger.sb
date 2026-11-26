@@ -77,6 +77,10 @@ public class Logger {
         for f in fields {
             line = line + " " + f.key + "=" + quoted(f.value)
         }
+        // The span the line was logged in, to find it by in a trace.
+        if let span = Tracing.currentContext {
+            line = line + " trace_id=" + span.traceId.hex + " span_id=" + span.spanId.hex
+        }
         if keeping {
             kept.append(line)
         }

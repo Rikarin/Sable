@@ -1043,6 +1043,9 @@ public sealed partial class SilGen {
         var name = $"{owner}.{field.Name}";
         _globalsByField[field] = (name, type);
         _module.Globals.Add((name, type));
+        if (!field.IsMutable && !field.IsLazy && field.ExportName is null) {
+            _module.ConstantGlobals.Add(name);
+        }
 
         // '@export var': C reads and writes the storage by its name, which
         // every unit having the global (its own unit always) calls it by.
@@ -3992,9 +3995,14 @@ public sealed partial class SilGen {
     static bool ParametersFit(FunctionSymbol candidate, FunctionSymbol requirement) {
         // An array is not a type with a name: 'init(_ bytes: U8[:])' is not
         // the 'init(_ key: PublicKey)' it is declared beside.
+        // Nor is an array of one type an array of another: 'export(_ spans:
+        // [SpanRecord])' is not the 'export(_ metrics: [MetricData])' of
+        // another protocol beside it.
         static bool Fits(TypeSymbol given, TypeSymbol wanted) =>
-            (given, wanted) is not ((ArrayTypeSymbol, NamedTypeSymbol { TypeKind: not TypeKind.Protocol }) or (NamedTypeSymbol { TypeKind: not TypeKind.Protocol }, ArrayTypeSymbol))
-            && FitsNamed(given, wanted);
+            (given, wanted) is (ArrayTypeSymbol a, ArrayTypeSymbol b)
+                ? Fits(a.ElementType, b.ElementType)
+                : (given, wanted) is not ((ArrayTypeSymbol, NamedTypeSymbol { TypeKind: not TypeKind.Protocol }) or (NamedTypeSymbol { TypeKind: not TypeKind.Protocol }, ArrayTypeSymbol))
+                  && FitsNamed(given, wanted);
 
         static bool FitsNamed(TypeSymbol given, TypeSymbol wanted) =>
             given is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } g
@@ -5356,6 +5364,22 @@ public sealed partial class SilGen {
             } else {
                 Destroy(outer);
             }
+        }
+
+        /// <summary>
+        ///     A held value made an optional's: owned by the optional, as a
+        ///     copy of one that is borrowed — a captured variable read through
+        ///     its context — whose borrow then ends.
+        /// </summary>
+        SilValue Wrapped(EnumType optional, SilValue value) {
+            Unhold(value);
+            var owned = Owned(value);
+            if (value is LoadBorrowInst borrowed) {
+                Emit(new EndBorrowInst(borrowed));
+                ReleaseOuter(borrowed);
+            }
+
+            return Emit(new EnumInst(optional, 0, owned));
         }
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
@@ -10452,11 +10476,11 @@ public sealed partial class SilGen {
             // An optional compared with a plain value: the value, wrapped.
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual) {
                 if (left.Type is EnumType { Cases: [("Some", { } leftPayload), ("None", null)] } leftOptional && right.Type == leftPayload) {
-                    right = Hold(Emit(new EnumInst(leftOptional, 0, Owned(Unhold(right)))));
+                    right = Hold(Wrapped(leftOptional, right));
                 } else if (right.Type is EnumType { Cases: [("Some", { } rightPayload), ("None", null)] } rightOptional && left.Type == rightPayload) {
                     // Left was borrowed first; keep the temporaries in order.
                     Unhold(right);
-                    left = Emit(new EnumInst(rightOptional, 0, Owned(Unhold(left))));
+                    left = Wrapped(rightOptional, left);
                     Hold(left);
                     Hold(right);
                 }

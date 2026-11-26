@@ -755,6 +755,7 @@ static void signal_let_go(int number) {
     if (number > 0 && number < NSIG && signal_caught[number]) {
         signal_caught[number] = false;
         sigaction(number, &signal_before[number], NULL);
+        terminal_watch();
     }
 }
 

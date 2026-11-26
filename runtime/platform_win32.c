@@ -272,6 +272,7 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *exception) {
 
     // What the program printed before is its output, as before any trap.
     fflush(stdout);
+    terminal_restore();
     static const char message[] = "fatal error: stack overflow: calls nested too deeply\n";
     DWORD written;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), message, sizeof message - 1, &written, NULL);
@@ -1993,4 +1994,8 @@ static int64_t physical_memory(void) {
 // ---- Starting programs, and signals ----------------------------------------
 
 #include "platform_process_win32.c"
+
+// ---- The terminal ----------------------------------------------------------
+
+#include "platform_terminal_win32.c"
 #include "platform_ipc_win32.c"

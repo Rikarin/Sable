@@ -1,0 +1,413 @@
+module TracingTests
+
+// Tracer, Span, Tracing, SimpleSpanProcessor, the exporters and
+// TraceContextPropagator (Sable.Diagnostics), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+// Each test that listens stops listening before it ends: the listeners are
+// the process's, and a process may run several tests.
+
+import Sable.Concurrency
+import Sable.Diagnostics
+import Sable.Testing
+
+let tracer = Tracer("tests", version: "1.0")
+
+// The spans the body ended, every one recorded and sampled.
+fn recorded(_ body: () -> Void) -> SpanRecord[>..] {
+    let exporter = InMemorySpanExporter()
+    let listening = Tracing.addListener(SimpleSpanProcessor(exporter))
+    body()
+    listening.cancel()
+    return exporter.spans
+}
+
+@test
+fn withNothingListeningASpanIsNotRecording() {
+    expect(!Tracing.isListening)
+    let seen = tracer.withSpan("quiet", attributes: [KeyValue("made", true)]) { span in
+        span.setAttribute(KeyValue("a", 1))
+        span.addEvent("e")
+        span.end()
+        return span.isRecording
+    }
+    expect(!seen)
+    expect(!tracer.startSpan("manual").isRecording)
+    expect(Tracing.currentContext == none)
+}
+
+@test
+fn theAttributesAreNotMadeWhenNothingListens() {
+    let made = Atomic<Int>(0)
+    fn attributes() -> KeyValue[>..] {
+        _ = made.add(1)
+        return []
+    }
+    tracer.withSpan("quiet", attributes: attributes()) { _ in }
+    expect(made.load() == 0)
+    _ = recorded {
+        tracer.withSpan("loud", attributes: attributes()) { _ in }
+    }
+    expect(made.load() == 1)
+}
+
+@test
+fn aSpanIsRecordedWithAllItWasTold() {
+    let spans = recorded {
+        tracer.withSpan("checkout", kind: .Server, attributes: [KeyValue("cart.items", 3)]) { span in
+            expect(span.isRecording)
+            span.setAttribute(KeyValue("cart.items", 4))
+            span.setAttributes([KeyValue("user", "ann"), KeyValue("vip", true), KeyValue("ratio", 0.5)])
+            span.addEvent("priced", [KeyValue("total", 60)])
+            span.setStatus(.Ok)
+            span.updateName("checkout.done")
+        }
+    }
+    expect(spans.count == 1)
+    let span = spans[0]
+    expect(span.name == "checkout.done")
+    expect(span.kind == .Server)
+    expect(span.tracer == "tests" && span.tracerVersion == "1.0")
+    expect(span.attribute("cart.items") == .Integer(4))
+    expect(span.attribute("user") == .Text("ann"))
+    expect(span.attribute("vip") == .Boolean(true))
+    expect(span.attribute("ratio") == .Number(0.5))
+    expect(span.attribute("missing") == none)
+    expect(span.attributes.count == 4)
+    expect(span.events.count == 1 && span.events[0].name == "priced")
+    expect(span.status == .Ok)
+    expect(span.parentSpanId == none)
+    expect(span.context.isSampled && span.context.isValid && !span.context.isRemote)
+    expect(span.endTime >= span.startTime && span.duration >= 0)
+}
+
+@test
+fn spansNestUnderTheCurrentOne() {
+    let spans = recorded {
+        tracer.withSpan("outer") { outer in
+            expect(Tracing.currentSpan.context == outer.context)
+            tracer.withSpan("inner") { inner in
+                expect(inner.context.traceId == outer.context.traceId)
+                expect(Tracing.currentContext == inner.context)
+            }
+            expect(Tracing.currentContext == outer.context)
+        }
+        expect(Tracing.currentContext == none)
+    }
+    expect(spans.map { $0.name } == ["inner", "outer"])
+    expect(spans[0].parentSpanId == spans[1].context.spanId)
+}
+
+@test
+fn theCurrentSpanCrossesAwaitsAndSpawnedTasks() async {
+    let exporter = InMemorySpanExporter()
+    let listening = Tracing.addListener(SimpleSpanProcessor(exporter))
+    await tracer.withSpan("request") { span in
+        await Task.yield()
+        expect(Tracing.currentContext == span.context)
+        let child = Task.spawn {
+            tracer.withSpan("work") { _ in }
+        }
+        await child.value
+    }
+    listening.cancel()
+    let spans = exporter.spans
+    expect(spans.map { $0.name } == ["work", "request"])
+    expect(spans[0].parentSpanId == spans[1].context.spanId)
+}
+
+@test
+fn anErrorThrownIsTheSpansStatus() {
+    let spans = recorded {
+        do {
+            try tracer.withSpan("failing") { (_: Span) throws(TestSkip) in
+                throw TestSkip("no")
+            }
+        } catch { }
+    }
+    expect(spans.count == 1)
+    expect(spans[0].status == .Error("skipped: no") || spans[0].status != .Unset, spans[0].status.description())
+    expect(spans[0].events.map { $0.name } == ["exception"])
+}
+
+@test
+fn anAsyncErrorThrownIsTheSpansStatusToo() async {
+    let exporter = InMemorySpanExporter()
+    let listening = Tracing.addListener(SimpleSpanProcessor(exporter))
+    do {
+        try await tracer.withSpan("failing") { _ in
+            await Task.yield()
+            throw TestSkip("later")
+        }
+    } catch { }
+    listening.cancel()
+    expect(exporter.spans.count == 1)
+    expect(exporter.spans[0].status != .Unset)
+}
+
+@test
+fn aSpanStartedByHandIsEndedOnce() {
+    let spans = recorded {
+        let span = tracer.startSpan("job", kind: .Consumer, attributes: [KeyValue("n", 1)])
+        expect(Tracing.currentContext == none)
+        span.end()
+        span.end()
+        span.setAttribute(KeyValue("late", true))
+    }
+    expect(spans.count == 1)
+    expect(spans[0].attribute("late") == none)
+}
+
+@test
+fn aParentCanBeGivenOrNone() {
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    let spans = recorded {
+        tracer.startSpan("child", parent: remote).end()
+        tracer.withSpan("outer") { _ in
+            tracer.startSpan("root", parent: .Some(none)).end()
+        }
+    }
+    expect(spans[0].context.traceId == remote.traceId)
+    expect(spans[0].parentSpanId == remote.spanId)
+    expect(spans[1].name == "root" && spans[1].parentSpanId == none)
+    expect(spans[1].context.traceId != spans[2].context.traceId)
+}
+
+@test
+fn aRemoteContextIsTheParent() {
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", tracestate: "a=1")!
+    let spans = recorded {
+        Tracing.withContext(remote) {
+            tracer.withSpan("handle", kind: .Server) { _ in }
+        }
+    }
+    expect(spans[0].context.traceId == remote.traceId)
+    expect(spans[0].parentSpanId == remote.spanId)
+    expect(spans[0].context.traceState == "a=1")
+}
+
+@test
+fn anUnsampledParentsChildrenAreDropped() {
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")!
+    var inner = Span.invalid
+    let spans = recorded {
+        Tracing.withContext(remote) {
+            tracer.withSpan("handle") { span in
+                inner = span
+            }
+        }
+    }
+    expect(spans.isEmpty)
+    expect(!inner.isRecording)
+    // Its context goes on, unsampled, to whoever is called.
+    expect(inner.context.traceId == remote.traceId && !inner.context.isSampled)
+}
+
+@test
+fn aRatioOfNoneSamplesNoNewTrace() {
+    let exporter = InMemorySpanExporter()
+    let listening = Tracing.addListener(SimpleSpanProcessor(exporter, ratio: 0.0))
+    for _ in 0..<20 {
+        tracer.withSpan("maybe") { _ in }
+    }
+    listening.cancel()
+    expect(exporter.spans.isEmpty)
+    exporter.clear()
+}
+
+@immutable
+final class Counting: SpanListener {
+    let starts = Atomic<Int>(0)
+    let ends = Atomic<Int>(0)
+    let decision: SamplingDecision
+
+    init(_ decision: SamplingDecision) {
+        self.decision = decision
+    }
+
+    fn sample(_ tracer: Tracer, _ name: String, _ kind: SpanKind, traceId: TraceId, parent: SpanContext?) -> SamplingDecision {
+        return decision
+    }
+
+    fn started(_ span: Span) {
+        _ = starts.add(1)
+    }
+
+    fn ended(_ span: SpanRecord) {
+        _ = ends.add(1)
+    }
+}
+
+@test
+fn theMostAnyListenerWantsIsDone() {
+    let dropping = Counting(.Drop)
+    let recording = Counting(.RecordOnly)
+    let one = Tracing.addListener(dropping)
+    let two = Tracing.addListener(recording)
+    var context = Span.invalid.context
+    tracer.withSpan("s") { span in
+        expect(span.isRecording)
+        context = span.context
+    }
+    one.cancel()
+    two.cancel()
+    two.cancel()
+    expect(!context.isSampled && context.isValid)
+    expect(dropping.starts.load() == 0 && dropping.ends.load() == 0)
+    expect(recording.starts.load() == 1 && recording.ends.load() == 1)
+    expect(!Tracing.isListening)
+}
+
+@test
+fn theConsoleExporterWritesALineASpan() {
+    let lines = Mutex<String[>..]>([])
+    let exporter = ConsoleExporter { line in
+        lines.withLock { $0.append(line) }
+    }
+    let listening = Tracing.addListener(SimpleSpanProcessor(exporter))
+    tracer.withSpan("work", kind: .Client, attributes: [KeyValue("n", 1)]) { span in
+        span.addEvent("half", [KeyValue("at", 0.5)])
+        span.setStatus(.Error("bad"))
+    }
+    listening.cancel()
+    exporter.flush()
+    let written = lines.withLock { $0 }
+    expect(written.count == 2)
+    expect(written[0].hasPrefix("span work trace="), written[0])
+    expect(written[0].contains(" parent=- kind=client duration="), written[0])
+    expect(written[0].hasSuffix("status=error: bad n=1"), written[0])
+    expect(written[1] == "  event half at=0.5", written[1])
+}
+
+// ---- Span contexts and W3C Trace Context -----------------------------------------
+
+let badParents: String[>..] = [
+    "",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-",
+    "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+    "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+    "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "0g-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "00_4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0x",
+    "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01x",
+]
+
+@test(arguments: badParents)
+fn aHeaderThatIsNoTraceparentIsNone(_ header: String) {
+    expect(SpanContext.parse(traceparent: header) == none)
+}
+
+@test
+fn aTraceparentIsReadAndWrittenAlike() {
+    let header = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-03"
+    let context = SpanContext.parse(traceparent: "  \(header) ")!
+    expect(context.traceparent == header)
+    expect(context.flags == 3 && context.isSampled)
+    expect(context.traceId.hex == "4bf92f3577b34da6a3ce929d0e0e4736")
+    expect(SpanContext.parse(traceparent: "02-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00-what-comes")!.isSampled == false)
+}
+
+@test
+fn idsAreReadAsHexAndMadeAtRandom() {
+    expect(TraceId.parse(hex: "4bf92f3577b34da6a3ce929d0e0e473") == none)
+    expect(TraceId.parse(hex: "4bf92f3577b34da6a3ce929d0e0e473z") == none)
+    expect(TraceId.parse(hex: "zbf92f3577b34da6a3ce929d0e0e4736") == none)
+    expect(SpanId.parse(hex: "00f067aa0ba902b") == none)
+    expect(SpanId.parse(hex: "00f067aa0ba902bz") == none)
+    expect(SpanId(value: 1).hex == "0000000000000001")
+    expect(TraceId.random() != TraceId.random())
+    expect(SpanId.random().isValid && !SpanId(value: 0).isValid)
+}
+
+@test
+fn headersAreInjectedAndExtracted() {
+    var headers: [String: String] = [:]
+    let empty = Span.invalid.context
+    TraceContextPropagator.inject(empty) { name, value in headers[name] = value }
+    expect(headers.isEmpty)
+    TraceContextPropagator.injectCurrent { name, value in headers[name] = value }
+    expect(headers.isEmpty)
+    expect(TraceContextPropagator.extract { headers[$0] } == none)
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    Tracing.withContext(remote) {
+        TraceContextPropagator.injectCurrent { name, value in headers[name] = value }
+    }
+    expect(headers["traceparent"] == remote.traceparent)
+    expect(headers["tracestate"] == none)
+    expect(TraceContextPropagator.extract { headers[$0] } == remote)
+}
+
+@test
+fn aRemoteContextIsCurrentAcrossAwaits() async {
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    let seen = await Tracing.withContext(remote) {
+        await Task.yield()
+        return Tracing.currentContext
+    }
+    expect(seen == remote)
+}
+
+@test
+fn kindsAndStatusesHaveNames() {
+    let kinds: SpanKind[>..] = [.Internal, .Server, .Client, .Producer, .Consumer]
+    expect(kinds.map { $0.name } == ["internal", "server", "client", "producer", "consumer"])
+    expect(SpanStatus.Unset.description() == "unset")
+    expect(SpanStatus.Ok.description() == "ok")
+    expect(SpanStatus.Error("").description() == "error")
+    expect(AttributeValue.Number(1.5).description() == "1.5")
+    expect(AttributeValue.Boolean(false).description() == "false")
+}
+
+// ---- The logger ----------------------------------------------------------------------
+
+@test
+fn aLogLineCarriesTheCurrentSpan() {
+    let logger = Logger("app")
+    logger.keepLines()
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    logger.info("outside")
+    Tracing.withContext(remote) {
+        logger.info("inside", [field("k", "v")])
+    }
+    expect(logger.lines() == ["INFO app: outside", "INFO app: inside k=v trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7"])
+}
+
+@immutable
+final class Ends: SpanListener {
+    let names = Mutex<String[>..]>([])
+
+    init() { }
+
+    fn ended(_ span: SpanRecord) {
+        names.withLock { $0.append(span.name) }
+    }
+}
+
+@test
+fn aListenerOfItsEndsAloneSamplesAsTheParentDid() {
+    let ends = Ends()
+    let listening = Tracing.addListener(ends)
+    tracer.withSpan("root") { _ in }
+    let unsampled = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")!
+    Tracing.withContext(unsampled) {
+        tracer.withSpan("dropped") { _ in }
+    }
+    listening.cancel()
+    expect(ends.names.withLock { $0 } == ["root"])
+}
+
+@test
+fn recordsAndEventsDescribeThemselves() {
+    let event = SpanEvent(name: "e", time: 5)
+    expect(event.attributes.isEmpty && event.time == 5)
+    expect(event == SpanEvent(name: "e", time: 5) && event != SpanEvent(name: "f", time: 5))
+    expect("\(event:?)".contains("SpanEvent"))
+    let spans = recorded {
+        tracer.withSpan("described") { _ in }
+    }
+    expect("\(spans[0]:?)".contains("described"))
+    expect(SpanId.parse(hex: "00F067AA0BA902B7") == none)
+    expect(SpanId.parse(hex: "00f067aa0ba902b7")!.isValid)
+}

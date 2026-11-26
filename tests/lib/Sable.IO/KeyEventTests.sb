@@ -1,0 +1,141 @@
+module KeyEventTests
+
+// KeyEvent, Key and KeyModifiers (Sable.IO), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.IO
+import Sable.Testing
+
+// What terminals send for keys, and what each is read as.
+let sequences: (U8[>..], String)[>..] = [
+    ([0x61], "a"),
+    ([0x41], "A"),
+    ([0x20], "Space"),
+    ([0x0D], "Enter"),
+    ([0x0A], "Enter"),
+    ([0x09], "Tab"),
+    ([0x7F], "Backspace"),
+    ([0x08], "Ctrl+Backspace"),
+    ([0x00], "Ctrl+Space"),
+    ([0x01], "Ctrl+a"),
+    ([0x1A], "Ctrl+z"),
+    ([0x1C], "Ctrl+4"),
+    ([0x1F], "Ctrl+7"),
+    ([0x1B], "Escape"),
+    ([0x1B, 0x61], "Alt+a"),
+    ([0x1B, 0x01], "Ctrl+Alt+a"),
+    ([0xC3, 0xA9], "é"),
+    ([0xE2, 0x82, 0xAC], "€"),
+    ([0xF0, 0x9F, 0x98, 0x80], "😀"),
+    ([0x1B, 0x5B, 0x41], "Up"),
+    ([0x1B, 0x5B, 0x42], "Down"),
+    ([0x1B, 0x5B, 0x43], "Right"),
+    ([0x1B, 0x5B, 0x44], "Left"),
+    ([0x1B, 0x5B, 0x48], "Home"),
+    ([0x1B, 0x5B, 0x46], "End"),
+    ([0x1B, 0x4F, 0x41], "Up"),
+    ([0x1B, 0x4F, 0x50], "F1"),
+    ([0x1B, 0x4F, 0x53], "F4"),
+    ([0x1B, 0x4F, 0x4D], "Enter"),
+    ([0x1B, 0x5B, 0x31, 0x3B, 0x35, 0x41], "Ctrl+Up"),
+    ([0x1B, 0x5B, 0x31, 0x3B, 0x32, 0x43], "Shift+Right"),
+    ([0x1B, 0x5B, 0x31, 0x3B, 0x33, 0x44], "Alt+Left"),
+    ([0x1B, 0x5B, 0x31, 0x3B, 0x39, 0x42], "Meta+Down"),
+    ([0x1B, 0x5B, 0x31, 0x3B, 0x35, 0x50], "Ctrl+F1"),
+    ([0x1B, 0x5B, 0x5A], "Shift+Tab"),
+    ([0x1B, 0x5B, 0x31, 0x7E], "Home"),
+    ([0x1B, 0x5B, 0x32, 0x7E], "Insert"),
+    ([0x1B, 0x5B, 0x33, 0x7E], "Delete"),
+    ([0x1B, 0x5B, 0x34, 0x7E], "End"),
+    ([0x1B, 0x5B, 0x35, 0x7E], "PageUp"),
+    ([0x1B, 0x5B, 0x36, 0x7E], "PageDown"),
+    ([0x1B, 0x5B, 0x37, 0x7E], "Home"),
+    ([0x1B, 0x5B, 0x38, 0x7E], "End"),
+    ([0x1B, 0x5B, 0x31, 0x35, 0x7E], "F5"),
+    ([0x1B, 0x5B, 0x32, 0x34, 0x7E], "F12"),
+    ([0x1B, 0x5B, 0x33, 0x34, 0x7E], "F20"),
+    ([0x1B, 0x5B, 0x33, 0x3B, 0x36, 0x7E], "Ctrl+Shift+Delete"),
+    ([0x1B, 0x5B, 0x5B, 0x41], "F1"),
+    ([0x1B, 0x5B, 0x5B, 0x45], "F5"),
+    ([0x1B, 0x5B, 0x39, 0x37, 0x3B, 0x35, 0x75], "Ctrl+a"),
+    ([0x1B, 0x5B, 0x31, 0x33, 0x75], "Enter"),
+    ([0x1B, 0x5B, 0x32, 0x37, 0x75], "Escape"),
+    ([0x1B, 0x5B, 0x39, 0x3B, 0x32, 0x75], "Shift+Tab"),
+    ([0x1B, 0x5B, 0x31, 0x32, 0x37, 0x75], "Backspace"),
+    ([0x1B, 0x5B, 0x39, 0x37, 0x3A, 0x36, 0x35, 0x3B, 0x35, 0x75], "Ctrl+a"),
+    ([0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E], "ESC[200~"),
+    ([0x1B, 0x5B, 0x39, 0x39, 0x7E], "ESC[99~"),
+    ([0x1B, 0x5B, 0x3C, 0x30, 0x3B, 0x31, 0x3B, 0x32, 0x4D], "ESC[<0;1;2M"),
+]
+
+@test(arguments: sequences)
+fn aSequenceIsReadAsItsKey(_ bytes: U8[>..], _ expected: String) {
+    let keys = KeyEvent.decode(bytes)
+    expect(keys.count == 1, "\(keys.count) keys")
+    if keys.count == 1 {
+        expect(keys[0].description() == expected, keys[0].description())
+    }
+}
+
+@test
+fn severalKeysAreReadInTurn() {
+    let keys = KeyEvent.decode([0x68, 0x1B, 0x5B, 0x41, 0x69, 0x1B, 0x1B])
+    expect(keys.map { $0.description() } == ["h", "Up", "i", "Escape", "Escape"])
+}
+
+@test
+fn whatIsNotUtf8IsTheReplacementCharacter() {
+    let keys = KeyEvent.decode([0xC3, 0x28, 0xFF, 0xE2, 0x82])
+    expect(keys.count >= 3)
+    expect(keys[0].character == '\u{FFFD}')
+    expect(keys[1].character == '(')
+    expect(keys[2].character == '\u{FFFD}')
+}
+
+@test
+fn aSequenceCutShortIsWhatCameOfIt() {
+    expect(KeyEvent.decode([0x1B, 0x5B, 0x31, 0x3B]).map { $0.description() } == ["ESC[1;"])
+    expect(KeyEvent.decode([0x1B, 0x4F]).map { $0.description() } == ["Alt+O"])
+    expect(KeyEvent.decode([0x1B, 0x5B, 0x5B]).map { $0.description() } == ["ESC[["])
+    expect(KeyEvent.decode([0x1B, 0x5B, 0x5B, 0x5A]).map { $0.description() } == ["ESC[[Z"])
+    expect(KeyEvent.decode([0x1B, 0x4F, 0x7A]).map { $0.description() } == ["ESCOz"])
+    // A byte no sequence has ends it.
+    expect(KeyEvent.decode([0x1B, 0x5B, 0x31, 0x0A]).map { $0.description() } == ["ESC[1", "Enter"])
+}
+
+let cutShort: U8[>..][>..] = [[0x1B], [0x1B, 0x5B, 0x31], [0xE2, 0x82], [0x1B, 0x4F], [0x1B, 0x5B, 0x5B], [0x1B, 0xC3]]
+
+@test(arguments: cutShort)
+fn whatMayBeAKeyCutShortIsLeft(_ bytes: U8[>..]) {
+    var input: U8[>..] = [0x78]
+    input.append(contentsOf: bytes)
+    let (keys, used) = KeyEvent.decode(input, complete: false)
+    expect(keys == [KeyEvent(.Character('x'))])
+    expect(used == 1)
+}
+
+@test
+fn aKeyIsItsCharacterIfItIsOne() {
+    expect(KeyEvent(.Character('x')).character == 'x')
+    expect(KeyEvent(.Enter).character == none)
+    expect(KeyEvent(.Enter) == KeyEvent(.Enter, modifiers: .empty))
+    expect(KeyEvent(.Enter) != KeyEvent(.Enter, modifiers: .shift))
+}
+
+@test
+fn everyKeyHasAName() {
+    let keys: Key[>..] = [.Enter, .Tab, .Backspace, .Escape, .Up, .Down, .Left, .Right, .Home, .End, .PageUp, .PageDown, .Insert, .Delete, .Function(9), .Unrecognised("[x"), .Character('?')]
+    let names = ["Enter", "Tab", "Backspace", "Escape", "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F9", "ESC[x", "?"]
+    expect(keys.map { $0.description() } == names)
+}
+
+@test
+fn modifiersCombine() {
+    let all = KeyModifiers.shift | .alt | .control | .meta
+    expect(all.bits == 15)
+    expect(all.description() == "Ctrl+Alt+Shift+Meta")
+    expect(all.contains(KeyModifiers.alt | .meta))
+    expect(KeyModifiers.empty.isEmpty && !all.isEmpty)
+    expect(KeyModifiers.empty.description() == "")
+    expect(KeyModifiers(bits: 0x31) == KeyModifiers.shift)
+}

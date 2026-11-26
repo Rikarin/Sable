@@ -1,0 +1,59 @@
+module Sable.IO
+
+/// The keys held as another was pressed: Shift, Alt (Option), Control and
+/// Meta (Super, the Windows or Command key), as far as the terminal says.
+/// .NET's `ConsoleModifiers`.
+///
+/// ```sable
+/// let both = KeyModifiers.control | KeyModifiers.shift
+/// assert(both.contains(.control) && !both.contains(.alt))
+/// assert(both.description() == "Ctrl+Shift")
+/// ```
+@derive(Equatable, Debug)
+public struct KeyModifiers {
+    /// Shift 1, Alt 2, Control 4, Meta 8: as the terminal's sequences number
+    /// them, less one.
+    public let bits: Int
+
+    public init(bits: Int) {
+        self.bits = bits & 15
+    }
+
+    public static var empty: KeyModifiers => KeyModifiers(bits: 0)
+    public static var shift: KeyModifiers => KeyModifiers(bits: 1)
+    public static var alt: KeyModifiers => KeyModifiers(bits: 2)
+    public static var control: KeyModifiers => KeyModifiers(bits: 4)
+    public static var meta: KeyModifiers => KeyModifiers(bits: 8)
+
+    /// Whether none is held.
+    public var isEmpty: Bool => bits == 0
+
+    /// Whether those are held, all of them.
+    public fn contains(_ other: KeyModifiers) -> Bool {
+        return (bits & other.bits) == other.bits
+    }
+
+    /// Both these and those.
+    public operator | (left: KeyModifiers, right: KeyModifiers) -> KeyModifiers {
+        return KeyModifiers(bits: left.bits | right.bits)
+    }
+
+    /// As a key binding writes them, Ctrl first: "Ctrl+Alt+Shift+Meta";
+    /// empty for none.
+    public fn description() -> String {
+        var names: String[>..] = []
+        if contains(.control) {
+            names.append("Ctrl")
+        }
+        if contains(.alt) {
+            names.append("Alt")
+        }
+        if contains(.shift) {
+            names.append("Shift")
+        }
+        if contains(.meta) {
+            names.append("Meta")
+        }
+        return names.joined(separator: "+")
+    }
+}

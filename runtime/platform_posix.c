@@ -24,6 +24,7 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -595,6 +596,7 @@ static void on_fault(int signal_number, siginfo_t *info, void *context) {
     if (stack_low != NULL && address >= stack_low - FRAME_SLACK && address < stack_low + GUARD_SLACK) {
         // What the program printed before is its output, as before any trap.
         fflush(stdout);
+        terminal_restore();
         static const char message[] = "fatal error: stack overflow: calls nested too deeply\n";
         ssize_t written = write(STDERR_FILENO, message, sizeof message - 1);
         (void)written;
@@ -604,6 +606,7 @@ static void on_fault(int signal_number, siginfo_t *info, void *context) {
 
     // Not an overflow: what the signal does without a handler, as the
     // faulting instruction runs again.
+    terminal_restore();
     signal(signal_number, SIG_DFL);
 }
 
@@ -2277,4 +2280,8 @@ static bool random_bytes(void *buffer, size_t length) {
 // ---- Starting programs, and signals ---------------------------------------
 
 #include "platform_process_posix.c"
+
+// ---- The terminal ----------------------------------------------------------
+
+#include "platform_terminal_posix.c"
 #include "platform_ipc_posix.c"

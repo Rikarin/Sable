@@ -5,36 +5,129 @@ import Sable.Math
 // Reductions: of every element, or along an axis, which the result is
 // without (or keeps, of length 1, with 'keepingDimension'), as NumPy's do.
 
-extension TensorView {
-    /// Each run along the axis: the body is given the offset of its first
-    /// element, the stride between them and their count, in row-major order
-    /// of the rest; and the shape of the rest.
-    fn forEachRun(along axis: Int, _ body: (Int, Int, Int) -> Void) -> Int[>..] {
-        let at = normalisedAxis(axis, rank: rank)
-        let rest = removing(shape, at: at)
-        let restStrides = removing(strides, at: at)
-        let length = shape[at]
-        let step = strides[at]
-        if elementCount(rest) == 0 {
-            return rest
-        }
-        let runs = TensorView<T>(storage: storage, offset: offset, shape: rest, strides: restStrides)
-        runs.forEachOffset { (start: Int) in
-            body(start, step, length)
-        }
-        return rest
+/// The runs along an axis of a view: the rest's places, row-major, each the
+/// start of one, and the run's length and step.
+struct AxisRuns {
+    /// The shape without the axis, and the strides of its places.
+    let rest: Int[>..]
+    let restStrides: Int[>..]
+    let length: Int
+    let step: Int
+
+    init(_ shape: Int[:], _ strides: Int[:], axis at: Int) {
+        rest = removing(shape, at: at)
+        restStrides = removing(strides, at: at)
+        length = shape[at]
+        step = strides[at]
     }
 
+    /// The shape a reduction along the axis gives.
+    fn shape(keeping: Bool, at axis: Int) -> Int[>..] => keeping ? inserting(1, into: rest, at: axis) : rest
+}
+
+extension TensorView {
     /// The reduction of each run along the axis, by a closure given the
-    /// storage, the run's first offset, its stride and its count.
+    /// storage, the run's first offset, its stride and its count: a call a
+    /// run, in row-major order of the rest.
     fn reduced<R>(axis: Int, keepingDimension: Bool, _ reduce: (T[:], Int, Int, Int) -> R) -> Tensor<R> {
+        let at = normalisedAxis(axis, rank: rank)
+        let along = AxisRuns(shape, strides, axis: at)
         var made: R[>..] = []
-        let rest = self.forEachRun(along: axis) { (start: Int, step: Int, count: Int) in
-            made.append(reduce(storage, start, step, count))
+        made.reserveCapacity(elementCount(along.rest))
+        var runs = Runs(along.rest, along.restStrides, offset)
+        while runs.next() {
+            var start = runs.a
+            var i = 0
+            while i < runs.length {
+                made.append(reduce(storage, start, along.step, along.length))
+                start += runs.aStep
+                i += 1
+            }
         }
-        let shape = keepingDimension ? inserting(1, into: rest, at: normalisedAxis(axis, rank: rank)) : rest
-        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+        return Tensor<R>(storage: made, shape: along.shape(keeping: keepingDimension, at: at), layout: .RowMajor)
     }
+}
+
+/// The sums along an axis, of any number type: each run's, from zero, where
+/// the axis is the contiguous one; else each place of the rest added to a
+/// slice at a time, which goes along the rest's own runs.
+fn sums<T: Numeric>(_ view: TensorView<T>, axis: Int, keepingDimension: Bool) -> Tensor<T> {
+    let at = normalisedAxis(axis, rank: view.rank)
+    let along = AxisRuns(view.shape, view.strides, axis: at)
+    let shape = along.shape(keeping: keepingDimension, at: at)
+    if along.step == 1 || along.length <= 1 {
+        return view.reduced(axis: at, keepingDimension: keepingDimension) { runSum($0, $1, $2, $3) }
+    }
+    var made = T[>..](repeating: T.zero, count: elementCount(along.rest))
+    let x = view.storage
+    var k = 0
+    while k < along.length {
+        var runs = Runs(along.rest, along.restStrides, view.offset + k * along.step)
+        var o = 0
+        while runs.next() {
+            var p = runs.a
+            var i = 0
+            while i < runs.length {
+                made[o] = made[o] + x[p]
+                p += runs.aStep
+                o += 1
+                i += 1
+            }
+        }
+        k += 1
+    }
+    return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
+}
+
+/// The sums along an axis of F32s or F64s, by Sable.Math's kernels: each
+/// run's a vector at a time where the axis is the contiguous one; else a
+/// slice at a time added to the sums, a vector at a time along the rest.
+@inline(always)
+fn vectorSums<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ view: TensorView<T>, axis: Int, keepingDimension: Bool, _ zero: SIMD<T, N>) -> Tensor<T> {
+    let at = normalisedAxis(axis, rank: view.rank)
+    let along = AxisRuns(view.shape, view.strides, axis: at)
+    let shape = along.shape(keeping: keepingDimension, at: at)
+    let count = elementCount(along.rest)
+    let x = view.storage
+    if along.step == 1 || along.length <= 1 {
+        var made: T[>..] = []
+        made.append(holes: count)
+        var runs = Runs(along.rest, along.restStrides, view.offset)
+        var o = 0
+        while runs.next() {
+            var start = runs.a
+            var i = 0
+            while i < runs.length {
+                made[o] = sumRun(x, start, along.step, along.length, zero)
+                start += runs.aStep
+                o += 1
+                i += 1
+            }
+        }
+        return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
+    }
+    var made = T[>..](repeating: T.zero, count: count)
+    let contiguous = contiguousStrides(along.rest, .RowMajor)
+    var k = 0
+    while k < along.length {
+        var runs = Runs(along.rest, contiguous, 0, along.restStrides, view.offset + k * along.step, layout: .RowMajor)
+        while runs.next() {
+            arithmeticRunInPlace(.Add, &made, runs.a, x, runs.b, runs.bStep, runs.length, zero)
+        }
+        k += 1
+    }
+    return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
+}
+
+/// The sum of every element of F32s or F64s, a run at a time.
+@inline(always)
+fn vectorTotal<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ view: TensorView<T>, _ zero: SIMD<T, N>) -> T {
+    var total = T.zero
+    var runs = Runs(view.shape, view.strides, view.offset)
+    while runs.next() {
+        total = total + sumRun(view.storage, runs.a, runs.aStep, runs.length, zero)
+    }
+    return total
 }
 
 /// The sum of a run, from zero.
@@ -79,22 +172,28 @@ extension TensorView where T: Numeric {
     /// ```
     public fn sum() -> T {
         var total = T.zero
-        self.forEachOffset { (at: Int) in
-            total = total + storage[at]
+        var runs = Runs(shape, strides, offset)
+        while runs.next() {
+            total = total + runSum(storage, runs.a, runs.aStep, runs.length)
         }
         return total
     }
 
     /// The sums along the axis.
-    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<T> {
-        return self.reduced(axis: axis, keepingDimension: keepingDimension) { runSum($0, $1, $2, $3) }
-    }
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<T> => sums(self, axis: axis, keepingDimension: keepingDimension)
 
     /// The product of every element: one for none.
     public fn product() -> T {
         var total = T.one
-        self.forEachOffset { (at: Int) in
-            total = total * storage[at]
+        var runs = Runs(shape, strides, offset)
+        while runs.next() {
+            var at = runs.a
+            var i = 0
+            while i < runs.length {
+                total = total * storage[at]
+                at += runs.aStep
+                i += 1
+            }
         }
         return total
     }
@@ -107,7 +206,8 @@ extension TensorView where T: FloatingPoint {
     /// The means along the axis.
     public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<T> {
         let length = T.converting(shape[normalisedAxis(axis, rank: rank)])
-        return self.reduced(axis: axis, keepingDimension: keepingDimension) { runSum($0, $1, $2, $3) / length }
+        let total = sums(self, axis: axis, keepingDimension: keepingDimension)
+        return total.withElements(quotientsWithScalar(total.storage, length, valueFirst: false))
     }
 }
 
@@ -183,31 +283,34 @@ extension TensorView where T: ElementaryFunctions {
     /// ```
     public fn softmax(axis: Int) -> Tensor<T> {
         let at = normalisedAxis(axis, rank: rank)
-        var result = self.toTensor()
-        let contiguous = result.view
-        var made = result.storage
-        result.storage = []
-        _ = contiguous.forEachRun(along: at) { (start: Int, step: Int, count: Int) in
-            if count == 0 {
-                return
-            }
-            let greatest = made[start + step * runExtreme(made, start, step, count, greatest: true)]
-            var total = T.zero
-            var k = 0
-            while k < count {
-                let e = T.exp(made[start + k * step] - greatest)
-                made[start + k * step] = e
-                total = total + e
-                k += 1
-            }
-            k = 0
-            while k < count {
-                made[start + k * step] = made[start + k * step] / total
-                k += 1
+        var made = self.toArray()
+        let along = AxisRuns(shape, contiguousStrides(shape, .RowMajor), axis: at)
+        let step = along.step
+        let count = along.length
+        var runs = Runs(along.rest, along.restStrides, 0)
+        while count > 0 && runs.next() {
+            var start = runs.a
+            var r = 0
+            while r < runs.length {
+                let greatest = made[start + step * runExtreme(made, start, step, count, greatest: true)]
+                var total = T.zero
+                var k = 0
+                while k < count {
+                    let e = T.exp(made[start + k * step] - greatest)
+                    made[start + k * step] = e
+                    total = total + e
+                    k += 1
+                }
+                k = 0
+                while k < count {
+                    made[start + k * step] = made[start + k * step] / total
+                    k += 1
+                }
+                start += runs.aStep
+                r += 1
             }
         }
-        result.storage = made
-        return result
+        return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
     }
 }
 
@@ -264,4 +367,60 @@ extension Tensor where T: ElementaryFunctions {
     /// assert(t.softmax(axis: 1).toArray() == [0.5, 0.5, 0.5, 0.5])
     /// ```
     public fn softmax(axis: Int) -> Tensor<T> => self.view.softmax(axis: axis)
+}
+
+extension TensorView where T == F32 {
+    /// The sum of every element, by vectors: added in lanes, as
+    /// `TensorPrimitives.sum` adds, so not always the left-to-right sum.
+    public fn sum() -> F32 => vectorTotal(self, SIMD<F32, f32Step>())
+
+    /// The sums along the axis, by vectors.
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<F32> => vectorSums(self, axis: axis, keepingDimension: keepingDimension, SIMD<F32, f32Step>())
+
+    /// The means along the axis, by vectors.
+    public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<F32> {
+        let length = F32(shape[normalisedAxis(axis, rank: rank)])
+        return vectorSums(self, axis: axis, keepingDimension: keepingDimension, SIMD<F32, f32Step>()) / length
+    }
+}
+
+extension TensorView where T == F64 {
+    /// The sum of every element, by vectors.
+    public fn sum() -> F64 => vectorTotal(self, SIMD<F64, f64Step>())
+
+    /// The sums along the axis, by vectors.
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<F64> => vectorSums(self, axis: axis, keepingDimension: keepingDimension, SIMD<F64, f64Step>())
+
+    /// The means along the axis, by vectors.
+    public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<F64> {
+        let length = F64(shape[normalisedAxis(axis, rank: rank)])
+        return vectorSums(self, axis: axis, keepingDimension: keepingDimension, SIMD<F64, f64Step>()) / length
+    }
+}
+
+extension Tensor where T == F32 {
+    /// The sum of every element, by vectors.
+    ///
+    /// ```sable
+    /// let t = Tensor<F32>(shape: [2, 3], elements: [1, 2, 3, 4, 5, 6])
+    /// assert(t.sum() == 21 && t.sum(axis: 1).toArray() == [6, 15] && t.sum(axis: 0).toArray() == [5, 7, 9])
+    /// ```
+    public fn sum() -> F32 => vectorTotal(self.view, SIMD<F32, f32Step>())
+
+    /// The sums along the axis, by vectors.
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<F32> => vectorSums(self.view, axis: axis, keepingDimension: keepingDimension, SIMD<F32, f32Step>())
+
+    /// The means along the axis, by vectors.
+    public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<F32> => self.view.mean(axis: axis, keepingDimension: keepingDimension)
+}
+
+extension Tensor where T == F64 {
+    /// The sum of every element, by vectors.
+    public fn sum() -> F64 => vectorTotal(self.view, SIMD<F64, f64Step>())
+
+    /// The sums along the axis, by vectors.
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<F64> => vectorSums(self.view, axis: axis, keepingDimension: keepingDimension, SIMD<F64, f64Step>())
+
+    /// The means along the axis, by vectors.
+    public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<F64> => self.view.mean(axis: axis, keepingDimension: keepingDimension)
 }

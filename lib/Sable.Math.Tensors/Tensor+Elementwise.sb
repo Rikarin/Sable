@@ -1,92 +1,329 @@
 module Sable.Math.Tensors
 
+import Sable.Math
+
 // Elementwise work, by NumPy's broadcasting: two shapes aligned at their last
 // dimensions, each pair equal or one of them 1, which repeats. What does not
 // broadcast traps, saying the two shapes.
+//
+// It goes a run at a time (Runs): the dimensions merged where the operands
+// allow, so that two contiguous tensors, or one and a number, are one run,
+// and a broadcast operand repeats within a run by a step of zero. F32 and
+// F64 arithmetic is Sable.Math's vector kernels' over each run; any other
+// number type's a loop of its own operator; a closure is called an element
+// only where one is given (map, zip).
+//
+// A result is laid out as its operands are: column-major where those of its
+// shape are column-major, row-major otherwise. A tensor's arithmetic with a
+// number keeps the tensor's layout, and writes over its elements where
+// nothing else holds them (a temporary's, in 'a * 2 + 1'), as it is given
+// the tensor to keep.
 
-/// The closure of each pair of elements, the two broadcast together, into a
-/// new tensor, row-major.
-fn combined<A, B, R>(_ a: TensorView<A>, _ b: TensorView<B>, _ f: (A, B) -> R) -> Tensor<R> {
-    guard let shape = broadcastShape(a.shape, b.shape) else {
-        preconditionFailure("shapes \(a.shape) and \(b.shape) do not broadcast together")
+/// The F32s and the F64s a kernel takes a step: four of the target's vector
+/// registers, as Sable.Math's own kernels take.
+const f32Step = Platform.vectorBytes
+const f64Step = Platform.vectorBytes / 2
+
+/// The shape two shapes broadcast to; a trap where they do not.
+fn broadcastOrTrap(_ a: Int[:], _ b: Int[:]) -> Int[>..] {
+    guard let shape = broadcastShape(a, b) else {
+        preconditionFailure("shapes \(a) and \(b) do not broadcast together")
     }
-    let count = elementCount(shape)
-    var made: R[>..] = []
-    made.reserveCapacity(count)
-    if count == 0 {
-        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
-    }
-    if a.shape == b.shape && a.isContiguous && b.isContiguous {
-        var i = 0
-        while i < count {
-            made.append(f(a.storage[a.offset + i], b.storage[b.offset + i]))
-            i += 1
-        }
-        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
-    }
-    if shape.count == 0 {
-        made.append(f(a.storage[a.offset], b.storage[b.offset]))
-        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
-    }
-    let aStrides = broadcastStrides(a.shape, a.strides, to: shape)
-    let bStrides = broadcastStrides(b.shape, b.strides, to: shape)
-    let last = shape.count - 1
-    let length = shape[last]
-    let aStep = aStrides[last]
-    let bStep = bStrides[last]
-    var index = Int[>..](repeating: 0, count: shape.count)
-    var offsets: Int[>..] = [a.offset, b.offset]
-    let all: Int[>..][>..] = [aStrides, bStrides]
-    repeat {
-        var x = offsets[0]
-        var y = offsets[1]
-        var i = 0
-        while i < length {
-            made.append(f(a.storage[x], b.storage[y]))
-            x += aStep
-            y += bStep
-            i += 1
-        }
-    } while advance(&index, shape, &offsets, all)
-    return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+    return shape
 }
 
-/// The closure of each element, into a new tensor, row-major.
-fn mapped<A, R>(_ a: TensorView<A>, _ f: (A) -> R) -> Tensor<R> {
+/// The layout of what two views make together: column-major where one of
+/// them has the result's shape and lies column-major (and not also
+/// row-major, as a vector does), and none of that shape lies only row-major.
+fn resultLayout<A, B>(_ a: TensorView<A>, _ b: TensorView<B>, _ shape: Int[:]) -> TensorLayout {
+    let aFull = a.shape == shape.toArray()
+    let bFull = b.shape == shape.toArray()
+    let aColumns = aFull && a.isColumnMajor && !a.isContiguous
+    let bColumns = bFull && b.isColumnMajor && !b.isContiguous
+    let aRows = aFull && a.isContiguous && !a.isColumnMajor
+    let bRows = bFull && b.isContiguous && !b.isColumnMajor
+    return (aColumns || bColumns) && !aRows && !bRows ? .ColumnMajor : .RowMajor
+}
+
+/// The runs of two views broadcast to a shape, in a layout.
+fn pairedRuns<A, B>(_ a: TensorView<A>, _ b: TensorView<B>, _ shape: Int[:], _ layout: TensorLayout) -> Runs {
+    let aStrides = broadcastStrides(a.shape, a.strides, to: shape)
+    let bStrides = broadcastStrides(b.shape, b.strides, to: shape)
+    return Runs(shape, aStrides, a.offset, bStrides, b.offset, layout: layout)
+}
+
+/// The closure of each pair of elements, the two broadcast together, into a
+/// new tensor.
+fn combined<A, B, R>(_ a: TensorView<A>, _ b: TensorView<B>, layout: TensorLayout?, _ f: (A, B) -> R) -> Tensor<R> {
+    let shape = broadcastOrTrap(a.shape, b.shape)
+    let order = layout ?? resultLayout(a, b, shape)
     var made: R[>..] = []
-    made.reserveCapacity(a.count)
-    if a.isContiguous {
+    made.reserveCapacity(elementCount(shape))
+    var runs = pairedRuns(a, b, shape, order)
+    while runs.next() {
+        var p = runs.a
+        var q = runs.b
         var i = 0
-        let count = a.count
-        while i < count {
-            made.append(f(a.storage[a.offset + i]))
+        while i < runs.length {
+            made.append(f(a.storage[p], b.storage[q]))
+            p += runs.aStep
+            q += runs.bStep
             i += 1
         }
-    } else {
-        a.forEachOffset { (at: Int) in
-            made.append(f(a.storage[at]))
+    }
+    return Tensor<R>(storage: made, shape: shape, layout: order)
+}
+
+/// The closure of each element, into a new tensor laid out as asked, or as
+/// the view lies where it is contiguous either way, else row-major.
+fn mapped<A, R>(_ a: TensorView<A>, layout: TensorLayout?, _ f: (A) -> R) -> Tensor<R> {
+    let order = layout ?? (a.isColumnMajor && !a.isContiguous ? .ColumnMajor : .RowMajor)
+    var made: R[>..] = []
+    made.reserveCapacity(a.count)
+    var runs = Runs(a.shape, a.strides, a.offset, a.strides, a.offset, layout: order)
+    while runs.next() {
+        var p = runs.a
+        var i = 0
+        while i < runs.length {
+            made.append(f(a.storage[p]))
+            p += runs.aStep
+            i += 1
         }
     }
-    return Tensor<R>(storage: made, shape: a.shape, layout: .RowMajor)
+    return Tensor<R>(storage: made, shape: a.shape, layout: order)
+}
+
+// ---- Any number type: its own operators, a loop each ----
+
+/// The arithmetic of each pair of elements, the two broadcast together.
+@inline(always)
+fn numericCombined<T: Numeric>(_ op: Elementwise, _ a: TensorView<T>, _ b: TensorView<T>) -> Tensor<T> {
+    let shape = broadcastOrTrap(a.shape, b.shape)
+    let layout = resultLayout(a, b, shape)
+    var made: T[>..] = []
+    made.reserveCapacity(elementCount(shape))
+    let x = a.storage
+    let y = b.storage
+    var runs = pairedRuns(a, b, shape, layout)
+    while runs.next() {
+        var p = runs.a
+        var q = runs.b
+        let end = made.count + runs.length
+        match op {
+            case .Add => {
+                while made.count < end {
+                    made.append(x[p] + y[q])
+                    p += runs.aStep
+                    q += runs.bStep
+                }
+            }
+            case .Subtract => {
+                while made.count < end {
+                    made.append(x[p] - y[q])
+                    p += runs.aStep
+                    q += runs.bStep
+                }
+            }
+            case .Multiply => {
+                while made.count < end {
+                    made.append(x[p] * y[q])
+                    p += runs.aStep
+                    q += runs.bStep
+                }
+            }
+            case .Divide => preconditionFailure("a quotient of numbers that are not floating-point")
+        }
+    }
+    return Tensor<T>(storage: made, shape: shape, layout: layout)
+}
+
+/// The arithmetic of each element with a number, the number on the left
+/// where it is first, into a tensor laid out as the elements are.
+@inline(always)
+fn numericWithScalar<T: Numeric>(_ op: Elementwise, _ elements: T[:], _ value: T, valueFirst: Bool) -> T[>..] {
+    var made: T[>..] = []
+    made.reserveCapacity(elements.count)
+    match op {
+        case .Add => {
+            for x in elements {
+                made.append(x + value)
+            }
+        }
+        case .Subtract => {
+            for x in elements {
+                made.append(valueFirst ? value - x : x - value)
+            }
+        }
+        case .Multiply => {
+            for x in elements {
+                made.append(x * value)
+            }
+        }
+        case .Divide => preconditionFailure("a quotient of numbers that are not floating-point")
+    }
+    return made
+}
+
+/// The quotient of each pair of elements, the two broadcast together.
+fn quotients<T: FloatingPoint>(_ a: TensorView<T>, _ b: TensorView<T>) -> Tensor<T> {
+    let shape = broadcastOrTrap(a.shape, b.shape)
+    let layout = resultLayout(a, b, shape)
+    var made: T[>..] = []
+    made.reserveCapacity(elementCount(shape))
+    var runs = pairedRuns(a, b, shape, layout)
+    while runs.next() {
+        var p = runs.a
+        var q = runs.b
+        let end = made.count + runs.length
+        while made.count < end {
+            made.append(a.storage[p] / b.storage[q])
+            p += runs.aStep
+            q += runs.bStep
+        }
+    }
+    return Tensor<T>(storage: made, shape: shape, layout: layout)
+}
+
+/// Each element over a number, or a number over each, the elements as they lie.
+fn quotientsWithScalar<T: FloatingPoint>(_ elements: T[:], _ value: T, valueFirst: Bool) -> T[>..] {
+    var made: T[>..] = []
+    made.reserveCapacity(elements.count)
+    for x in elements {
+        made.append(valueFirst ? value / x : x / value)
+    }
+    return made
+}
+
+/// Each element negated, the elements as they lie.
+fn negations<T: FloatingPoint>(_ elements: T[:]) -> T[>..] {
+    var made: T[>..] = []
+    made.reserveCapacity(elements.count)
+    for x in elements {
+        made.append(-x)
+    }
+    return made
+}
+
+// ---- F32 and F64: Sable.Math's vector kernels ----
+
+/// The arithmetic of each pair of elements, the two broadcast together, a
+/// run at a time by vectors, into room not yet written.
+@inline(always)
+fn vectorCombined<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ op: Elementwise, _ a: TensorView<T>, _ b: TensorView<T>, _ zero: SIMD<T, N>) -> Tensor<T> {
+    let shape = broadcastOrTrap(a.shape, b.shape)
+    let layout = resultLayout(a, b, shape)
+    let count = elementCount(shape)
+    var made: T[>..] = []
+    made.append(holes: count)
+    let x = a.storage
+    let y = b.storage
+    var runs = pairedRuns(a, b, shape, layout)
+    var at = 0
+    while runs.next() {
+        arithmeticRun(op, x, runs.a, runs.aStep, y, runs.b, runs.bStep, &made, at, runs.length, zero)
+        at += runs.length
+    }
+    return Tensor<T>(storage: made, shape: shape, layout: layout)
+}
+
+/// The arithmetic of two tensors, broadcast together, written over the
+/// first's elements where nothing else holds them and the result is of its
+/// shape and layout; into new room otherwise.
+@inline(always)
+fn vectorTensors<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ op: Elementwise, _ lhs: consuming Tensor<T>, _ rhs: Tensor<T>, _ zero: SIMD<T, N>) -> Tensor<T> {
+    var made = move lhs
+    let b = rhs.view
+    // Asked of the shapes alone, so that no view holds the elements while
+    // they are written.
+    if made.count > 0 && keepsShape(made, b) && made.storage.isUniquelyReferenced() {
+        let y = b.storage
+        let bStrides = broadcastStrides(b.shape, b.strides, to: made.shape)
+        var runs = Runs(made.shape, made.strides, 0, bStrides, b.offset, layout: made.layout)
+        while runs.next() {
+            arithmeticRunInPlace(op, &made.storage, runs.a, y, runs.b, runs.bStep, runs.length, zero)
+        }
+        return made
+    }
+    return vectorCombined(op, made.view, b, zero)
+}
+
+/// Whether a tensor and a view broadcast to the tensor's shape, in its layout.
+fn keepsShape<T>(_ tensor: Tensor<T>, _ other: TensorView<T>) -> Bool {
+    guard let shape = broadcastShape(tensor.shape, other.shape) else {
+        return false
+    }
+    return shape == tensor.shape && resultLayout(tensor.view, other, shape) == tensor.layout
+}
+
+/// The arithmetic of a tensor's elements with a number, in its layout:
+/// written over them where nothing else holds them.
+@inline(always)
+fn vectorWithScalar<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ op: Elementwise, _ tensor: consuming Tensor<T>, _ value: T, valueFirst: Bool, _ zero: SIMD<T, N>) -> Tensor<T> {
+    var made = move tensor
+    let count = made.storage.count
+    if made.storage.isUniquelyReferenced() {
+        arithmeticInPlace(op, &made.storage, 0, count, value, valueFirst: valueFirst, zero)
+        return made
+    }
+    var fresh: T[>..] = []
+    fresh.append(holes: count)
+    let one: T[>..] = [value]
+    if valueFirst {
+        arithmeticRun(op, one, 0, 0, made.storage, 0, 1, &fresh, 0, count, zero)
+    } else {
+        arithmeticRun(op, made.storage, 0, 1, one, 0, 0, &fresh, 0, count, zero)
+    }
+    made.storage = fresh
+    return made
+}
+
+/// The arithmetic of a view's elements with a number, into a new tensor.
+@inline(always)
+fn vectorViewWithScalar<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ op: Elementwise, _ a: TensorView<T>, _ value: T, valueFirst: Bool, _ zero: SIMD<T, N>) -> Tensor<T> {
+    let one = TensorView<T>([value], shape: [])
+    return valueFirst ? vectorCombined(op, one, a, zero) : vectorCombined(op, a, one, zero)
+}
+
+/// Each element of a view negated, into a new tensor.
+@inline(always)
+fn vectorNegated<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ a: TensorView<T>, _ zero: SIMD<T, N>) -> Tensor<T> {
+    let layout: TensorLayout = a.isColumnMajor && !a.isContiguous ? .ColumnMajor : .RowMajor
+    var made: T[>..] = []
+    made.append(holes: a.count)
+    var runs = Runs(a.shape, a.strides, a.offset, a.strides, a.offset, layout: layout)
+    var at = 0
+    while runs.next() {
+        negatedRun(a.storage, runs.a, runs.aStep, &made, at, runs.length, zero)
+        at += runs.length
+    }
+    return Tensor<T>(storage: made, shape: a.shape, layout: layout)
 }
 
 extension TensorView {
-    /// Each element made into another by the closure, in a tensor of the shape.
+    /// Each element made into another by the closure, in a tensor of the
+    /// shape: laid out as asked, or as this view lies.
     ///
     /// ```sable
     /// let t = Tensor<Int>(shape: [2], elements: [1, 2])
     /// assert(t.view.map { $0 * 10 }.toArray() == [10, 20])
     /// ```
-    public fn map<R>(_ transform: (T) -> R) -> Tensor<R> => mapped(self, transform)
+    public fn map<R>(layout: TensorLayout? = none, _ transform: (T) -> R) -> Tensor<R> => mapped(self, layout: layout, transform)
 
     /// The closure of each pair of this and the other's elements, the two
-    /// broadcast together.
-    public fn zip<U, R>(_ other: TensorView<U>, _ combine: (T, U) -> R) -> Tensor<R> => combined(self, other, combine)
+    /// broadcast together: laid out as asked, or as the two lie.
+    public fn zip<U, R>(_ other: TensorView<U>, layout: TensorLayout? = none, _ combine: (T, U) -> R) -> Tensor<R> => combined(self, other, layout: layout, combine)
 }
 
 extension Tensor {
-    /// Each element made into another by the closure, in a tensor of the shape.
-    public fn map<R>(_ transform: (T) -> R) -> Tensor<R> => mapped(self.view, transform)
+    /// Each element made into another by the closure, in a tensor of the
+    /// shape: laid out as asked, or as this one is.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4]).laidOut(.ColumnMajor)
+    /// let u = t.map { $0 * 10 }
+    /// assert(u.layout == .ColumnMajor && u.toArray() == [10, 20, 30, 40])
+    /// ```
+    public fn map<R>(layout: TensorLayout? = none, _ transform: (T) -> R) -> Tensor<R> => mapped(self.view, layout: layout ?? self.layout, transform)
 
     /// The closure of each pair of this and the other's elements, the two
     /// broadcast together.
@@ -96,55 +333,185 @@ extension Tensor {
     /// let b = Tensor<Int>(shape: [3], elements: [10, 20, 30])
     /// assert(a.zip(b) { $0 * $1 }.toArray() == [10, 20, 30, 20, 40, 60])
     /// ```
-    public fn zip<U, R>(_ other: Tensor<U>, _ combine: (T, U) -> R) -> Tensor<R> => combined(self.view, other.view, combine)
+    public fn zip<U, R>(_ other: Tensor<U>, layout: TensorLayout? = none, _ combine: (T, U) -> R) -> Tensor<R> => combined(self.view, other.view, layout: layout, combine)
 }
 
 extension TensorView where T: Numeric {
-    public operator + (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 + $1 }
-    public operator - (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 - $1 }
-    public operator * (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 * $1 }
-    public operator + (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 + rhs }
-    public operator - (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 - rhs }
-    public operator * (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 * rhs }
-    public operator + (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs + $0 }
-    public operator - (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs - $0 }
-    public operator * (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs * $0 }
+    public operator + (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => numericCombined(.Add, lhs, rhs)
+    public operator - (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => numericCombined(.Subtract, lhs, rhs)
+    public operator * (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => numericCombined(.Multiply, lhs, rhs)
+    public operator + (lhs: TensorView<T>, rhs: T) -> Tensor<T> => numericCombined(.Add, lhs, TensorView<T>([rhs], shape: []))
+    public operator - (lhs: TensorView<T>, rhs: T) -> Tensor<T> => numericCombined(.Subtract, lhs, TensorView<T>([rhs], shape: []))
+    public operator * (lhs: TensorView<T>, rhs: T) -> Tensor<T> => numericCombined(.Multiply, lhs, TensorView<T>([rhs], shape: []))
+    public operator + (lhs: T, rhs: TensorView<T>) -> Tensor<T> => numericCombined(.Add, TensorView<T>([lhs], shape: []), rhs)
+    public operator - (lhs: T, rhs: TensorView<T>) -> Tensor<T> => numericCombined(.Subtract, TensorView<T>([lhs], shape: []), rhs)
+    public operator * (lhs: T, rhs: TensorView<T>) -> Tensor<T> => numericCombined(.Multiply, TensorView<T>([lhs], shape: []), rhs)
 }
 
 extension Tensor where T: Numeric {
     /// The elementwise sum, the two broadcast together.
-    public operator + (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 + $1 }
+    public operator + (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => numericCombined(.Add, lhs.view, rhs.view)
 
     /// The elementwise difference, the two broadcast together.
-    public operator - (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 - $1 }
+    public operator - (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => numericCombined(.Subtract, lhs.view, rhs.view)
 
     /// The elementwise product (NumPy's `*`, not `matmul`), the two broadcast
     /// together.
-    public operator * (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 * $1 }
+    public operator * (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => numericCombined(.Multiply, lhs.view, rhs.view)
 
-    public operator + (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 + rhs }
-    public operator - (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 - rhs }
-    public operator * (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 * rhs }
-    public operator + (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs + $0 }
-    public operator - (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs - $0 }
-    public operator * (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs * $0 }
+    public operator + (lhs: Tensor<T>, rhs: T) -> Tensor<T> => lhs.withElements(numericWithScalar(.Add, lhs.storage, rhs, valueFirst: false))
+    public operator - (lhs: Tensor<T>, rhs: T) -> Tensor<T> => lhs.withElements(numericWithScalar(.Subtract, lhs.storage, rhs, valueFirst: false))
+    public operator * (lhs: Tensor<T>, rhs: T) -> Tensor<T> => lhs.withElements(numericWithScalar(.Multiply, lhs.storage, rhs, valueFirst: false))
+    public operator + (lhs: T, rhs: Tensor<T>) -> Tensor<T> => rhs.withElements(numericWithScalar(.Add, rhs.storage, lhs, valueFirst: true))
+    public operator - (lhs: T, rhs: Tensor<T>) -> Tensor<T> => rhs.withElements(numericWithScalar(.Subtract, rhs.storage, lhs, valueFirst: true))
+    public operator * (lhs: T, rhs: Tensor<T>) -> Tensor<T> => rhs.withElements(numericWithScalar(.Multiply, rhs.storage, lhs, valueFirst: true))
+}
+
+extension Tensor {
+    /// The same shape and layout with other elements, as many.
+    fn withElements<R>(_ elements: R[>..]) -> Tensor<R> => Tensor<R>(storage: elements, shape: shape, layout: layout)
 }
 
 extension TensorView where T: FloatingPoint {
-    public operator / (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 / $1 }
-    public operator / (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 / rhs }
-    public operator / (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs / $0 }
-    public prefix operator - (operand: TensorView<T>) -> Tensor<T> => mapped(operand) { -$0 }
+    public operator / (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => quotients(lhs, rhs)
+    public operator / (lhs: TensorView<T>, rhs: T) -> Tensor<T> => quotients(lhs, TensorView<T>([rhs], shape: []))
+    public operator / (lhs: T, rhs: TensorView<T>) -> Tensor<T> => quotients(TensorView<T>([lhs], shape: []), rhs)
+    public prefix operator - (operand: TensorView<T>) -> Tensor<T> => mapped(operand, layout: none) { -$0 }
 }
 
 extension Tensor where T: FloatingPoint {
     /// The elementwise quotient, the two broadcast together.
-    public operator / (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 / $1 }
-    public operator / (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 / rhs }
-    public operator / (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs / $0 }
+    public operator / (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => quotients(lhs.view, rhs.view)
+    public operator / (lhs: Tensor<T>, rhs: T) -> Tensor<T> => lhs.withElements(quotientsWithScalar(lhs.storage, rhs, valueFirst: false))
+    public operator / (lhs: T, rhs: Tensor<T>) -> Tensor<T> => rhs.withElements(quotientsWithScalar(rhs.storage, lhs, valueFirst: true))
 
     /// Each element negated.
-    public prefix operator - (operand: Tensor<T>) -> Tensor<T> => mapped(operand.view) { -$0 }
+    public prefix operator - (operand: Tensor<T>) -> Tensor<T> => operand.withElements(negations(operand.storage))
+}
+
+extension TensorView where T == F32 {
+    public operator + (lhs: TensorView<F32>, rhs: TensorView<F32>) -> Tensor<F32> => vectorCombined(.Add, lhs, rhs, SIMD<F32, f32Step>())
+    public operator - (lhs: TensorView<F32>, rhs: TensorView<F32>) -> Tensor<F32> => vectorCombined(.Subtract, lhs, rhs, SIMD<F32, f32Step>())
+    public operator * (lhs: TensorView<F32>, rhs: TensorView<F32>) -> Tensor<F32> => vectorCombined(.Multiply, lhs, rhs, SIMD<F32, f32Step>())
+    public operator / (lhs: TensorView<F32>, rhs: TensorView<F32>) -> Tensor<F32> => vectorCombined(.Divide, lhs, rhs, SIMD<F32, f32Step>())
+    public operator + (lhs: TensorView<F32>, rhs: F32) -> Tensor<F32> => vectorViewWithScalar(.Add, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator - (lhs: TensorView<F32>, rhs: F32) -> Tensor<F32> => vectorViewWithScalar(.Subtract, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator * (lhs: TensorView<F32>, rhs: F32) -> Tensor<F32> => vectorViewWithScalar(.Multiply, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator / (lhs: TensorView<F32>, rhs: F32) -> Tensor<F32> => vectorViewWithScalar(.Divide, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator + (lhs: F32, rhs: TensorView<F32>) -> Tensor<F32> => vectorViewWithScalar(.Add, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public operator - (lhs: F32, rhs: TensorView<F32>) -> Tensor<F32> => vectorViewWithScalar(.Subtract, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public operator * (lhs: F32, rhs: TensorView<F32>) -> Tensor<F32> => vectorViewWithScalar(.Multiply, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public operator / (lhs: F32, rhs: TensorView<F32>) -> Tensor<F32> => vectorViewWithScalar(.Divide, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public prefix operator - (operand: TensorView<F32>) -> Tensor<F32> => vectorNegated(operand, SIMD<F32, f32Step>())
+}
+
+extension TensorView where T == F64 {
+    public operator + (lhs: TensorView<F64>, rhs: TensorView<F64>) -> Tensor<F64> => vectorCombined(.Add, lhs, rhs, SIMD<F64, f64Step>())
+    public operator - (lhs: TensorView<F64>, rhs: TensorView<F64>) -> Tensor<F64> => vectorCombined(.Subtract, lhs, rhs, SIMD<F64, f64Step>())
+    public operator * (lhs: TensorView<F64>, rhs: TensorView<F64>) -> Tensor<F64> => vectorCombined(.Multiply, lhs, rhs, SIMD<F64, f64Step>())
+    public operator / (lhs: TensorView<F64>, rhs: TensorView<F64>) -> Tensor<F64> => vectorCombined(.Divide, lhs, rhs, SIMD<F64, f64Step>())
+    public operator + (lhs: TensorView<F64>, rhs: F64) -> Tensor<F64> => vectorViewWithScalar(.Add, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator - (lhs: TensorView<F64>, rhs: F64) -> Tensor<F64> => vectorViewWithScalar(.Subtract, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator * (lhs: TensorView<F64>, rhs: F64) -> Tensor<F64> => vectorViewWithScalar(.Multiply, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator / (lhs: TensorView<F64>, rhs: F64) -> Tensor<F64> => vectorViewWithScalar(.Divide, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator + (lhs: F64, rhs: TensorView<F64>) -> Tensor<F64> => vectorViewWithScalar(.Add, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public operator - (lhs: F64, rhs: TensorView<F64>) -> Tensor<F64> => vectorViewWithScalar(.Subtract, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public operator * (lhs: F64, rhs: TensorView<F64>) -> Tensor<F64> => vectorViewWithScalar(.Multiply, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public operator / (lhs: F64, rhs: TensorView<F64>) -> Tensor<F64> => vectorViewWithScalar(.Divide, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public prefix operator - (operand: TensorView<F64>) -> Tensor<F64> => vectorNegated(operand, SIMD<F64, f64Step>())
+}
+
+extension Tensor where T == F32 {
+    /// The elementwise sum, by vectors: over the left's elements where
+    /// nothing else holds them and the result is of its shape.
+    ///
+    /// ```sable
+    /// let t = Tensor<F32>(shape: [2, 3], elements: [1, 2, 3, 4, 5, 6])
+    /// let bias = Tensor<F32>(shape: [3], elements: [10, 20, 30])
+    /// assert(((t + bias) * 2).toArray() == [22, 44, 66, 28, 50, 72])
+    /// ```
+    public operator + (lhs: consuming Tensor<F32>, rhs: Tensor<F32>) -> Tensor<F32> => vectorTensors(.Add, lhs, rhs, SIMD<F32, f32Step>())
+    public operator - (lhs: consuming Tensor<F32>, rhs: Tensor<F32>) -> Tensor<F32> => vectorTensors(.Subtract, lhs, rhs, SIMD<F32, f32Step>())
+    public operator * (lhs: consuming Tensor<F32>, rhs: Tensor<F32>) -> Tensor<F32> => vectorTensors(.Multiply, lhs, rhs, SIMD<F32, f32Step>())
+    public operator / (lhs: consuming Tensor<F32>, rhs: Tensor<F32>) -> Tensor<F32> => vectorTensors(.Divide, lhs, rhs, SIMD<F32, f32Step>())
+    public operator + (lhs: consuming Tensor<F32>, rhs: F32) -> Tensor<F32> => vectorWithScalar(.Add, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator - (lhs: consuming Tensor<F32>, rhs: F32) -> Tensor<F32> => vectorWithScalar(.Subtract, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator * (lhs: consuming Tensor<F32>, rhs: F32) -> Tensor<F32> => vectorWithScalar(.Multiply, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator / (lhs: consuming Tensor<F32>, rhs: F32) -> Tensor<F32> => vectorWithScalar(.Divide, lhs, rhs, valueFirst: false, SIMD<F32, f32Step>())
+    public operator + (lhs: F32, rhs: consuming Tensor<F32>) -> Tensor<F32> => vectorWithScalar(.Add, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public operator - (lhs: F32, rhs: consuming Tensor<F32>) -> Tensor<F32> => vectorWithScalar(.Subtract, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public operator * (lhs: F32, rhs: consuming Tensor<F32>) -> Tensor<F32> => vectorWithScalar(.Multiply, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+    public operator / (lhs: F32, rhs: consuming Tensor<F32>) -> Tensor<F32> => vectorWithScalar(.Divide, rhs, lhs, valueFirst: true, SIMD<F32, f32Step>())
+
+    /// Each element negated, by vectors.
+    public prefix operator - (operand: Tensor<F32>) -> Tensor<F32> => operand.withElements(vectorNegated(TensorView<F32>(storage: operand.storage, offset: 0, shape: [operand.count], strides: [1]), SIMD<F32, f32Step>()).storage)
+}
+
+extension Tensor where T == F64 {
+    /// The elementwise sum, by vectors: over the left's elements where
+    /// nothing else holds them and the result is of its shape.
+    public operator + (lhs: consuming Tensor<F64>, rhs: Tensor<F64>) -> Tensor<F64> => vectorTensors(.Add, lhs, rhs, SIMD<F64, f64Step>())
+    public operator - (lhs: consuming Tensor<F64>, rhs: Tensor<F64>) -> Tensor<F64> => vectorTensors(.Subtract, lhs, rhs, SIMD<F64, f64Step>())
+    public operator * (lhs: consuming Tensor<F64>, rhs: Tensor<F64>) -> Tensor<F64> => vectorTensors(.Multiply, lhs, rhs, SIMD<F64, f64Step>())
+    public operator / (lhs: consuming Tensor<F64>, rhs: Tensor<F64>) -> Tensor<F64> => vectorTensors(.Divide, lhs, rhs, SIMD<F64, f64Step>())
+    public operator + (lhs: consuming Tensor<F64>, rhs: F64) -> Tensor<F64> => vectorWithScalar(.Add, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator - (lhs: consuming Tensor<F64>, rhs: F64) -> Tensor<F64> => vectorWithScalar(.Subtract, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator * (lhs: consuming Tensor<F64>, rhs: F64) -> Tensor<F64> => vectorWithScalar(.Multiply, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator / (lhs: consuming Tensor<F64>, rhs: F64) -> Tensor<F64> => vectorWithScalar(.Divide, lhs, rhs, valueFirst: false, SIMD<F64, f64Step>())
+    public operator + (lhs: F64, rhs: consuming Tensor<F64>) -> Tensor<F64> => vectorWithScalar(.Add, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public operator - (lhs: F64, rhs: consuming Tensor<F64>) -> Tensor<F64> => vectorWithScalar(.Subtract, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public operator * (lhs: F64, rhs: consuming Tensor<F64>) -> Tensor<F64> => vectorWithScalar(.Multiply, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+    public operator / (lhs: F64, rhs: consuming Tensor<F64>) -> Tensor<F64> => vectorWithScalar(.Divide, rhs, lhs, valueFirst: true, SIMD<F64, f64Step>())
+
+    /// Each element negated, by vectors.
+    public prefix operator - (operand: Tensor<F64>) -> Tensor<F64> => operand.withElements(vectorNegated(TensorView<F64>(storage: operand.storage, offset: 0, shape: [operand.count], strides: [1]), SIMD<F64, f64Step>()).storage)
+}
+
+/// What a comparison asks of each pair.
+enum Comparison {
+    Less
+    Greater
+    Equal
+}
+
+/// The comparison of each pair of elements, the two broadcast together.
+fn compared<T: Comparable>(_ op: Comparison, _ a: TensorView<T>, _ b: TensorView<T>) -> Tensor<Bool> {
+    let shape = broadcastOrTrap(a.shape, b.shape)
+    let layout = resultLayout(a, b, shape)
+    var made: Bool[>..] = []
+    made.reserveCapacity(elementCount(shape))
+    let x = a.storage
+    let y = b.storage
+    var runs = pairedRuns(a, b, shape, layout)
+    while runs.next() {
+        var p = runs.a
+        var q = runs.b
+        let end = made.count + runs.length
+        match op {
+            case .Less => {
+                while made.count < end {
+                    made.append(x[p] < y[q])
+                    p += runs.aStep
+                    q += runs.bStep
+                }
+            }
+            case .Greater => {
+                while made.count < end {
+                    made.append(y[q] < x[p])
+                    p += runs.aStep
+                    q += runs.bStep
+                }
+            }
+            case .Equal => {
+                while made.count < end {
+                    made.append(x[p] == y[q])
+                    p += runs.aStep
+                    q += runs.bStep
+                }
+            }
+        }
+    }
+    return Tensor<Bool>(storage: made, shape: shape, layout: layout)
 }
 
 extension Tensor where T: Comparable {
@@ -155,15 +522,27 @@ extension Tensor where T: Comparable {
     /// let t = Tensor<Int>(shape: [3], elements: [1, 5, 3])
     /// assert(t.isLess(than: Tensor<Int>(shape: [1], elements: [3])).toArray() == [true, false, false])
     /// ```
-    public fn isLess(than other: Tensor<T>) -> Tensor<Bool> => combined(self.view, other.view) { $0 < $1 }
+    public fn isLess(than other: Tensor<T>) -> Tensor<Bool> => compared(.Less, self.view, other.view)
 
     /// Whether each element is greater than the other's, the two broadcast
     /// together.
-    public fn isGreater(than other: Tensor<T>) -> Tensor<Bool> => combined(self.view, other.view) { $1 < $0 }
+    public fn isGreater(than other: Tensor<T>) -> Tensor<Bool> => compared(.Greater, self.view, other.view)
 
     /// Whether each element equals the other's, the two broadcast together.
-    public fn isEqual(to other: Tensor<T>) -> Tensor<Bool> => combined(self.view, other.view) { $0 == $1 }
+    public fn isEqual(to other: Tensor<T>) -> Tensor<Bool> => compared(.Equal, self.view, other.view)
 
     /// Each element held within the bounds.
-    public fn clamped(_ low: T, _ high: T) -> Tensor<T> => mapped(self.view) { $0 < low ? low : high < $0 ? high : $0 }
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [3], elements: [-5, 5, 50])
+    /// assert(t.clamped(0, 10).toArray() == [0, 5, 10])
+    /// ```
+    public fn clamped(_ low: T, _ high: T) -> Tensor<T> {
+        var made: T[>..] = []
+        made.reserveCapacity(count)
+        for x in storage {
+            made.append(x < low ? low : high < x ? high : x)
+        }
+        return self.withElements(made)
+    }
 }

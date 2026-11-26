@@ -2324,7 +2324,8 @@ public static class SilBuiltins {
         if (name == "ref_is_unique") {
             // Or of a struct that holds the object and nothing else: a
             // '@builtin' of the library's, on a value that copies on write.
-            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType)] } }] ? new([operands[0]], SilType.Bool) : null;
+            // An array's buffer, too, which the empty array has none of.
+            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType)] } or ArrayType }] ? new([operands[0]], SilType.Bool) : null;
         }
 
         // A value crossing from one task to another — a task's result, an

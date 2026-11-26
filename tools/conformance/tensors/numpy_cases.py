@@ -39,8 +39,8 @@ def index_text(index):
         if part is None:
             parts.append(".NewAxis")
         elif isinstance(part, slice):
-            start = 0 if part.start is None else part.start
-            stop = INT_MAX if part.stop is None else part.stop
+            start = "none" if part.start is None else part.start
+            stop = "none" if part.stop is None else part.stop
             step = 1 if part.step is None else part.step
             parts.append(f".Slice(start: {start}, end: {stop}, step: {step})")
         else:
@@ -127,6 +127,12 @@ indices = [
     (None, slice(1, 2), None),
     (slice(1, 1), 0),
     (1, slice(None, None, 2), slice(None, None, 2)),
+    # Negative steps: backwards from the end the step starts at.
+    (slice(None, None, -1),),
+    (slice(None), slice(None, None, -2), slice(3, 0, -1)),
+    (-1, slice(-1, -4, -1), slice(None, None, -3)),
+    (slice(None, None, -1), slice(10, None, -1), slice(0, None, -1)),
+    (slice(None), slice(1, 2, -1), slice(-1, None, -2)),
 ]
 for n, index in enumerate(indices):
     result = base[index]

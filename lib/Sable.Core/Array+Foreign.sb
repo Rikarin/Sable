@@ -1,0 +1,103 @@
+module Sable.Core
+
+// Arrays whose elements are memory C owns (runtime/arrays.c's foreign
+// arrays): a buffer a C library allocated, seen as an array with nothing
+// copied. Who frees the memory, and when, is what tells the two apart:
+//
+// - `init(adopting:)` — the array owns the memory from then on, and the last of
+//   its references going (on whichever thread that is) calls the release
+//   function given, with its context: C's `free`, a library's deleter,
+//   DLPack's. Until then C must neither free it nor write it.
+// - `withForeignArray` — the memory stays C's, lent for a call: it must be live
+//   while the body runs, and nothing is released after. What the body keeps
+//   of the array past the call (a copy stored away) is moved to memory of
+//   the runtime's own as the call ends, so it never sees C's memory after.
+//   A copy of the array is not to be given to another thread meanwhile.
+//
+// Either way it is an array as any other: read where the elements are,
+// written in place while it alone holds them (through to C's memory),
+// copied before a write while shared, and moved to the runtime's own memory
+// before it grows (an adopted one's release is called then). Only plain
+// values (PlainData: numbers, structs of them) may be seen so. The other
+// way, C seeing a Sable array's elements, is `withPointer` and
+// `withMutablePointer` (Array+Pointers.sb) for a call, and DLPack's export
+// (Sable.Math.Tensors) for as long as C likes.
+
+extension<Element: PlainData> Element[>..] {
+    /// An array of the `count` values at `start`, which C allocated and the
+    /// array owns from now on: nothing is copied, and its last release calls
+    /// `release` (a C function taking one pointer, `void (*)(void *)`) with
+    /// `context` — none for a null `release`. `start` must be aligned for
+    /// the type and hold `count` values; C must not free it, nor write it
+    /// while the array may read it.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let memory = RawPtr<F32>.allocate(count: 3)
+    ///     memory.initialize(repeating: 1.5, count: 3)
+    ///     var xs = F32[>..](adopting: memory, count: 3, release: RawPtr<Opaque>.null, context: RawPtr<Opaque>.null)
+    ///     xs[1] = 2
+    ///     assert(xs == [1.5, 2, 1.5] && memory.load(at: 1) == 2)
+    ///     xs.append(4)
+    ///     assert(xs.count == 4)
+    ///     memory.deallocate()
+    /// }
+    /// ```
+    public unsafe init(adopting start: RawPtr<Element>, count: Int, release: RawPtr<Opaque>, context: RawPtr<Opaque>) {
+        let cell = RawPtr<Element[>..]>.allocate(count: 1)
+        foreignArray(cell.address, start.address, count, MemoryLayout<Element>.stride, MemoryLayout<Element>.alignment, release.address, context.address)
+        self = cell.move()
+        cell.deallocate()
+    }
+}
+
+extension<Element: PlainData> Element[>..<] {
+    /// An array of the `count` values at `start`, which C allocated and the
+    /// array owns from now on, as `Element[>..]`'s `init(adopting:)` makes.
+    public unsafe init(adopting start: RawPtr<Element>, count: Int, release: RawPtr<Opaque>, context: RawPtr<Opaque>) {
+        let cell = RawPtr<Element[>..<]>.allocate(count: 1)
+        foreignArray(cell.address, start.address, count, MemoryLayout<Element>.stride, MemoryLayout<Element>.alignment, release.address, context.address)
+        self = cell.move()
+        cell.deallocate()
+    }
+}
+
+/// Calls the body with the `count` values at `start`, which C owns and
+/// keeps, seen as an array for as long as the body runs: nothing is
+/// copied, and nothing is released after. A write changes C's memory
+/// where it is; what the body keeps of the array is copied to memory of
+/// the runtime's as the call ends.
+///
+/// ```sable
+/// unsafe {
+///     let memory = RawPtr<I32>.allocate(count: 2)
+///     memory.initialize(repeating: 7, count: 2)
+///     var kept: I32[>..] = []
+///     let total = withForeignArray(memory, count: 2) { (xs: inout I32[>..]) in
+///         xs[0] = 1
+///         kept = xs
+///         return xs[0] + xs[1]
+///     }
+///     memory.store(0, at: 1)
+///     assert(total == 8 && memory.load(at: 0) == 1 && kept == [1, 7])
+///     memory.deallocate()
+/// }
+/// ```
+public unsafe fn withForeignArray<Element: PlainData, R>(_ start: RawPtr<Element>, count: Int, _ body: (inout Element[>..]) -> R) -> R {
+    let cell = RawPtr<Element[>..]>.allocate(count: 1)
+    foreignArray(cell.address, start.address, count, MemoryLayout<Element>.stride, MemoryLayout<Element>.alignment, 0, 0)
+    var lent = cell.move()
+    let result = body(&lent)
+    cell.initialize(to: move lent)
+    foreignArrayEnd(cell.address)
+    cell.deallocate()
+    return result
+}
+
+// The runtime's (runtime/arrays.c): the array written to the cell, and the
+// array in the cell let go of at the end of a lend.
+@extern("c", "sable_array_foreign")
+fn foreignArray(_ cell: Int, _ elements: Int, _ count: Int, _ size: Int, _ alignment: Int, _ release: Int, _ context: Int)
+
+@extern("c", "sable_array_foreign_end")
+fn foreignArrayEnd(_ cell: Int)

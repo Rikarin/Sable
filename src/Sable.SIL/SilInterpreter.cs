@@ -1477,6 +1477,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "ref_identical":
                 return ReferenceEquals(Alive((HeapObject)operands[0]!), Alive((HeapObject)operands[1]!));
 
+            // The empty array has no buffer for another to share.
+            case "ref_is_unique" when builtin.Operands[0].Type is AddressType { Pointee: ArrayType }:
+                return ((IReference)operands[0]!).Peek() is not Counted soleBuffer || soleBuffer is { Strong: 1, Immortal: false };
+
             case "ref_is_unique":
                 return (((IReference)operands[0]!).Peek() is object?[] { Length: 1 } holder ? holder[0] : ((IReference)operands[0]!).Peek()) is Counted { Strong: 1, Immortal: false };
 

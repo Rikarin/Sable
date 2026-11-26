@@ -863,4 +863,57 @@ public sealed class ReportedGapTests {
             """, "test.sb")).Errors);
         Assert.Contains("cannot be moved out of an array's element", element, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     Of two operators of extensions of one type that both fit, the one of
+    ///     the extension that says what the type parameter is; and 'self' in
+    ///     such an extension is of that type, for a generic call to infer
+    ///     from (#242).
+    /// </summary>
+    [Fact]
+    public void PinnedExtensionsChooseOperatorsAndTypeSelf() =>
+        Assert.Equal(
+            """
+            pinned
+            numeric
+            numeric
+            3.0
+
+            """,
+            Programs.AssertAgree("""
+            module Pinned
+
+            struct Box<T> {
+                var storage: T[>..]
+            }
+
+            extension Box where T: Numeric {
+                operator + (lhs: Box<T>, rhs: Box<T>) -> String => "numeric"
+            }
+
+            extension Box where T == F32 {
+                operator + (lhs: Box<T>, rhs: Box<T>) -> String => "pinned"
+                fn total() -> F32 => added(self, 0)
+            }
+
+            fn added<T: Numeric>(_ box: Box<T>, _ start: T) -> T {
+                var total = start
+                for x in box.storage {
+                    total = total + x
+                }
+                return total
+            }
+
+            fn generic<T: Numeric>(_ b: Box<T>) -> String => b + b
+
+            @main
+            fn main() {
+                let a = Box<F32>(storage: [1, 2])
+                let c = Box<Int>(storage: [1])
+                print(a + a)
+                print(c + c)
+                print(generic(a))
+                print(a.total())
+            }
+            """).Stdout);
 }

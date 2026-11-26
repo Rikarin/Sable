@@ -1,0 +1,189 @@
+module ElementwiseTests
+
+// Elementwise arithmetic of Sable.Math.Tensors a run at a time: the F32 and
+// F64 vector kernels against the generic loop of the same operation, every
+// case of broadcasting and of a view's strides; layouts kept; a tensor's
+// elements written over only where nothing else holds them.
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+/// A tensor of F64s of the shape, each element its row-major place plus one.
+fn counting(_ shape: Int[:], layout: TensorLayout = .RowMajor) -> Tensor<F64> {
+    var count = 1
+    for length in shape {
+        count *= length
+    }
+    var elements: F64[>..] = []
+    for i in 0..<count {
+        elements.append(F64(i + 1))
+    }
+    return Tensor<F64>(shape: shape, elements: elements).laidOut(layout)
+}
+
+/// The same as F32s.
+fn narrowed(_ t: Tensor<F64>) -> Tensor<F32> => t.map { F32($0) }
+
+/// What the generic loop makes of a sum: by a closure, element by element.
+fn sumByClosure(_ a: TensorView<F64>, _ b: TensorView<F64>) -> Tensor<F64> => a.zip(b) { $0 + $1 }
+
+struct Shapes {
+    let left: Int[>..]
+    let right: Int[>..]
+}
+
+@test(arguments: [
+    Shapes(left: [17], right: [17]),
+    Shapes(left: [3, 1], right: [1, 37]),
+    Shapes(left: [5, 4, 33], right: [33]),
+    Shapes(left: [2, 1, 6, 1], right: [7, 1, 5]),
+    Shapes(left: [], right: [4, 19]),
+    Shapes(left: [64, 16], right: [64, 1]),
+    Shapes(left: [0, 3], right: [3]),
+])
+fn vectorArithmeticIsTheLoopsOverEveryBroadcast(_ shapes: Shapes) {
+    let a = counting(shapes.left)
+    let b = counting(shapes.right) * 0.5
+    let want = sumByClosure(a.view, b.view)
+    expect(a + b == want)
+    expect(narrowed(a) + narrowed(b) == narrowed(want))
+    expect(a.view + b.view == want)
+    expect((a - b) == a.zip(b) { $0 - $1 })
+    expect((a * b) == a.zip(b) { $0 * $1 })
+    expect((a / b) == a.zip(b) { $0 / $1 })
+    expect((narrowed(a) * narrowed(b)) == narrowed(a).zip(narrowed(b)) { $0 * $1 })
+}
+
+@test
+fn stridedViewsAreReadAtTheirPlaces() {
+    let t = counting([6, 10])
+    let every = t[.step(2), .range(1..<9, step: 3)]
+    let backwards = t[.reversed, .reversed]
+    let column = t[.All, .At(4)]
+    expect((every + 1.0).toArray() == every.map { $0 + 1 }.toArray())
+    expect((backwards * backwards).toArray() == backwards.map { $0 * $0 }.toArray())
+    expect((column - t[.All, .At(0)]).toArray() == [4, 4, 4, 4, 4, 4])
+    expect((-narrowed(t)).toArray() == narrowed(t).map { -$0 }.toArray())
+    expect((-t.view.transposed()).toArray() == t.view.transposed().map { -$0 }.toArray())
+}
+
+@test
+fn numbersOnEitherSide() {
+    let t = counting([2, 3])
+    expect((t + 1.0).toArray() == [2, 3, 4, 5, 6, 7])
+    expect((10.0 - t).toArray() == [9, 8, 7, 6, 5, 4])
+    expect((2.0 * t).toArray() == [2, 4, 6, 8, 10, 12])
+    expect((6.0 / t).toArray() == [6, 3, 2, 1.5, 1.2, 1])
+    expect((t / 2.0).toArray() == [0.5, 1, 1.5, 2, 2.5, 3])
+    let f = narrowed(t)
+    expect((f - 1).toArray() == [0, 1, 2, 3, 4, 5])
+    expect((12 / f).toArray() == [12, 6, 4, 3, 2.4, 2])
+    expect((f.view * 3).toArray() == [3, 6, 9, 12, 15, 18])
+    expect((1 - f.view).toArray() == [0, -1, -2, -3, -4, -5])
+}
+
+@test
+fn aTensorHeldElsewhereIsNotWrittenOver() {
+    let t = counting([4, 5])
+    let before = t.toArray()
+    let scaled = t * 2.0
+    let summed = t + t
+    let shifted = t - Tensor<F64>(shape: [5], repeating: 1)
+    expect(t.toArray() == before)
+    expect(scaled == summed)
+    expect(shifted.toArray()[0] == 0)
+    var u = t
+    u = u * 3.0
+    expect(t.toArray() == before && u.toArray()[19] == 60)
+    // A temporary is written over, and gives the same.
+    expect(((t + 1.0) * 2.0).toArray() == t.map { ($0 + 1) * 2 }.toArray())
+    expect(((t * t) - t).toArray() == t.map { $0 * $0 - $0 }.toArray())
+}
+
+@test
+fn columnMajorOperandsGiveAColumnMajorResult() {
+    let a = counting([3, 4], layout: .ColumnMajor)
+    let b = counting([3, 4], layout: .ColumnMajor)
+    let sum = a + b
+    expect(sum.layout == .ColumnMajor)
+    expect(sum.toArray() == counting([3, 4]).map { $0 * 2 }.toArray())
+    expect((a * 2.0).layout == .ColumnMajor)
+    expect((a + counting([4])).layout == .ColumnMajor)
+    expect((a + counting([3, 4])).layout == .RowMajor)
+    expect(a.map { $0 }.layout == .ColumnMajor)
+    expect(a.map(layout: .RowMajor) { $0 }.layout == .RowMajor)
+    let n = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4]).laidOut(.ColumnMajor)
+    expect((n + n).layout == .ColumnMajor && (n + n).toArray() == [2, 4, 6, 8])
+    expect((n * 3).layout == .ColumnMajor && (n * 3).toArray() == [3, 6, 9, 12])
+}
+
+@test
+fn aTransposeIsTheOtherLayoutOfTheSameElements() {
+    let t = counting([2, 3])
+    let u = t.transposed()
+    expect(u.layout == .ColumnMajor && u.shape == [3, 2])
+    expect(u.elements == t.elements)
+    expect(u.toArray() == [1, 4, 2, 5, 3, 6])
+    expect(u.transposed() == t && u.transposed().layout == .RowMajor)
+    expect(t.view.toTensor(layout: .ColumnMajor) == t)
+    expect(t.reshaped([3, 2], layout: .ColumnMajor).toArray() == [1, 5, 4, 3, 2, 6])
+}
+
+@test
+fn reductionsByVectorsAreTheLoops() {
+    let t = counting([5, 7, 33])
+    let f = narrowed(t)
+    for axis in 0..<3 {
+        let want = loopSums(t.view, axis: axis)
+        expect(t.sum(axis: axis) == want)
+        expect(f.sum(axis: axis) == narrowed(want))
+        expect(t.mean(axis: axis) == want / F64(t.shape[axis]))
+        expect(t.view.transposed().sum(axis: axis) == loopSums(t.view.transposed(), axis: axis))
+    }
+    expect(t.sum() == loopSum(t.view))
+    expect(f.sum(axis: 2, keepingDimension: true).shape == [5, 7, 1])
+    expect(f[.All, .reversed, .step(3)].sum() == f[.All, .reversed, .step(3)].toTensor().sum())
+}
+
+/// The sums along an axis by the loop any number type has.
+fn loopSums<T: Numeric>(_ view: TensorView<T>, axis: Int) -> Tensor<T> => view.sum(axis: axis)
+
+/// The sum of every element by the loop any number type has.
+fn loopSum<T: Numeric>(_ view: TensorView<T>) -> T => view.sum()
+
+@test
+fn anyNumberOfIndicesSlices() {
+    let t = Tensor<Int>(shape: [2, 2, 2, 2, 3]) { $0[0] * 10000 + $0[1] * 1000 + $0[2] * 100 + $0[3] * 10 + $0[4] }
+    let v = t[.At(1), .At(0), .At(1), .At(1), .reversed]
+    expect(v.toArray() == [10112, 10111, 10110])
+    expect(t[.At(1), .All, .All, .All, .All, .NewAxis].shape == [2, 2, 2, 3, 1])
+    expect(t.view[.All, .All, .All, .All, .step(2)].shape == [2, 2, 2, 2, 2])
+}
+
+@test
+fn negativeStepsAreNumpys() {
+    let t = Tensor<Int>(shape: [7]) { $0[0] }
+    expect(t[.step(-1)].toArray() == [6, 5, 4, 3, 2, 1, 0])
+    expect(t[.step(-3)].toArray() == [6, 3, 0])
+    expect(t[.Slice(start: 5, end: 1, step: -1)].toArray() == [5, 4, 3, 2])
+    expect(t[.Slice(start: -1, end: -4, step: -1)].toArray() == [6, 5, 4])
+    expect(t[.Slice(start: 100, end: none, step: -2)].toArray() == [6, 4, 2, 0])
+    expect(t[.Slice(start: 1, end: 5, step: -1)].count == 0)
+    expect(t[.range(0..<3, step: -1)].toArray() == [2, 1, 0])
+    expect(t[.range(2..<6, step: -2)].toArray() == [5, 3])
+    expect(t[.reversed][.reversed].toArray() == t.toArray())
+}
+
+@test
+fn columnMajorMatricesGiveAColumnMajorProduct() {
+    let a = counting([5, 3])
+    let b = counting([3, 4])
+    let want = Tensor.matmul(a, b)
+    let product = Tensor.matmul(a.laidOut(.ColumnMajor), b.laidOut(.ColumnMajor))
+    expect(product.layout == .ColumnMajor && product == want)
+    let f = Tensor.matmul(narrowed(a).laidOut(.ColumnMajor), narrowed(b).laidOut(.ColumnMajor))
+    expect(f.layout == .ColumnMajor && f == narrowed(want))
+    let n = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4]).laidOut(.ColumnMajor)
+    expect(Tensor.matmul(n, n).toArray() == [7, 10, 15, 22])
+    expect(Tensor.matmul(a.transposed(), a).layout == .RowMajor)
+}

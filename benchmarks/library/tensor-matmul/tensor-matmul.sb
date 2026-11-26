@@ -2,6 +2,8 @@ module TensorMatmulBench
 
 // Tensor.matmul of two 512 x 512 F32 matrices, and broadcasting arithmetic and
 // a reduction over a 256 x 256 x 16 tensor. The check is the sum of a diagonal.
+// broadcast-tensor is the same as broadcast, to be had against .NET 11's
+// Tensor<T> as well as against its TensorPrimitives over spans.
 
 import Sable.Math.Tensors
 import Sable.Testing
@@ -22,7 +24,7 @@ fn diagonal(_ m: Tensor<F32>) -> F64 {
 
 fn broadcastTensor() -> Tensor<F32> => Tensor<F32>(shape: [256, 256, 16]) { F32(($0[0] + $0[1] * 3 + $0[2] * 5) % 13) }
 
-@bench(arguments: ["matmul", "broadcast"])
+@bench(arguments: ["matmul", "broadcast", "broadcast-tensor"])
 fn measure(_ b: Bencher, _ name: String) {
     if name == "matmul" {
         let x = matrix(512, 1)

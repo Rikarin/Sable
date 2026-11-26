@@ -71,7 +71,7 @@ public sealed class ArrayExtensionTests {
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
         Assert.Equal(Names(ArrayKind.Grow), Names(ArrayKind.GrowShrink));
         Assert.Equal(
-            ["append", "append", "append", "capacity", "clear", "init", "init", "removeAll", "removeLast", "removeLast", "reserveCapacity"],
+            ["append", "append", "append", "capacity", "clear", "init", "init", "init", "removeAll", "removeLast", "removeLast", "reserveCapacity"],
             Names(ArrayKind.Grow).Where(n => !everyArray.Contains(n))
         );
         foreach (var name in (string[])["append", "clear", "removeLast"]) {

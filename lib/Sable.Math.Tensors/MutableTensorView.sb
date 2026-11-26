@@ -65,42 +65,49 @@ public struct MutableTensorView<T> {
 
     /// Every place set to the value.
     public mutating fn fill(_ value: T) {
-        let offsets = self.view.offsets()
-        for at in offsets {
-            storage[at] = value
+        var runs = Runs(shape, strides, offset)
+        while runs.next() {
+            var at = runs.a
+            var i = 0
+            while i < runs.length {
+                storage[at] = value
+                at += runs.aStep
+                i += 1
+            }
         }
     }
 
     /// Every place set to the other's element at it, the other broadcast to
-    /// this shape as NumPy's assignment broadcasts it.
+    /// this shape as NumPy's assignment broadcasts it. The other is read
+    /// whole first, so that it may be of the same elements.
     public mutating fn assign(_ other: TensorView<T>) {
         let source = other.broadcast(to: shape).toArray()
-        let offsets = self.view.offsets()
-        var i = 0
-        while i < offsets.count {
-            storage[offsets[i]] = source[i]
-            i += 1
+        var runs = Runs(shape, strides, offset)
+        var next = 0
+        while runs.next() {
+            var at = runs.a
+            var i = 0
+            while i < runs.length {
+                storage[at] = source[next]
+                next += 1
+                at += runs.aStep
+                i += 1
+            }
         }
     }
 
     /// Each element replaced by what the closure makes of it.
     public mutating fn update(_ change: (T) -> T) {
-        let offsets = self.view.offsets()
-        for at in offsets {
-            storage[at] = change(storage[at])
+        var runs = Runs(shape, strides, offset)
+        while runs.next() {
+            var at = runs.a
+            var i = 0
+            while i < runs.length {
+                storage[at] = change(storage[at])
+                at += runs.aStep
+                i += 1
+            }
         }
-    }
-}
-
-extension TensorView {
-    /// The storage offset of each place, in row-major order.
-    fn offsets() -> Int[>..] {
-        var result: Int[>..] = []
-        result.reserveCapacity(count)
-        self.forEachOffset { (at: Int) in
-            result.append(at)
-        }
-        return result
     }
 }
 

@@ -1055,8 +1055,8 @@ Sable.Math.Tensors  Tensor<T> (n-dimensional, row- or column-major), TensorView
                     and MutableTensorView (strided, no copy), NumPy's
                     broadcasting and basic indexing, reductions along an axis,
                     matmul, softmax, reshape, transpose, permute, squeeze,
-                    concatenate, stack, split, gather; Array2D, Array3D
-                    (below)
+                    concatenate, stack, split, gather; DLPack in and out;
+                    Array2D, Array3D (below)
 Sable.Math.Geometry Vector2, Vector3, Vector4, Matrix3x2, Matrix3x3, Matrix4x4,
                     Quaternion, Plane and Transform of F32s, Int2 to Int4,
                     Vector3D (F64); Ray, BoundingBox, BoundingSphere,
@@ -1634,8 +1634,8 @@ M-series machine (arm64, NEON): a dot product, a sum and a multiply over
 4096 F32s, 50,000 times, take 0.05 s against 0.41 s as plain loops
 (`benchmarks/programs/kernels`); the six kernels of
 `benchmarks/library/tensor-primitives` take 0.06 s of processor
-time, start-up included, against 87 ms for .NET 11 with
-System.Numerics.Tensors 9.0's TensorPrimitives, steady state. `softmax` works
+time, start-up included, against 84 ms for .NET 11 with
+System.Numerics.Tensors 11.0's TensorPrimitives, steady state (87 ms with 9.0). `softmax` works
 its exponentials out a vector at a time too (`VectorExponential.sb`), within
 two units in the last place rather than as libm's. F16 and BF16 kernels are
 still to come.
@@ -1911,8 +1911,9 @@ default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
 elements in one array laid out by strides, row-major unless made column-major.
 A `Tensor` owns its elements and is a value, copied on write.
 
-- **Views.** `t[.All, .range(1..<3), .step(2)]` (up to four indices, or any
-  number by `sliced`) is a `TensorView`: an offset and strides over the same
+- **Views.** `t[.All, .range(1..<3), .step(2)]` (any number of indices, a
+  variadic subscript; a negative step goes backwards, as NumPy's `::-1`) is a
+  `TensorView`: an offset and strides over the same
   elements, nothing copied. As a slice does (docs/02 §2.5), a view shares its
   storage the way a second copy of the array would: it may be kept, and the
   tensor's later writes are not in it. Writing in place is lending: a
@@ -1931,15 +1932,44 @@ A `Tensor` owns its elements and is a value, copied on write.
   case; its output must be the file in the repository.
 - **matmul.** F32 and F64 matrices go by a kernel of vectors: a tile of four
   rows by sixteen F32s (eight F64s) kept in registers, each element of A
-  times a row of B added in by a fused multiply-add. 512 x 512 of F32 takes
-  3.4 ms against 12.9 ms for .NET 11 with System.Numerics.Tensors 9.0
-  (whose Tensor has no matrix product, so the port is TensorPrimitives'
-  MultiplyAdd, a row at a time; `benchmarks/library/tensor-matmul`, Apple M1
-  Max). OpenBLAS is not on the machine and was not measured. Other number
-  types multiply element by element.
-- **Elementwise work** is a closure an element, generic over the numeric
-  protocols, not yet vectors: `(t + bias) * 0.5` summed along an axis of a
-  256 x 256 x 16 F32 tensor takes 4.6 times .NET's TensorPrimitives loop.
+  times a row of B added in by a fused multiply-add. Two column-major
+  matrices give a column-major product of their elements as they lie (the
+  product of the transposes the other way round). 512 x 512 of F32 takes
+  3.4 ms against 12.9 ms for .NET 11 with System.Numerics.Tensors 11.0, whose
+  Tensor has no matrix product (its Multiply is elementwise), so the port is
+  TensorPrimitives' MultiplyAdd, a row at a time
+  (`benchmarks/library/tensor-matmul`, Apple M1 Max). OpenBLAS is on neither
+  this machine nor CI's image; CI's NumPy job logs NumPy's matmul of the same
+  matrices, which is the OpenBLAS its wheel brings. Other number types
+  multiply element by element.
+- **Elementwise work** goes a run at a time (`Runs`): the dimensions every
+  operand lets it merged, so that two contiguous tensors, or one and a
+  number, are one run, and a broadcast operand repeats within a run by a step
+  of zero. F32 and F64 arithmetic, negation and sums are Sable.Math's strided
+  kernels (`StridedKernels.sb`, TensorPrimitives' over runs), a vector at a
+  time; other number types a loop of their own operator; a closure is called
+  an element only for `map` and `zip`. A tensor's arithmetic with a number,
+  or with another broadcast to its shape, writes over its elements where
+  nothing else holds them (Sable.Core's package `isUniquelyReferenced`): the
+  temporary of `t + bias` in `(t + bias) * 0.5`. That, summed along an axis of
+  a 256 x 256 x 16 F32 tensor, takes 0.95 ms and 4.25 MB against .NET's 1.21
+  ms and 4.25 MB over TensorPrimitives, and 2.09 ms with its Tensor<T>.
+- **Layouts.** A result is column-major where its operands of its shape are
+  (a broadcast one does not count), and arithmetic with a number keeps the
+  tensor's layout; `transposed()` is the same elements in the other layout,
+  nothing copied. Asked for: `laidOut`, `toTensor(layout:)`,
+  `reshaped(_:layout:)` (NumPy's `order='F'`), `map(layout:)`, `zip(layout:)`.
+- **DLPack.** `toDLPack()` hands a tensor or view to another library as a
+  DLManagedTensorVersioned (read-only) or the legacy DLManagedTensor, nothing
+  copied: the struct, its shape and strides are C's memory
+  (`runtime/dlpack.c`) holding a reference to the elements' buffer, shared so
+  that the consumer's deleter may let go of it from any thread; a write to the
+  tensor afterwards is to a copy. `fromDLPack` takes one in: its elements a
+  foreign array (below), the struct's deleter called when the last reference
+  goes; copied, and the deleter called at once, where no layout fits the
+  strides or a tensor is asked for of read-only elements. Of the CPU and
+  DLPackElement's types (integers, floats, BF16); unsupported, a trap, where
+  pointers are 32 bits (WASI).
 - `Array2D<T>` and `Array3D<T>` are rectangular arrays of any element, for
   grids rather than arithmetic, .NET's `T[,]` and `T[,,]`.
 
@@ -2746,6 +2776,14 @@ functions up. `InteropTests` builds and runs the example as it stands here.
 
 What holds it together:
 
+- **C's buffers are arrays.** `T[>..](adopting:count:release:context:)` makes
+  an array of plain values of memory C allocated, nothing copied, which owns
+  it from then on: its last release calls `release(context)`.
+  `withForeignArray` lends C's memory as an array for a call, nothing released
+  after, and what the call kept of it is moved to the runtime's own memory as
+  it ends. Either is written in place while it alone holds its elements,
+  copied while shared, and moved out before it grows (`runtime/arrays.c`'s
+  foreign arrays, whose metadata is their own).
 - **Pointers are lent.** `withCString`, `withPointer`, `withMutablePointer` and
   `Memory.withPointer` give a closure where something is, for as long as it
   runs; what C keeps is a `CString`, in memory of its own, or the program's

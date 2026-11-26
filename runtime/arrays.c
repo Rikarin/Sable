@@ -229,9 +229,131 @@ void *sable_stack_array(void *memory, const SableMetadata *type, int64_t count) 
     return array;
 }
 
+// ---- Foreign arrays -------------------------------------------------------
+
+// An array whose elements are memory C owns (Sable.Core's
+// 'Element[>..](adopting:)' and 'withForeignArray'): 'count' plain values at an
+// address, the array's own metadata copied into the object with this
+// destroy. The memory is never freed, grown or moved by the runtime: its
+// last release calls 'release' with 'context' (none for memory only lent
+// for a call). A write is made in place while the array is the only
+// reference to its buffer, as any array's is; anything that would grow it
+// first moves the elements to memory of the runtime's, releasing C's then,
+// and from then on it is an array as any other (`owned`).
+typedef struct ForeignArray {
+    SableArray array;
+    SableMetadata metadata;
+    void (*release)(void *context);
+    void *context;
+    bool owned;
+} ForeignArray;
+
+static void foreign_array_destroy(void *pointer) {
+    ForeignArray *foreign = pointer;
+    if (foreign->owned) {
+        buffer_free(foreign->array.elements, foreign->array.capacity * foreign->metadata.element_size);
+    } else if (foreign->release != NULL) {
+        foreign->release(foreign->context);
+    }
+}
+
+static bool is_foreign(const SableArray *array) {
+    return array->header.type->destroy == foreign_array_destroy;
+}
+
+// The runtime's own room for a foreign array's elements, C's let go of:
+// before the array grows, or as a lent buffer's call ends with copies of the
+// array still about.
+static void foreign_take_over(SableArray *array) {
+    ForeignArray *foreign = (ForeignArray *)array;
+    int64_t size = foreign->metadata.element_size;
+    char *own = buffer_alloc(array->count * size);
+    memcpy(own, array->elements, (size_t)(array->count * size));
+    array->elements = own;
+    array->capacity = array->count;
+    if (foreign->release != NULL) {
+        foreign->release(foreign->context);
+    }
+    foreign->release = NULL;
+    foreign->owned = true;
+}
+
+// An array of 'count' plain values of 'size' bytes each (copied and
+// destroyed as their bits) at 'elements', which C owns, written to '*cell'
+// (an uninitialised slot of the array's type, which the library then takes
+// the array from): 'release(context)' is called when its last reference
+// goes, if given. Its metadata is its own, in the object.
+// (The addresses are integers, as the library passes them.)
+void sable_array_foreign(int64_t at, int64_t start, int64_t count, int64_t size, int64_t alignment, int64_t releasing, int64_t context_at) {
+    void **cell = (void **)(intptr_t)at;
+    void *elements = (void *)(intptr_t)start;
+    void (*release)(void *) = (void (*)(void *))(intptr_t)releasing;
+    void *context = (void *)(intptr_t)context_at;
+    if (count < 0 || size <= 0 || (count > 0 && elements == NULL)) {
+        trap_here("a foreign array of no memory, a negative count or no size");
+    }
+
+    if (alignment <= 0 || ((uintptr_t)elements & (uintptr_t)(alignment - 1)) != 0) {
+        trap_here("a foreign array's elements are not aligned for their type");
+    }
+
+    static const SableMetadata foreign_metadata = {
+        foreign_array_destroy, "[foreign]", 1, NULL, NULL, sizeof(ForeignArray), _Alignof(ForeignArray), NULL, NULL,
+    };
+    ForeignArray *foreign = sable_alloc(&foreign_metadata, (int64_t)sizeof(ForeignArray));
+    foreign->metadata = (SableMetadata){
+        foreign_array_destroy, "[foreign]", size, NULL, NULL, sizeof(ForeignArray), _Alignof(ForeignArray), NULL, NULL,
+    };
+    foreign->array.header.type = &foreign->metadata;
+    foreign->array.elements = elements;
+    foreign->array.count = count;
+    foreign->array.capacity = count;
+    foreign->release = release;
+    foreign->context = context;
+    foreign->owned = false;
+    *cell = count == 0 ? NULL : &foreign->array;
+    if (count == 0) {
+        // The empty array is no buffer: C's memory is let go of at once.
+        sable_release(foreign);
+    }
+}
+
+// The end of a lend of C's memory: the array moved out of '*cell', the
+// call's own reference, goes; and if anything else still holds it, the
+// elements are copied to the runtime's own memory first, so that what was
+// kept stays good once C has its memory back. (A copy of it kept by
+// another thread is not safe: lent memory is the thread's it was lent to.)
+void sable_array_foreign_end(int64_t at) {
+    void **cell = (void **)(intptr_t)at;
+    SableArray *array = *cell;
+    *cell = NULL;
+    if (array == NULL) {
+        return;
+    }
+
+    if (is_foreign(array) && !((ForeignArray *)array)->owned && strong_count(&array->header) > 1) {
+        foreign_take_over(array);
+    }
+
+    sable_release(array);
+}
+
 // The elements given room for 'size' bytes, keeping the first 'old': out of
-// the frame, the first time an array made there grows.
+// the frame, the first time an array made there grows; out of C's memory,
+// the first time a foreign one does.
 static char *resize_elements(SableArray *array, int64_t old, int64_t size) {
+    if (is_foreign(array) && !((ForeignArray *)array)->owned) {
+        ForeignArray *foreign = (ForeignArray *)array;
+        char *own = buffer_alloc(size);
+        memcpy(own, array->elements, (size_t)(old < size ? old : size));
+        if (foreign->release != NULL) {
+            foreign->release(foreign->context);
+        }
+        foreign->release = NULL;
+        foreign->owned = true;
+        return own;
+    }
+
     if (!elements_in_frame(array)) {
         return buffer_resize(array->elements, old, size);
     }

@@ -637,7 +637,8 @@ public static class SyntaxFormatter {
             // An 'if' that gives a value stays where the value goes: 'let s = if c {'.
             (node is StatementSyntax && node.Kind != SyntaxKind.Block
                                      && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement or SyntaxKind.IfExpression)
-                                     && !(node.Parent is { } parent && IsCase(parent) && IsOneLineCase(parent)))
+                                     && !(node.Parent is { } parent && IsCase(parent) && IsOneLineCase(parent))
+                                     && !IsArmStatement(node))
             || IsMember(node)
             || (node.Kind == SyntaxKind.Accessor && !IsPropertyArrow(node))
             || node.Kind is SyntaxKind.ImportDeclaration
@@ -646,6 +647,9 @@ public static class SyntaxFormatter {
                 or SyntaxKind.MatchCaseBlock
                 or SyntaxKind.SwitchCase
             || (node.Kind == SyntaxKind.Attribute && IsMemberContext(parentKind));
+
+        /// <summary><c>case .Some(let r) => return r</c>: an arm's statement written without braces, which stays on the arm's line.</summary>
+        static bool IsArmStatement(SyntaxNode node) => node.Parent is BlockSyntax { OpenBraceToken.IsMissing: true, Parent: MatchArmSyntax };
 
         /// <summary><c>var area: F64 => w * h</c>: a getter written without its keyword and braces, which stays on its property's line.</summary>
         static bool IsPropertyArrow(SyntaxNode node) => node is AccessorSyntax { Keyword.IsMissing: true };

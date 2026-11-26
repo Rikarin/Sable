@@ -562,4 +562,94 @@ public sealed class ReportedGapTests {
             }
             """).Stdout);
     }
+
+    /// <summary>'case .X(let r) => return r' is an arm, as '=> throw e' is: no cascade of errors, and no later arm said never to run; so are '=> break' and '=> continue'.</summary>
+    [Fact]
+    public void AnArmMayReturnBreakOrContinue() =>
+        Assert.Equal(
+            """
+            2
+            9
+            0
+            3
+            5
+            -1
+            12
+            3
+
+            """,
+            Programs.AssertAgree("""
+            module Arms
+
+            union Shape {
+                Circle(Int)
+                Square(Int)
+                Empty
+            }
+
+            fn size(_ s: Shape) -> Int {
+                match s {
+                    case .Circle(let r)    => return r
+                    case .Square(let side) => return side * side
+                    case .Empty            => return 0
+                }
+            }
+
+            fn sizeBlock(_ s: Shape) -> Int {
+                match s {
+                    case .Circle(let r) => {
+                        return r
+                    }
+                    case .Square(let side) => return side
+                    case .Empty => {
+                        return 0
+                    }
+                }
+            }
+
+            fn opt(_ x: Int?) -> Int {
+                match x {
+                    case .Some(let v) => return v
+                    case .None        => return -1
+                }
+            }
+
+            fn firstBig(_ xs: Int?[>..]) -> Int {
+                var found = 0
+                for x in xs {
+                    match x {
+                        case .None => continue
+                        case .Some(let v) where v > 10 => {
+                            found = v
+                            break
+                        }
+                        case .Some(_) => found += 0
+                    }
+                }
+                return found
+            }
+
+            fn upTo(_ xs: Int[>..]) -> Int {
+                var total = 0
+                for x in xs {
+                    match x {
+                        case 0 => break
+                        case _ => total += x
+                    }
+                }
+                return total
+            }
+
+            @main
+            fn main() {
+                print(size(.Circle(2)))
+                print(size(.Square(3)))
+                print(size(.Empty))
+                print(sizeBlock(.Square(3)))
+                print(opt(5))
+                print(opt(none))
+                print(firstBig([none, 3, 12, 15]))
+                print(upTo([1, 2, 0, 5]))
+            }
+            """).Stdout);
 }

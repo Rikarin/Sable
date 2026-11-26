@@ -2563,7 +2563,12 @@ internal sealed class Parser {
         }
 
         var arrow = EatToken(SyntaxKind.FatArrowToken);
-        var body = At(SyntaxKind.OpenBraceToken) ? ParseBlock() : ParseExpression();
+        // '=> return r', '=> break', '=> continue': a statement that leaves,
+        // as 'throw' does, is an arm's body as a block of it alone would be.
+        var body = At(SyntaxKind.OpenBraceToken) ? ParseBlock()
+            : At(SyntaxKind.ReturnKeyword) || At(SyntaxKind.BreakKeyword) || At(SyntaxKind.ContinueKeyword)
+                ? new BlockGreen(CreateMissing(SyntaxKind.OpenBraceToken), GreenList.Create([ParseStatement()]), CreateMissing(SyntaxKind.CloseBraceToken))
+                : ParseExpression();
         return new MatchArmGreen(keyword, patterns, whereClause, arrow, body);
     }
 

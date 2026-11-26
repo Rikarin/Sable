@@ -412,8 +412,17 @@ fn rawModeIsUndoneWhileStoppedAndPutBackAfter() async throws {
     }
     expect(cooked)
     expect(!run.output.contains("resumed"))
-    run.send(.Continue)
-    expect(run.waitFor("resumed"), run.output)
+    // The terminal is put back as the stop begins, before the program is
+    // stopped: a continue sent before that is lost. Sent until it resumes.
+    var resumed = false
+    for _ in 0..<100 {
+        run.send(.Continue)
+        if run.waitFor("resumed", milliseconds: 100) {
+            resumed = true
+            break
+        }
+    }
+    expect(resumed, run.output)
     expect(run.isRaw)
     run.type("q")
     expect((await run.finish()).success)

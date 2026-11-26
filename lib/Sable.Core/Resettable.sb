@@ -5,16 +5,14 @@ module Sable.Core
 /// rent it finds it empty — .NET's `IResettable`.
 ///
 /// ```sable
-/// final class Scratch: Resettable {
-///     var lines: String[>..] = []
+/// struct Scratch: Resettable {
+///     var lines: String[>..]
 ///
-///     init() { }
-///
-///     fn reset() {
+///     mutating fn reset() {
 ///         lines.removeAll(keepingCapacity: true)
 ///     }
 /// }
-/// var scratch = Scratch()
+/// var scratch = Scratch { lines: [] }
 /// scratch.lines.append("used")
 /// scratch.reset()
 /// assert(scratch.lines.isEmpty)
@@ -22,4 +20,17 @@ module Sable.Core
 public protocol Resettable {
     /// Back to empty, as made, with the room it has kept.
     mutating fn reset()
+}
+
+extension<Element> Element[>..]: Resettable {
+    /// Every element taken out, the room kept.
+    ///
+    /// ```sable
+    /// var scratch: Int[>..] = [1, 2, 3]
+    /// scratch.reset()
+    /// assert(scratch.isEmpty && scratch.capacity >= 3)
+    /// ```
+    public mutating fn reset() {
+        removeAll(keepingCapacity: true)
+    }
 }

@@ -24,18 +24,14 @@ import Sable.Time
 /// `TestClock`.
 ///
 /// ```sable
-/// final class Connection {
-///     let id: Int
-///     init(_ id: Int) { self.id = id }
-/// }
+/// // Connections numbered as they are opened.
 /// let opened = Atomic(0)
-/// let pool = AsyncPool<Connection>(maximumCount: 2, create: {
-///     Connection(opened.add(1) + 1)
-/// })
+/// let pool = AsyncPool<Int>(maximumCount: 2, create: { opened.add(1) + 1 })
 /// let first = try! await pool.rent()
-/// assert(first.value.id == 1)
-/// let reply = try! await pool.with { connection in connection.id * 10 }
+/// assert(first.value == 1)
+/// let reply = try! await pool.with { connection in connection * 10 }
 /// assert(reply == 20)
+/// assert(pool.count == 2)
 /// ```
 @immutable
 public final class AsyncPool<T> {
@@ -105,10 +101,14 @@ public final class AsyncPool<T> {
             var value = RawPtr<T>(address: cell).move()
             do {
                 let result = try await body(&value)
-                core.put(cell, move value, recycling: true)
+                let keep = core.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                core.put(cell, keep: keep)
                 return result
             } catch {
-                core.put(cell, move value, recycling: true)
+                let keep = core.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                core.put(cell, keep: keep)
                 throw error
             }
         }
@@ -174,8 +174,10 @@ public struct AsyncLease<T> {
     deinit {
         if cell != 0 {
             unsafe {
-                let value = RawPtr<T>(address: cell).move()
-                core.put(cell, move value, recycling: true)
+                var value = RawPtr<T>(address: cell).move()
+                let keep = core.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                core.put(cell, keep: keep)
             }
         }
     }
@@ -385,10 +387,7 @@ final class AsyncPoolCore<T> {
                 if given == poolRoom {
                     giveRoomBack()
                 } else {
-                    unsafe {
-                        let value = RawPtr<T>(address: given).move()
-                        put(given, move value, recycling: false)
-                    }
+                    put(given, keep: true)
                 }
                 throw CancellationError()
             }
@@ -432,14 +431,10 @@ final class AsyncPoolCore<T> {
         }
     }
 
-    // The value back in its cell, recycled if asked; the cell to the first
-    // waiting, or idle — or dropped, and its room passed on.
-    fn put(_ cell: Int, _ value: consuming T, recycling: Bool) {
-        var kept = move value
-        let keep = recycling ? recycle(&kept) : true
-        unsafe {
-            RawPtr<T>(address: cell).initialize(to: move kept)
-        }
+    // A cell back, its value recycled where its holder held it: to the
+    // first waiting, or idle — or, if the recycling refused it, dropped,
+    // and its room passed on.
+    fn put(_ cell: Int, keep: Bool) {
         if !keep {
             drop(cell)
             return

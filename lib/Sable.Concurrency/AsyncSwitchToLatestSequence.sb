@@ -13,9 +13,9 @@ extension AsyncSequence where Self: Sendable, Element: AsyncSequence, Element: S
     /// ended; what either throws ends it.
     ///
     /// ```sable
-    /// fn results(_ queries: Channel<String>, _ search: @escaping @Sendable (String) -> Channel<String>) async -> String[>..] {
-    ///     // Each query's results, until the next query is typed.
-    ///     return await queries.map { search($0) }.switchToLatest().collect()
+    /// fn results(_ searches: Channel<Channel<String>>) async -> String[>..] {
+    ///     // Each search's results, until the next search begins.
+    ///     return await searches.switchToLatest().collect()
     /// }
     /// ```
     public fn switchToLatest() -> AsyncSwitchToLatestSequence<Self> {

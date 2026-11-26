@@ -60,7 +60,7 @@ extension AsyncSequence where Self: Sendable, Element: Sendable {
     /// `Buffer(timeSpan, count)`.
     ///
     /// ```sable
-    /// fn batches(_ events: Channel<String>) async -> Int {
+    /// fn batches(_ events: Channel<String>) async throws -> Int {
     ///     var inserts = 0
     ///     for try await batch in events.chunked(maxCount: 100, orEvery: Duration.seconds(1)) {
     ///         inserts += 1   // one insert of up to 100 rows, at most a second late

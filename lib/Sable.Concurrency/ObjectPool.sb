@@ -28,18 +28,19 @@ module Sable.Concurrency
 /// shared stack. Sendable, whatever it holds, since only the lease's holder
 /// reaches an object; what the pool makes is counted atomically.
 ///
-/// ```sable
-/// import Sable.Text
+/// A `TextBuilder` is Resettable, so `ObjectPool<TextBuilder>(capacity: 64,
+/// create: { TextBuilder(capacity: 256) })` is a pool of builders, each
+/// cleared as it comes back, its buffer kept.
 ///
-/// let builders = ObjectPool<TextBuilder>(capacity: 64, create: { TextBuilder(capacity: 256) })
-/// let line = builders.with { builder in
-///     builder.append("x = ")
-///     builder.append(42)
-///     return builder.build()
+/// ```sable
+/// let buffers = ObjectPool<Int[>..]>(capacity: 64, create: { [] })
+/// let total = buffers.with { scratch in
+///     scratch.append(contentsOf: [1, 2, 3])
+///     return scratch.reduce(0) { $0 + $1 }
 /// }
-/// assert(line == "x = 42")
-/// let lease = builders.rent()      // the same builder, reset
-/// assert(lease.value.isEmpty)
+/// assert(total == 6)
+/// var lease = buffers.rent()      // the same array, reset, its room kept
+/// assert(lease.value.isEmpty && lease.value.capacity >= 3)
 /// ```
 @immutable
 public final class ObjectPool<T> {
@@ -111,10 +112,14 @@ public final class ObjectPool<T> {
             var value = RawPtr<T>(address: cell).move()
             do {
                 let result = try body(&value)
-                put(cell, move value, place)
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place)
                 return result
             } catch {
-                put(cell, move value, place)
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place)
                 throw error
             }
         }
@@ -128,10 +133,14 @@ public final class ObjectPool<T> {
             var value = RawPtr<T>(address: cell).move()
             do {
                 let result = try await body(&value)
-                put(cell, move value, place())
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place())
                 return result
             } catch {
-                put(cell, move value, place())
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place())
                 throw error
             }
         }
@@ -210,15 +219,12 @@ public final class ObjectPool<T> {
         return cell
     }
 
-    // The value back in its cell, recycled; the cell to this thread's place
-    // if it is empty, else to the stack, unless the recycling refused it.
+    // A cell back, its value recycled: to this thread's place if it is
+    // empty, else to the stack, unless the recycling refused it. (Each
+    // caller recycles the value where it holds it, so that it is the only
+    // reference to what it holds, and is changed in place.)
     @inline(always)
-    fn put(_ cell: Int, _ value: consuming T, _ place: Int) {
-        var kept = move value
-        let keep = shared.recycle(&kept)
-        unsafe {
-            RawPtr<T>(address: cell).initialize(to: move kept)
-        }
+    fn settle(_ cell: Int, _ keep: Bool, _ place: Int) {
         if shared.tracks {
             shared.returned(cell)
         }
@@ -234,8 +240,10 @@ public final class ObjectPool<T> {
     // A lease's cell back.
     fn giveBack(_ cell: Int) {
         unsafe {
-            let value = RawPtr<T>(address: cell).move()
-            put(cell, move value, place())
+            var value = RawPtr<T>(address: cell).move()
+            let keep = shared.recycle(&value)
+            RawPtr<T>(address: cell).initialize(to: move value)
+            settle(cell, keep, place())
         }
     }
 }
@@ -259,9 +267,7 @@ extension ObjectPool where T: Resettable {
     /// as it comes back.
     ///
     /// ```sable
-    /// import Sable.Text
-    ///
-    /// let pool = ObjectPool<TextBuilder>(capacity: 4, create: { TextBuilder() })
+    /// let pool = ObjectPool<String[>..]>(capacity: 4, create: { [] })
     /// pool.with { $0.append("used") }
     /// assert(pool.with { $0.isEmpty })
     /// ```

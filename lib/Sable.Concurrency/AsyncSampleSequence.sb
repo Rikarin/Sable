@@ -8,7 +8,7 @@ extension AsyncSequence where Self: Sendable, Element: Sendable {
     /// timer. The one waiting is given as the sequence ends.
     ///
     /// ```sable
-    /// fn readings(_ sensor: Channel<Double>) async -> Int {
+    /// fn readings(_ sensor: Channel<F64>) async -> Int {
     ///     var shown = 0
     ///     for await _ in sensor.sample(every: Duration.milliseconds(250)) {
     ///         shown += 1   // at most four a second, however fast it reads

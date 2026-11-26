@@ -1,0 +1,96 @@
+module ArrayViewsTests
+
+// A slice of plain values seen as another plain type's, and back, with
+// nothing copied (Sable.Core, Array+Views.sb, PlainData.sb).
+
+import Sable.Testing
+
+struct Rgba {
+    var r: U8
+    var g: U8
+    var b: U8
+    var a: U8
+}
+
+struct Cell<T: PlainData> {
+    var first: T
+    var second: T
+}
+
+struct Pair {
+    var low: U32
+    var high: U32
+}
+
+fn countOfBytes<T: PlainData>(_ values: T[:]) -> Int => values.bytes.count
+
+fn widen<T: PlainData>(_ values: inout T[:]) {
+    values.reinterpreted(as: U8.self)[0] = 0xFF
+}
+
+@test(arguments: [0, 1, 2, 3])
+fn aWordsBytesAreLittleEndian(_ i: Int) {
+    let words: U32[>..] = [0x0403_0201]
+    expect(words.bytes[i] == (i + 1) as U8)
+}
+
+@test
+fn eachPlainKindIsSeenAsBytes() {
+    expect(([1] as I64[>..]).bytes.count == 8)
+    expect(([1.5] as F64[>..]).bytes.toArray() == [0, 0, 0, 0, 0, 0, 0xF8, 0x3F])
+    expect([Rgba { r: 1, g: 2, b: 3, a: 4 }].reinterpreted(as: U32.self)[0] == 0x0403_0201)
+    expect([Cell { first: 1 as U16, second: 2 as U16 }].bytes.toArray() == [1, 0, 2, 0])
+    let inline: U16[2] = [0x0201, 0x0403]
+    expect(inline.bytes.toArray() == [1, 2, 3, 4])
+    expect(countOfBytes([Pair { low: 1, high: 2 }]) == 8)
+    expect(([] as U64[>..]).bytes.count == 0)
+}
+
+@test
+fn aViewAndItsViewAreTheSameBuffer() {
+    let pairs = [Pair { low: 1, high: 2 }, Pair { low: 3, high: 4 }]
+    let before = Runtime.allocationCount()
+    let words = pairs.reinterpreted(as: U32.self)
+    let again = words.reinterpreted(as: Pair.self)
+    let wide = pairs.reinterpreted(as: U64.self)
+    let made = Runtime.allocationCount() - before
+    expect(made == 0)
+    expect(words.toArray() == [1, 2, 3, 4])
+    expect(again[1].high == 4)
+    expect(wide[1] == 0x4_0000_0003)
+    expect(pairs[1...].reinterpreted(as: U64.self)[0] == 0x4_0000_0003)
+}
+
+@test
+fn aViewThatIsKeptStillSeesWhatItSaw() {
+    var pairs = [Pair { low: 1, high: 2 }]
+    let seen = pairs.reinterpreted(as: U32.self)
+    pairs[0].low = 9
+    expect(seen[0] == 1)
+    expect(pairs[0].low == 9)
+}
+
+@test
+fn aViewOfAPlaceIsWrittenWhereTheElementsAre() {
+    var pairs = [Pair { low: 1, high: 2 }, Pair { low: 3, high: 4 }]
+    pairs.reinterpreted(as: U32.self)[3] = 40
+    expect(pairs[1].high == 40)
+    pairs.reinterpreted(as: U32.self).reverse()
+    expect(pairs[0].low == 40 && pairs[1].high == 1)
+    var slice = pairs[0...]
+    widen(&slice)
+    expect(slice[0].low == 0xFF && pairs[0].low == 40)
+    var inline: U16[2] = [0, 0]
+    inline.reinterpreted(as: U8.self)[3] = 1
+    expect(inline[1] == 256)
+}
+
+@test
+fn aRunNotOfWholeValuesTraps() {
+    expectPanic("a slice reinterpreted as a type its bytes are not a whole number of") {
+        _ = ([1, 2, 3] as U8[>..]).reinterpreted(as: U16.self)
+    }
+    expectPanic("a slice reinterpreted as a type it does not start at a multiple of the stride of") {
+        _ = ([1, 2, 3, 4, 5] as U8[>..])[1..<5].reinterpreted(as: U32.self)
+    }
+}

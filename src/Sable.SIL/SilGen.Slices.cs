@@ -384,6 +384,7 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            BeginDeferred(ends);
             if (ArrayType.ElementOf(pointee) is null || PlaceBounds(place, rangeIndex) is not var (from, to)) {
                 EndAll(ends);
                 return ArrayType.ElementOf(pointee) is null ? Missing(target, $"storing to '{Describe(target.Syntax)}'") : null;

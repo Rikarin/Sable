@@ -1658,6 +1658,15 @@ public sealed class SilFunction(string name, FunctionType type) {
     public IReadOnlyList<int>? ResultRoots { get; set; }
 
     /// <summary>
+    ///     The references lowering made into storage its root owns — an
+    ///     element of an array (<c>&amp;xs[0]</c>), what a <c>mutating</c>
+    ///     member gives — each of which holds an access to its root from
+    ///     where it is made to its last use (RootChecker.CheckExclusive,
+    ///     docs/02 §2.4). Read before the passes, which keep it no longer.
+    /// </summary>
+    public HashSet<SilValue> ExclusiveReferences { get; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
     ///     What its source's <c>@inline(always)</c> or <c>@inline(never)</c>
     ///     asks of the inliners, SIL's and LLVM's. Printed as
     ///     <c>inline(always)</c>.
@@ -2184,6 +2193,17 @@ public static class SilBuiltins {
 
         if (SimdBuiltins.Is(name)) {
             return SimdBuiltins.Resolve(name, operands, result);
+        }
+
+        // A slice's bytes seen as another plain type's (Array+Views.sb): the
+        // same buffer, retained for the view, the run's start and count
+        // measured in the second stride, which the first's bytes must be a
+        // whole number of, from a multiple of it, or it traps. The element
+        // is the view's own, which only the result says.
+        if (name == "slice_reinterpret") {
+            return operands is [SliceType, var from, var to] && from == SilType.Int && to == SilType.Int && result is SliceType
+                ? new([operands[0], SilType.Int, SilType.Int], result)
+                : null;
         }
 
         // The empty array, slice or bounded inline array ('T[..k]' holding none).

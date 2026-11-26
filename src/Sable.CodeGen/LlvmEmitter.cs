@@ -6634,7 +6634,9 @@ public sealed partial class LlvmEmitter {
 
                 // The view moved back: its buffer as it is while it is the
                 // whole of it, which it is unless the call replaced it; else
-                // a copy of its run, and the view let go.
+                // a copy of its run, and the view let go. A buffer of another
+                // type, which a reinterpreted view may hold, is the runtime's
+                // to tell: the whole of it only where its elements are as large.
                 case "array_of_slice_take": {
                     var slice = (SliceType)builtin.Operands[0].Type;
                     var (buffer, start, count) = (SlicePart(operands[0], slice, 0), SlicePart(operands[0], slice, 1), SlicePart(operands[0], slice, 2));
@@ -6645,14 +6647,27 @@ public sealed partial class LlvmEmitter {
                     Line($"{same} = icmp eq i64 {count}, {Count(buffer)}");
                     Line($"{whole} = and i1 {fromStart}, {same}");
                     var kept = NewLabel("whole");
+                    var typed = NewLabel("typed");
                     var copied = NewLabel("part");
                     var done = NewLabel("array");
-                    Line($"br i1 {whole}, label %{kept}, label %{copied}");
+                    var metadata = ArrayMetadataOf(new ArrayType(slice.Element));
+                    var check = NewLabel("type");
+                    Line($"br i1 {whole}, label %{typed}, label %{copied}");
+                    Continue(typed);
+                    var empty = Fresh();
+                    Line($"{empty} = icmp eq ptr {buffer}, null");
+                    Line($"br i1 {empty}, label %{kept}, label %{check}");
+                    Continue(check);
+                    var kind = Fresh();
+                    var own = Fresh();
+                    Line($"{kind} = load ptr, ptr {buffer}");
+                    Line($"{own} = icmp eq ptr {kind}, {metadata}");
+                    Line($"br i1 {own}, label %{kept}, label %{copied}");
                     Continue(kept);
                     Line($"br label %{done}");
                     Continue(copied);
                     var copy = Fresh();
-                    Line($"{copy} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {ArrayMetadataOf(new ArrayType(slice.Element))})");
+                    Line($"{copy} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {metadata})");
                     Line($"call void @sable.release(ptr {buffer})");
                     Line($"br label %{done}");
                     Continue(done);
@@ -6702,6 +6717,37 @@ public sealed partial class LlvmEmitter {
                     RetainBuffer(held);
                     Line($"{first} = add i64 {start}, {from}");
                     _names[builtin] = MakeSlice(slice, held, first, length);
+                    return;
+                }
+
+                // A slice's bytes as another plain type's slice: the same
+                // buffer, retained, the run's bytes measured in the other
+                // stride — a whole number of it, from a multiple of it, or a trap.
+                case "slice_reinterpret": {
+                    var from = (SliceType)builtin.Operands[0].Type;
+                    var to = (SliceType)builtin.Type;
+                    var (buffer, start, count) = (SlicePart(operands[0], from, 0), SlicePart(operands[0], from, 1), SlicePart(operands[0], from, 2));
+                    var (fromStride, toStride) = (operands[1], operands[2]);
+                    var firstByte = Fresh();
+                    var byteCount = Fresh();
+                    var startRest = Fresh();
+                    var countRest = Fresh();
+                    var misplaced = Fresh();
+                    var ragged = Fresh();
+                    Line($"{firstByte} = mul i64 {start}, {fromStride}");
+                    Line($"{byteCount} = mul i64 {count}, {fromStride}");
+                    Line($"{countRest} = urem i64 {byteCount}, {toStride}");
+                    Line($"{ragged} = icmp ne i64 {countRest}, 0");
+                    TrapIf(ragged, "a slice reinterpreted as a type its bytes are not a whole number of");
+                    Line($"{startRest} = urem i64 {firstByte}, {toStride}");
+                    Line($"{misplaced} = icmp ne i64 {startRest}, 0");
+                    TrapIf(misplaced, "a slice reinterpreted as a type it does not start at a multiple of the stride of");
+                    var first = Fresh();
+                    var length = Fresh();
+                    Line($"{first} = udiv i64 {firstByte}, {toStride}");
+                    Line($"{length} = udiv i64 {byteCount}, {toStride}");
+                    RetainBuffer(buffer);
+                    _names[builtin] = MakeSlice(to, buffer, first, length);
                     return;
                 }
 

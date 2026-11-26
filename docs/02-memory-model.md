@@ -281,6 +281,54 @@ The borrow checker's job is to let as much code as possible stay in the second
 category. **Every reference the checker proves is non-escaping is a
 retain/release pair the optimiser deletes.**
 
+### References into what a value owns
+
+A reference to a variable, or to a field of one, is the variable's own
+storage, which does not move while the variable lives; so it may alias the
+variable freely — `let q = &p; p.name = "x"; print(q.name)` reads the new
+name — and rules 1–4 are all it is held to. A reference to an *element of an
+array* is different: it is an address in the array's buffer, which moves
+when the array grows, is copied when it is shared and written, and is freed
+with it. `&xs[i]` of an array that may be written, and what a `mutating`
+member returns (`mutating fn at(_ i: Int) -> Node& { return &self.items[i] }`,
+roots `(0)`, into its receiver), are such references. Each holds an
+**access** to the variable or parameter it is rooted in, as an `inout`
+argument does for the length of a call (§2.3, "Exclusivity"): from where it
+is made to its last use — through every copy of it, every variable it is
+kept in, the addresses of its parts and what a call that may return it
+gives — no other use of that variable may happen, reading included (S3062).
+Reading is included because a copy of the array shares its buffer: a write
+through the reference after it would be seen by the copy. The array is made
+the only reference to its buffer as the reference is made, so the address is
+its own.
+
+```sable
+var chunk = Chunk(items: [Node(v: 1)])
+let r = chunk.at(0)            // holds an access to 'chunk' …
+r.v = 2
+print(chunk.items[0].v)        // … which ended at r's last use: fine
+let s = chunk.at(0)
+chunk.items.append(Node(v: 9)) // error[S3062]: 'chunk' is used while a reference into it is in use
+s.v = 3
+```
+
+The checker sees this in SIL, where every use of a variable is an
+operand: it is the liveness of the reference's holders, and the uses of the
+root between. Rooted in an object, or a global, the access cannot be proved
+statically — another reference to the object, or any function, may reach
+the same array — so such a reference is used only where it is made, never
+kept in a variable, passed on or returned (S3067); writing an element of an
+object's array in place, `obj.items[i].v = 1`, is the dynamic exclusivity
+check's (§2.3) as before. A reference only writes where it was made of a
+place that may be written (SYNTAX.md "References that write"); a `T&`
+parameter, and what a non-mutating function returns, only read.
+
+That is what C#'s `ref` returns and Rust's `&mut` lifetimes give, with no
+annotation: the root and the access are inferred, and a reference that would
+outlive its root — returned from a function whose root is a local, used
+after the root's scope ends — is refused by rules 2 and 3 as any reference
+is.
+
 ---
 
 ## 2.5 Inline layout — Goose's data model, by declaration
@@ -458,6 +506,39 @@ is taken to keep what it is given.)
 
 An inline array takes at most 64 KiB (S7004): it is copied whole, and held on
 a stack that may be 256 KiB. The heap's kinds hold any number.
+
+### Views of a slice's bytes
+
+A value that is its bytes alone — `PlainData`: the integers and the floats,
+a struct of them with no padding and no deinit, an inline array of one; not
+a Bool, a Char, a tag, a reference or a buffer — may be seen as another such
+type's, a run of one as a run of the other. `points.reinterpreted(as:
+F32.self)` of a `Vector3[:]` is an `F32[:]` of the same buffer, three for
+each point, and `points.bytes` its `U8[:]`: a slice, the buffer held as any
+slice holds it, its run's start and count measured in the other stride.
+Nothing is copied, either way; the run must be a whole number of the other
+type's values, from a multiple of its stride in the buffer, or the view
+traps. Because neither type has a byte that is no one's or a pattern of
+bits that is no value, every read through the view is of a value, and every
+write leaves the other type's values whole. A buffer gives up its storage
+to an array of another type only where their elements are as large: its
+room is counted in its own elements.
+
+The same view of a place, `points.reinterpreted(as: F32.self)[i] = v` or
+`&points.reinterpreted(as: F32.self)` passed inout, changes the elements
+where they are, and is lent as an `inout T[:]` is: the array made the only
+reference to its buffer and moved into the view for the access, or an
+inline array lent where it is — the same lend as above, which the proof
+that nothing keeps the view makes a view of the array's own storage — and
+given back after, with nothing copied. A view of an inline array that is
+kept, as any slice of one, is a copy.
+
+Views that cannot outlive what they view are therefore of two kinds, and
+neither needs a lifetime written: a slice of an inline array, lent where
+the escape proof above allows and copied where it does not; and a
+reference into what a value owns (§2.4, "References into what a value
+owns"), held to its root by root inference and to its root's exclusive
+access until its last use.
 
 `String` is `U8[>..]` with a UTF-8 invariant. `List<T>` in the standard library
 (Sable.Collections) is the growable array that also inserts and removes

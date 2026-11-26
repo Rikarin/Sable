@@ -2,20 +2,20 @@ module Sable.Math.Geometry
 
 /// A value that is so many `F32`s one after another and nothing else, so that
 /// an array of them is an array of `F32`s: the vectors, the matrices, the
-/// quaternion and the plane of this module, in C's layout, aligned to 4. A
-/// type of the program's own may conform if it is laid out so; its size is
-/// checked where a view is made.
+/// quaternion and the plane of this module, in C's layout, aligned to 4. It is
+/// PlainData, which a type of the program's own is held to where it says it
+/// conforms; that its size is its components' is checked where a view is made.
 ///
 /// ```sable
 /// assert(Matrix4x4.componentCount == 16)
 /// assert(Vector3(1, 2, 3).toArray() == [1, 2, 3])
 /// ```
-public protocol FloatComponents {
+public protocol FloatComponents: PlainData {
     /// How many `F32`s a value is.
     static var componentCount: Int { get }
 
     /// The components, in an array of their own: a copy, where an array of
-    /// values has views (`withComponents`).
+    /// values has a view (`components`).
     fn toArray() -> F32[>..]
 }
 
@@ -67,57 +67,36 @@ fn checkLayout<T: FloatComponents>(_ type: T.Type) {
 }
 
 extension<Element: FloatComponents> Element[:] {
-    /// The elements' components where they lie, as one run of `F32`s, for as
-    /// long as 'body' runs, to be read and not written: nothing is copied.
+    /// The elements' components where they lie, as one run of `F32`s: a view
+    /// of the same buffer, nothing copied, which may be kept as any slice
+    /// may. Its bytes are `bytes`, Sable.Core's, as any plain array's are:
+    /// what a buffer of the GPU's is filled from.
     ///
     /// ```sable
     /// let points = [Vector2(1, 2), Vector2(3, 4)]
-    /// assert(points.withComponents { $0.toArray() } == [1, 2, 3, 4])
+    /// assert(points.components == [1, 2, 3, 4])
+    /// assert([Vector3.zero, Vector3.one].bytes.count == 24)
     /// ```
-    public fn withComponents<R, E: Error>(_ body: (UnsafeBuffer<F32>) throws(E) -> R) throws(E) -> R {
-        checkLayout(Element.self)
-        let total = self.count * Element.componentCount
-        return try self.withPointer { (start: RawPtr<Element>) throws(E) -> R in
-            unsafe {
-                return try body(UnsafeBuffer<F32>.viewing(start.cast(to: F32.self), count: total))
-            }
-        }
-    }
-
-    /// The elements' bytes where they lie, for as long as 'body' runs, to be
-    /// read and not written: what a buffer of the GPU's is filled from.
-    ///
-    /// ```sable
-    /// assert([Vector3.zero, Vector3.one].withBytes { $0.count } == 24)
-    /// ```
-    public fn withBytes<R, E: Error>(_ body: (UnsafeBuffer<U8>) throws(E) -> R) throws(E) -> R {
-        checkLayout(Element.self)
-        let total = self.count * Element.componentCount * 4
-        return try self.withPointer { (start: RawPtr<Element>) throws(E) -> R in
-            unsafe {
-                return try body(UnsafeBuffer<U8>.viewing(start.cast(to: U8.self), count: total))
-            }
+    public var components: F32[:] {
+        get {
+            checkLayout(Element.self)
+            return reinterpreted(as: F32.self)
         }
     }
 
     /// The elements' components where they lie, to be read and written there
-    /// for as long as 'body' runs.
+    /// for as long as 'body' runs: the view lent to change, as an `inout`
+    /// slice, with nothing copied. A write through it changes the elements.
     ///
     /// ```sable
     /// var points = [Vector2(1, 2), Vector2(3, 4)]
     /// points.withMutableComponents { all in
-    ///     var view = all
-    ///     view[2] = 30
+    ///     all[2] = 30
     /// }
     /// assert(points[1] == Vector2(30, 4))
     /// ```
-    public mutating fn withMutableComponents<R, E: Error>(_ body: (UnsafeBuffer<F32>) throws(E) -> R) throws(E) -> R {
+    public mutating fn withMutableComponents<R, E: Error>(_ body: (inout F32[:]) throws(E) -> R) throws(E) -> R {
         checkLayout(Element.self)
-        let total = self.count * Element.componentCount
-        return try self.withMutablePointer { (start: RawPtr<Element>) throws(E) -> R in
-            unsafe {
-                return try body(UnsafeBuffer<F32>.viewing(start.cast(to: F32.self), count: total))
-            }
-        }
+        return try body(&self.reinterpreted(as: F32.self))
     }
 }

@@ -1,0 +1,43 @@
+module Sable.Core
+
+// Views of a slice's elements as another type's (SYNTAX.md "Views of a
+// slice's bytes", docs/02 §2.5): the same buffer, nothing copied.
+
+extension<Element: PlainData> Element[:] {
+    /// The elements' bytes seen as values of another plain type, where they
+    /// are: a slice of the same buffer, so nothing is copied, which may be
+    /// kept and passed on as any slice may. Traps unless the bytes are a
+    /// whole number of `T`s and start, in the array they are a run of, at a
+    /// multiple of `T`'s stride (which an array's first element always does).
+    ///
+    /// Where the receiver may be written, so may the view, and a write
+    /// through it changes the receiver's elements where they are:
+    /// `xs.reinterpreted(as: U8.self)[0] = 1`, `fill(&xs.reinterpreted(as: F32.self))`.
+    /// The receiver lends its storage for the access, as to an `inout`
+    /// argument, and has it back after, with nothing copied; a view given
+    /// back with another count of bytes traps.
+    ///
+    /// ```sable
+    /// let words: U32[>..] = [0x0403_0201, 0x0807_0605]
+    /// assert(words.reinterpreted(as: U8.self) == [1, 2, 3, 4, 5, 6, 7, 8])
+    /// assert(words.reinterpreted(as: U16.self).reinterpreted(as: U32.self) == words)
+    ///
+    /// var halves: U16[>..] = [0, 0]
+    /// halves.reinterpreted(as: U8.self)[1] = 1
+    /// assert(halves == [256, 0])
+    /// ```
+    public fn reinterpreted<T: PlainData>(as type: T.Type) -> T[:] {
+        unsafe {
+            return RawMemory.reinterpret(self, MemoryLayout<Element>.stride, MemoryLayout<T>.stride, T.self)
+        }
+    }
+
+    /// The elements' bytes, where they are: what a file or a GPU's buffer
+    /// is written from. A slice of the same buffer, nothing copied.
+    ///
+    /// ```sable
+    /// let samples: I16[>..] = [1, -1]
+    /// assert(samples.bytes == [0x01, 0x00, 0xFF, 0xFF])
+    /// ```
+    public var bytes: U8[:] => reinterpreted(as: U8.self)
+}

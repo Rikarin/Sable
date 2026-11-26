@@ -714,13 +714,16 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
 
 // A slice as an array again: the buffer itself, retained, when the slice is
 // the whole of it — what a mutating member of 'Element[:]' hands back to the
-// array it was called on, which costs nothing — else a copy of its run.
+// array it was called on, which costs nothing — else a copy of its run. A
+// slice that sees a buffer's bytes as another type's (Array+Views.sb) is the
+// whole of it only where the two types are as large: a buffer's room is
+// counted in its own elements, which an array of another size would misread.
 SableArray *sable_array_of_slice(SableArray *buffer, int64_t start, int64_t count, const SableMetadata *type) {
     if (buffer == NULL || count == 0) {
         return NULL;
     }
 
-    if (start == 0 && count == buffer->count) {
+    if (start == 0 && count == buffer->count && buffer->header.type->element_size == type->element_size) {
         sable_retain(buffer);
         return buffer;
     }

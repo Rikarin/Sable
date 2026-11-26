@@ -976,9 +976,9 @@ public static class SyntaxFormatter {
                     or SyntaxKind.DotDotDotToken => true,
 
                 // '&x' as an argument follows '(' with no space, as anything
-                // does, but a comma or a label's colon with one: 'f(a, &b)'.
-                SyntaxKind.AmpersandToken => parentKind is SyntaxKind.ReferenceType
-                    or SyntaxKind.PrefixUnaryExpression,
+                // does, but a comma or a label's colon with one: 'f(a, &b)';
+                // and a keyword with one: 'return &self.items[i]'.
+                SyntaxKind.AmpersandToken => parentKind is SyntaxKind.ReferenceType,
 
                 _ => false,
             };

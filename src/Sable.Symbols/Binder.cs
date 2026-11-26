@@ -1706,6 +1706,7 @@ public sealed partial class Binder {
         }
 
         local.TypeResolver = () => type;
+        local.IsWritableReference = type is ReferenceTypeSymbol && initializer is not null && BoundExpression.IsWritableReference(initializer);
 
         Declare(local.Name, local);
         TrackRethrowSource(local, initializer);
@@ -5883,7 +5884,7 @@ public sealed partial class Binder {
                     if (!ContainsUninferred(constraint, resolved) && !Conversions.Satisfies(became, constraint, _conversions.Equivalence)) {
                         _diagnostics.Error(ErrorCode.ERR_NoMatchingOverload, syntax.Span,
                             $"'{resolved.Name}' cannot be called with these arguments: '{typeParameter.Name}' would be '{became.ToDisplayString()}', "
-                            + $"which is not '{constraint.ToDisplayString()}'");
+                            + $"which is not '{constraint.ToDisplayString()}'{PlainData.Because(became, constraint)}");
                     }
                 }
             }
@@ -7333,7 +7334,7 @@ public sealed partial class Binder {
                 if (!Conversions.Satisfies(argument, substitution.Apply(constraint), _conversions.Equivalence)) {
                     return Reject(
                         $"'{typeParameter.Name}' would be '{argument.ToDisplayString()}', "
-                        + $"which is not '{substitution.Apply(constraint).ToDisplayString()}'"
+                        + $"which is not '{substitution.Apply(constraint).ToDisplayString()}'{PlainData.Because(argument, substitution.Apply(constraint))}"
                     );
                 }
             }
@@ -7638,6 +7639,9 @@ public sealed partial class Binder {
         ImmutableArray<BoundExpression> indices
     ) {
         CheckEndAsElement(syntax);
+
+        // An element of what a reference refers to: 'c.column()[i]'.
+        receiver = Dereferenced(receiver);
 
         // 'xs[1..<3]', 'xs[1..<^1]', 'xs[2...]': the elements in the range,
         // as a slice — the compiler's own slicing, by a range of integers of
@@ -9370,6 +9374,14 @@ public sealed partial class Binder {
             };
         }
 
+        // 'c.at(0) = v' and, for 'let r = c.at(0)', 'r = v': a store through
+        // the reference, to what it refers to. A 'var' that holds a reference
+        // is given another reference instead ('r = &other').
+        if (target.Type is ReferenceTypeSymbol { RelativeWidth: null } referenced
+            && target is BoundCall or BoundLocalAccess { Local.IsMutable: false } or BoundParameterAccess { IsAssignable: false }) {
+            target = Record(syntax.Left, new BoundConversion(syntax.Left, referenced.ReferencedType, target, ConversionKind.Dereference));
+        }
+
         // 'a.next?.v = 9' stores a 'v' when there is a next, and nothing
         // when there is not: the value is the field's own type, not the
         // chain's optional one.
@@ -9405,9 +9417,13 @@ public sealed partial class Binder {
             _diagnostics.Error(
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
-                "the left side of an assignment must be a mutable binding"
+                ThroughReadingReference(target) is { } reading
+                    ? $"{reading} only reads: a reference writes where it is '&' of a place that may be written, or what a 'mutating' member returns"
+                    : "the left side of an assignment must be a mutable binding"
             );
         }
+
+
 
         // 'private(set) var count': readable here, but not writable.
         if (target is BoundFieldAccess { Field.SetterAccessibility: { } setter } setField && !IsAccessible(setField.Field, setter)) {
@@ -9446,8 +9462,40 @@ public sealed partial class Binder {
             }
         }
 
-        return new BoundAssignment(syntax, target, Convert(value, stored, syntax.Right));
+        var converted = Convert(value, stored, syntax.Right);
+
+        // A 'var' that writes through what it holds is given only references that write.
+        if (target is BoundLocalAccess { Local: { IsWritableReference: true } writer } && !converted.HasError
+            && !BoundExpression.IsWritableReference(converted)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.Right.Span,
+                $"'{writer.Name}' writes through the reference it holds, so it is given only one that writes: '&' of a place that may be written, or what a 'mutating' member returns"
+            );
+        }
+
+        return new BoundAssignment(syntax, target, converted);
     }
+
+    /// <summary>
+    ///     The reference a place is reached through that only reads, said for
+    ///     a message: <c>p.v = 1</c> with <c>p</c> a <c>T&amp;</c> parameter.
+    /// </summary>
+    static string? ThroughReadingReference(BoundExpression target) =>
+        target switch {
+            BoundConversion { ConversionKind: ConversionKind.Dereference, Operand: var reference } when !BoundExpression.IsWritableReference(reference) =>
+                reference switch {
+                    BoundLocalAccess local => $"'{local.Local.Name}' is a reference that",
+                    BoundParameterAccess parameter => $"'{parameter.Parameter.Name}' is a reference that",
+                    BoundCall call => $"the reference '{call.Function.Name}' returns",
+                    _ => "the reference",
+                },
+            BoundConversion { ConversionKind: ConversionKind.Dereference } => null,
+            BoundFieldAccess { Receiver: { } receiver } => ThroughReadingReference(receiver),
+            BoundIndexAccess { Receiver: var receiver } => ThroughReadingReference(receiver),
+            BoundTupleElementAccess { Receiver: var receiver } => ThroughReadingReference(receiver),
+            _ => null,
+        };
 
     /// <summary>
     ///     Assignable as a place is, or — reached through '?.' — a mutable

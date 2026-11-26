@@ -200,8 +200,8 @@ public sealed class LendInlineArrays : ISilPass {
                         Hold(seenAs);
                         break;
 
-                    // A slice of it, or an element borrowed from it, holds it too.
-                    case BuiltinInst { Name: "array_slice" or "array_get_borrowed" } part when ReferenceEquals(part.Operands[0], holder) && !part.Type.IsTrivial:
+                    // A slice of it, its bytes seen as another type's, or an element borrowed from it, holds it too.
+                    case BuiltinInst { Name: "array_slice" or "array_get_borrowed" or "slice_reinterpret" } part when ReferenceEquals(part.Operands[0], holder) && !part.Type.IsTrivial:
                         Hold(part);
                         break;
 

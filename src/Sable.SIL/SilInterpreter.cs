@@ -2266,6 +2266,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return last;
             }
 
+            // A slice's bytes as another plain type's (SilInterpreter.Views.cs).
+            case "slice_reinterpret":
+                return Reinterpret(builtin, operands);
+
             // Elements [from, to) of an array or a slice: a view of the same
             // buffer, which it holds a count of; nothing is copied.
             case "array_slice": {

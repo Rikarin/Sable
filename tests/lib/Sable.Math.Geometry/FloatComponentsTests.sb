@@ -20,21 +20,29 @@ struct Padded: FloatComponents {
 @test
 fn anArrayOfVectorsIsViewedAsItsFloats() {
     let points = [Vector3(1, 2, 3), Vector3(4, 5, 6)]
-    points.withComponents { floats in
-        assertEqual(floats.count, 6)
-        assertEqual(floats.toArray(), [1, 2, 3, 4, 5, 6])
-    }
-    assertEqual(points[1..<2].withComponents { $0.toArray() }, [4, 5, 6])
-    assertEqual(([] as Vector3[>..]).withComponents { $0.count }, 0)
-    assertEqual([Matrix4x4.identity].withComponents { $0.count }, 16)
-    assertEqual([Matrix3x2.identity, Matrix3x2.identity].withComponents { $0.count }, 12)
-    assertEqual([Plane(Vector3.up, 4)].withComponents { $0.toArray() }, [0, 1, 0, 4])
+    let floats = points.components
+    expect(floats.count == 6)
+    expect(floats.toArray() == [1, 2, 3, 4, 5, 6])
+    expect(points[1..<2].components.toArray() == [4, 5, 6])
+    expect(([] as Vector3[>..]).components.count == 0)
+    expect([Matrix4x4.identity].components.count == 16)
+    expect([Matrix3x2.identity, Matrix3x2.identity].components.count == 12)
+    expect([Plane(Vector3.up, 4)].components.toArray() == [0, 1, 0, 4])
+}
+
+@test
+fn theViewIsTheSameBufferAndBack() {
+    let points = [Vector3(1, 2, 3), Vector3(4, 5, 6)]
+    let before = Runtime.allocationCount()
+    let again = points.components.reinterpreted(as: Vector3.self)
+    let made = Runtime.allocationCount() - before
+    expect(made == 0)
+    expect(again == points[0...])
 }
 
 @test
 fn anArrayOfVectorsIsViewedAsItsBytes() {
-    let bytes = [Vector2(1, -2)].withBytes { $0.toArray() }
-    assertEqual(bytes, [0, 0, 0x80, 0x3F, 0, 0, 0, 0xC0])
+    expect([Vector2(1, -2)].bytes.toArray() == [0, 0, 0x80, 0x3F, 0, 0, 0, 0xC0])
 }
 
 @test
@@ -42,17 +50,18 @@ fn itsFloatsAreWrittenWhereTheyLie() {
     var points = [Vector3(1, 2, 3), Vector3(4, 5, 6)]
     let before = points
     points.withMutableComponents { floats in
-        var view = floats
-        view[4] = 50
+        floats[4] = 50
     }
-    assertEqual(points[1], Vector3(4, 50, 6))
-    assertEqual(before[1], Vector3(4, 5, 6))
+    expect(points[1] == Vector3(4, 50, 6))
+    expect(before[1] == Vector3(4, 5, 6))
+    points.reinterpreted(as: F32.self)[0] = -1
+    expect(points[0] == Vector3(-1, 2, 3))
 }
 
 @test
 fn aTypeThatIsNotWhatItSaysIsRefused() {
     expectPanic("a FloatComponents type of 3 components that takes 16 bytes") {
-        _ = [Padded { x: 1, y: 2, z: 3, w: 4 }].withComponents { $0.count }
+        _ = [Padded { x: 1, y: 2, z: 3, w: 4 }].components.count
     }
 }
 

@@ -671,6 +671,13 @@ public sealed class LocalSymbol(
     public bool IsMutable { get; } = isMutable;
 
     /// <summary>
+    ///     A reference a program may write through (SYNTAX.md "References
+    ///     that write"): its initialiser was one — <c>&amp;x</c> of a place
+    ///     that may be written, or what a <c>mutating</c> member returns.
+    /// </summary>
+    public bool IsWritableReference { get; internal set; }
+
+    /// <summary>
     ///     The concrete type a <c>let s: some P = …</c> hides: its
     ///     initialiser's. Null for a local whose type is not opaque.
     /// </summary>

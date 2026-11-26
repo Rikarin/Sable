@@ -589,8 +589,8 @@ public sealed partial class SilGen {
         && ProtocolClosure([protocol]).All(static p => p.TypeParameters.IsEmpty)
         && Bases(protocol).All(static b => !b.IsConstructed);
 
-    /// <summary>Sendable, which has no witnesses.</summary>
-    static bool IsMarker(NamedTypeSymbol protocol) => protocol is { Name: "Sendable", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } };
+    /// <summary>Sendable and PlainData, which have no witnesses: what a type is made of meets them.</summary>
+    static bool IsMarker(NamedTypeSymbol protocol) => protocol is { Name: "Sendable" or "PlainData", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } };
 
     static IEnumerable<NamedTypeSymbol> Bases(NamedTypeSymbol protocol) =>
         protocol.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol);

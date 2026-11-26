@@ -1,0 +1,46 @@
+module LocalStreamBench
+
+import Sable.IO
+import Sable.IO.Ipc
+import Sable.Process
+import Sable.Testing
+
+// A local stream's round trips: a client sends 64 bytes and waits for them
+// back, ten thousand times, over one connection to a server in the same
+// program.
+
+fn run() async throws -> String {
+    let name = "sable-bench-\(Process.id())"
+    let server = try LocalListener.bind(name: name)
+    let serving = Task.spawn {
+        let connection = try! await server.accept()
+        while true {
+            let bytes = try! await connection.read(upTo: 4096)
+            if bytes.isEmpty {
+                break
+            }
+            try! await connection.write(bytes)
+        }
+    }
+    let client = try await LocalStream.connect(name: name)
+    let message = U8[>..](repeating: 7, count: 64)
+    var total = 0
+    for _ in 0..<10_000 {
+        try await client.write(message)
+        var got = 0
+        while got < 64 {
+            let bytes = try await client.read(upTo: 64 - got)
+            got += bytes.count
+            total += Int(bytes[0])
+        }
+    }
+    client.close()
+    await serving.value
+    server.close()
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { try! await run() })
+}

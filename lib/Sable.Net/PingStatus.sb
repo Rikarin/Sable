@@ -1,0 +1,32 @@
+module Sable.Net
+
+/// How a ping went (`PingReply.status`).
+@derive(Equatable, Debug)
+public union PingStatus {
+    /// The address answered.
+    Success
+    /// Nothing answered in the time given.
+    TimedOut
+    /// It ran out of hops on the way: the router that said so.
+    TtlExpired(from: IpAddress)
+    /// It could not be delivered: ICMP's code for why (IPv4's 0 the
+    /// network, 1 the host, 2 the protocol, 3 the port; IPv6's 0 no route,
+    /// 1 prohibited, 3 the address, 4 the port), and who said so.
+    Unreachable(code: Int, from: IpAddress)
+    /// It was too long for a link and could not be broken up: who said so.
+    PacketTooBig(from: IpAddress)
+    /// Windows' IcmpSendEcho said something else: its status.
+    Failed(code: Int)
+
+    /// What happened.
+    public fn description() -> String {
+        return match self {
+            case .Success                         => "it answered"
+            case .TimedOut                        => "nothing answered in time"
+            case .TtlExpired(let from)            => "it ran out of hops at \(from)"
+            case .Unreachable(let code, let from) => "\(from) said it is unreachable (\(code))"
+            case .PacketTooBig(let from)          => "\(from) said it is too long"
+            case .Failed(let code)                => "the system said \(code)"
+        }
+    }
+}

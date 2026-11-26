@@ -1,0 +1,64 @@
+module NetworkStatisticsTests
+
+// NetworkStatistics, TcpConnection, TcpState, TcpStatistics and
+// UdpStatistics (Sable.Net): run with
+//     tools/stdlib-coverage.sh Sable.Net
+//
+// What the system lists of this process's own loopback sockets, which every
+// system lists to it.
+
+import NetSupport
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+import Sable.Time
+
+@test
+fn aListenerOfThisProcessIsListed() throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let listed = try NetworkStatistics.tcpConnections().filter { $0.local == listener.localAddress }
+    assertEqual(listed.count, 1)
+    assertEqual(listed[0].state, TcpState.Listen)
+    assertEqual(listed[0].remote.port, 0)
+    expect(listed[0].processId == none || listed[0].processId! > 0)
+    expect(try NetworkStatistics.tcpListeners().contains(listener.localAddress))
+}
+
+@test
+fn anIpv6ListenerIsListedToo() throws {
+    let listener = try? TcpListener.bind(SocketAddress(.v6Loopback, port: 0))
+    try skip(if: listener == none, "there is no ::1")
+    expect(try NetworkStatistics.tcpListeners().contains(listener!.localAddress))
+}
+
+@test
+fn aConnectionIsListedEstablishedFromEachEnd() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let accepting = Task.spawn { try! await listener.accept() }
+    let client = try await TcpStream.connect(listener.localAddress, timeout: Duration.seconds(10))
+    let server = await accepting.value
+    let all = try NetworkStatistics.tcpConnections()
+    let ours = all.filter { $0.local == client.localAddress && $0.remote == listener.localAddress }
+    assertEqual(ours.count, 1)
+    assertEqual(ours[0].state, TcpState.Established)
+    expect(all.contains(where: { $0.local == server.localAddress && $0.state == TcpState.Established }))
+}
+
+@test
+fn aUdpSocketIsListed() throws {
+    let socket = try UdpSocket.bind(SocketAddress(.v4Loopback, port: 0))
+    expect(try NetworkStatistics.udpListeners().contains(socket.localAddress))
+}
+
+@test
+fn theCountersAreThereOrSaidNotToBe() throws {
+    let tcp = try NetworkStatistics.tcp()
+    let udp = try NetworkStatistics.udp()
+    #if os(linux)
+    expect(tcp.connectionsInitiated != none && tcp.segmentsSent != none && tcp.currentConnections != none)
+    #endif
+    for counted in [tcp.connectionsInitiated, tcp.connectionsAccepted, tcp.failedConnectionAttempts, tcp.currentConnections, tcp.segmentsReceived,
+        tcp.segmentsSent, tcp.segmentsResent, tcp.resetsSent, udp.datagramsReceived, udp.datagramsSent, udp.noPort, udp.receiveErrors] {
+        expect((counted ?? 0) >= 0)
+    }
+}

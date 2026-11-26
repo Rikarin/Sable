@@ -1,0 +1,270 @@
+module Sable.IO.Ports
+
+import Sable.IO
+import Sable.Time
+
+/// A serial port: .NET's `SerialPort`, Rust's `serialport`. termios on
+/// macOS and Linux, a COM port's DCB on Windows. A read gives what has come
+/// as soon as there is a byte, and suspends the task, not its thread, while
+/// there is none; its limit is Sable.Concurrency's `withTimeout`. Deeply
+/// immutable, so Sendable: one task may read while another writes.
+///
+/// ```sable
+/// fn hello() async throws(IoError) -> U8[>..] {
+///     let port = try SerialPort.open("/dev/ttyUSB0", SerialOptions { baudRate: 115200 })
+///     try await port.write("AT\r".utf8.toArray())
+///     return try await port.read(upTo: 64)
+/// }
+/// ```
+@immutable
+public final class SerialPort: AsyncReader, AsyncWriter, Sendable {
+    /// The name it was opened by: "/dev/ttyUSB0", "COM3".
+    public let name: String
+    let reader: Int
+    let writer: Int
+
+    init(name: String, reader: Int, writer: Int) {
+        self.name = name
+        self.reader = reader
+        self.writer = writer
+    }
+
+    deinit {
+        close()
+    }
+
+    /// The port opened, to read and write, as the options say: NotFound
+    /// when there is none, PermissionDenied when it may not be opened (or
+    /// another program has it), InvalidInput for what is no terminal or an
+    /// option the port does not take.
+    public static fn open(_ name: String, _ options: SerialOptions = SerialOptions()) throws(IoError) -> SerialPort {
+        var ends: Int[>..] = [0, 0]
+        let opened = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Bool in
+            return ends.withMutablePointer { (into: RawPtr<Int>) -> Bool in
+                unsafe {
+                    return serialOpen(at, count, options.baudRate, options.dataBits, options.parityNumber, options.stopNumber, options.flowNumber, into)
+                }
+            }
+        }
+        if !opened {
+            throw IoError.lastSystemError(name)
+        }
+        return SerialPort(name: name, reader: ends[0], writer: ends[1])
+    }
+
+    /// The serial ports this machine has: /dev's tty and cu devices of
+    /// macOS, the ttys of Linux that are a device's, the registry's COM
+    /// ports of Windows. Sorted; a pseudo-terminal is none of them.
+    public static fn available() -> String[>..] {
+        #if os(windows)
+        var room = U8[>..](repeating: 0, count: 65536)
+        let length = room.withMutablePointer { (at: RawPtr<U8>) -> Int in
+            unsafe {
+                return serialNames(at, 65536)
+            }
+        }
+        if length <= 0 || length > 65536 {
+            return []
+        }
+        var names = String.fromUtf8Lossy(room[0..<length]).split(separator: '\n').map { $0.toString() }
+        names.sort()
+        return names
+        #elseif os(macos)
+        var names: String[>..] = []
+        for entry in (try? Directory.list("/dev")) ?? [] {
+            if entry.hasPrefix("cu.") || entry.hasPrefix("tty.") {
+                names.append("/dev/\(entry)")
+            }
+        }
+        names.sort()
+        return names
+        #else
+        var names: String[>..] = []
+        for entry in (try? Directory.list("/sys/class/tty")) ?? [] {
+            if Directory.exists("/sys/class/tty/\(entry)/device") {
+                names.append("/dev/\(entry)")
+            }
+        }
+        names.sort()
+        return names
+        #endif
+    }
+
+    /// Up to 'count' bytes, as soon as any have come. A task cancelled while
+    /// it waits throws Cancelled, and no byte is lost.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        while true {
+            let bytes = Runtime.readSocket(reader, count)
+            if Runtime.socketStatus() == 0 {
+                return bytes
+            }
+            try await waitForPort(reader, writable: false)
+        }
+    }
+
+    /// Exactly 'count' bytes, waiting for them all: UnexpectedEof if the
+    /// port is gone first.
+    public fn readExactly(_ count: Int) async throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while all.count < count {
+            let bytes = try await read(upTo: count - all.count)
+            if bytes.isEmpty {
+                throw IoError.UnexpectedEof
+            }
+            all.append(contentsOf: bytes)
+        }
+        return all
+    }
+
+    /// Every one of the bytes written, waiting while the port is busy; they
+    /// may still be on their way (`drain`).
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        var from = 0
+        while from < bytes.count {
+            let written = Runtime.writeSocket(writer, bytes[from...])
+            if Runtime.socketStatus() == 0 {
+                from += written
+            } else {
+                try await waitForPort(writer, writable: true)
+            }
+        }
+    }
+
+    /// Waits until what was written has gone out of the port, looking again
+    /// in a while.
+    public fn drain() async throws(IoError) {
+        var times = 0
+        while try bytesToWrite() > 0 {
+            do {
+                try await Task.sleep(nanoseconds: times < 6 ? 100_000 << times : 5_000_000)
+            } catch {
+                throw IoError.Cancelled
+            }
+            times += 1
+        }
+    }
+
+    /// Set as the options say, from now on.
+    public fn configure(_ options: SerialOptions) throws(IoError) {
+        try check(serialConfigure(reader, options.baudRate, options.dataBits, options.parityNumber, options.stopNumber, options.flowNumber))
+    }
+
+    /// The control lines as they are.
+    public fn lines() throws(IoError) -> SerialLines {
+        let bits = serialLines(reader)
+        try check(bits)
+        return SerialLines(bits: bits)
+    }
+
+    /// DTR set or cleared: this end says it is there.
+    public fn setDataTerminalReady(_ on: Bool) throws(IoError) {
+        try check(serialSetLine(reader, 1, on))
+    }
+
+    /// RTS set or cleared, where flow control is not RTS/CTS: this end may
+    /// be sent to.
+    public fn setRequestToSend(_ on: Bool) throws(IoError) {
+        try check(serialSetLine(reader, 2, on))
+    }
+
+    /// A break sent, the line held at zero, until it is cleared.
+    public fn setBreak(_ on: Bool) throws(IoError) {
+        try check(serialBreak(reader, on))
+    }
+
+    /// A break sent for the time.
+    public fn sendBreak(for duration: Duration) async throws(IoError) {
+        try setBreak(true)
+        do {
+            try await Task.sleep(nanoseconds: duration.totalNanoseconds)
+        } catch {
+            try setBreak(false)
+            throw IoError.Cancelled
+        }
+        try setBreak(false)
+    }
+
+    /// What has come and not been read, dropped.
+    public fn discardInput() throws(IoError) {
+        try check(serialDiscard(reader, true, false))
+    }
+
+    /// What was written and has not gone, dropped.
+    public fn discardOutput() throws(IoError) {
+        try check(serialDiscard(reader, false, true))
+    }
+
+    /// How many bytes have come and wait to be read.
+    public fn bytesToRead() throws(IoError) -> Int {
+        let count = serialQueued(reader, false)
+        try check(count)
+        return count
+    }
+
+    /// How many bytes were written and wait to go.
+    public fn bytesToWrite() throws(IoError) -> Int {
+        let count = serialQueued(reader, true)
+        try check(count)
+        return count
+    }
+
+    fn check(_ result: Int) throws(IoError) {
+        if result < 0 {
+            throw IoError.lastSystemError(name)
+        }
+    }
+
+    /// Closed: tasks waiting on it wake and throw Disconnected. Dropping the
+    /// port closes it too.
+    public fn close() {
+        Runtime.closeSocket(reader)
+        if writer != reader {
+            Runtime.closeSocket(writer)
+        }
+    }
+}
+
+// The text's bytes lent to the body, with their count.
+fn withBytes<R>(_ text: String, _ body: (RawPtr<U8>, Int) -> R) -> R {
+    let bytes = text.utf8.toArray()
+    return bytes.withPointer { (at: RawPtr<U8>) -> R in body(at, bytes.count) }
+}
+
+// Waits for the port, once a call on it found it would block; or throws,
+// if the call failed, or the task is cancelled.
+fn waitForPort(_ handle: Int, writable: Bool) async throws(IoError) {
+    if Runtime.socketStatus() != 1 {
+        throw IoError.Disconnected
+    }
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+    await Runtime.waitForSocket(handle, writable: writable)
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+}
+
+@extern("c", "sable_ipc_serial_open")
+unsafe fn serialOpen(_ name: RawPtr<U8>, _ length: Int, _ baud: Int, _ dataBits: Int, _ parity: Int, _ stopBits: Int, _ flow: Int, _ ends: RawPtr<Int>) -> Bool
+
+@extern("c", "sable_ipc_serial_configure")
+fn serialConfigure(_ port: Int, _ baud: Int, _ dataBits: Int, _ parity: Int, _ stopBits: Int, _ flow: Int) -> Int
+
+@extern("c", "sable_ipc_serial_lines")
+fn serialLines(_ port: Int) -> Int
+
+@extern("c", "sable_ipc_serial_set_line")
+fn serialSetLine(_ port: Int, _ line: Int, _ on: Bool) -> Int
+
+@extern("c", "sable_ipc_serial_break")
+fn serialBreak(_ port: Int, _ on: Bool) -> Int
+
+@extern("c", "sable_ipc_serial_discard")
+fn serialDiscard(_ port: Int, _ input: Bool, _ output: Bool) -> Int
+
+@extern("c", "sable_ipc_serial_queued")
+fn serialQueued(_ port: Int, _ output: Bool) -> Int
+
+@extern("c", "sable_ipc_serial_names")
+unsafe fn serialNames(_ into: RawPtr<U8>, _ room: Int) -> Int

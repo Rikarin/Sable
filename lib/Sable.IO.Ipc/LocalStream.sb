@@ -1,0 +1,175 @@
+module Sable.IO.Ipc
+
+import Sable.IO
+import Sable.Net
+import Sable.Time
+
+/// A connection to a program on this machine, by a name its server bound
+/// (`LocalListener`): a Unix domain socket on macOS and Linux, a named pipe
+/// on Windows. .NET's `NamedPipeClientStream`. A read or a write suspends
+/// the task, not its thread. Deeply immutable, so Sendable: one task may
+/// read while another writes.
+///
+/// ```sable
+/// fn ask() async throws(IoError) -> U8[>..] {
+///     let connection = try await LocalStream.connect(name: "sable-ide", timeout: Duration.seconds(2))
+///     try await connection.write([1])
+///     return try await connection.read(upTo: 1024)
+/// }
+/// ```
+@immutable
+public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
+    let unix: UnixStream?
+    // Windows: the pipe, to read and to write by, and which end it is.
+    let reader: Int
+    let writer: Int
+    let server: Bool
+
+    init(unix: UnixStream?, reader: Int, writer: Int, server: Bool) {
+        self.unix = unix
+        self.reader = reader
+        self.writer = writer
+        self.server = server
+    }
+
+    deinit {
+        #if os(windows)
+        Runtime.closeSocket(reader)
+        Runtime.closeSocket(writer)
+        #endif
+    }
+
+    /// A connection to the server of the name, waiting while it is busy (as
+    /// long as the timeout, if there is one): NotFound when no server has
+    /// the name, ConnectionRefused when its server has ended. Asking for
+    /// this user alone, it connects only to a server of this user's, and
+    /// throws PermissionDenied for another's.
+    public static async fn connect(name: String, access: LocalAccess = .CurrentUserOnly, messages: Bool = false, timeout: Duration? = none) throws(IoError) -> LocalStream {
+        try checkName(name, most: 64)
+        #if os(windows)
+        let flags = (access == .CurrentUserOnly ? 1 : 0) + (messages ? 2 : 0)
+        let start = Instant.now()
+        var times = 0
+        while true {
+            let handle = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
+                unsafe {
+                    return localConnect(at, count, flags)
+                }
+            }
+            if handle > 0 {
+                let writer = localWriter(handle)
+                if writer == 0 {
+                    Runtime.closeSocket(handle)
+                    throw IoError.lastSystemError(name)
+                }
+                return LocalStream(unix: none, reader: handle, writer: writer, server: false)
+            }
+            if handle == 0 {
+                throw IoError.lastSystemError(name)
+            }
+            if let limit = timeout {
+                if start.elapsed >= limit {
+                    throw IoError.TimedOut
+                }
+            }
+            try await pause(times)
+            times += 1
+        }
+        #else
+        if messages {
+            throw IoError.Unsupported(what: "a local stream of messages")
+        }
+        let path = try LocalListener.socketPath(name, access)
+        let connection = try await UnixStream.connect(path, timeout: timeout)
+        if access == .CurrentUserOnly {
+            let peer = try connection.peerCredentials()
+            if peer.userId != PeerCredentials.currentUserId {
+                connection.close()
+                throw IoError.PermissionDenied(path: name)
+            }
+        }
+        return LocalStream(unix: connection, reader: 0, writer: 0, server: false)
+        #endif
+    }
+
+    /// Up to 'count' bytes, as soon as any have come; none once the other
+    /// end has finished writing. Of a stream of messages, one message, or
+    /// as much of it as 'count' takes. A task cancelled while it waits
+    /// throws Cancelled, and no byte is lost.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        #if os(windows)
+        while true {
+            let bytes = Runtime.readSocket(reader, count)
+            if Runtime.socketStatus() == 0 {
+                return bytes
+            }
+            try await waitForHandle(reader, writable: false)
+        }
+        #else
+        return try await unix!.read(upTo: count)
+        #endif
+    }
+
+    /// Every byte until the other end finishes writing.
+    public fn readAll() async throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while true {
+            let bytes = try await read(upTo: 65536)
+            if bytes.isEmpty {
+                return all
+            }
+            all.append(contentsOf: bytes)
+        }
+    }
+
+    /// Every one of the bytes written, waiting while the other end is slow
+    /// to read them: of a stream of messages, one message.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        #if os(windows)
+        var from = 0
+        while from < bytes.count {
+            let written = Runtime.writeSocket(writer, bytes[from...])
+            if Runtime.socketStatus() == 0 {
+                from += written
+            } else {
+                try await waitForHandle(writer, writable: true)
+            }
+        }
+        #else
+        try await unix!.write(bytes)
+        #endif
+    }
+
+    /// Nothing more is written. On macOS and Linux the other end reads to
+    /// its end, and reading goes on; a named pipe has no such half, and
+    /// its other end reads to its end only once this one is closed.
+    public fn finishWriting() {
+        #if os(windows)
+        Runtime.closeSocket(writer)
+        #else
+        unix!.finishWriting()
+        #endif
+    }
+
+    /// Who is at the other end: its process, and on macOS and Linux its
+    /// user.
+    public fn peerCredentials() throws(IoError) -> PeerCredentials {
+        #if os(windows)
+        let process = localPeer(reader, server)
+        return PeerCredentials(processId: process >= 0 ? process : none, userId: none)
+        #else
+        return try unix!.peerCredentials()
+        #endif
+    }
+
+    /// Closed, both ways: tasks waiting on it wake and throw Disconnected.
+    /// Dropping the stream closes it too.
+    public fn close() {
+        #if os(windows)
+        Runtime.closeSocket(reader)
+        Runtime.closeSocket(writer)
+        #else
+        unix!.close()
+        #endif
+    }
+}

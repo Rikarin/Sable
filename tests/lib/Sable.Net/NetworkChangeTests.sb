@@ -1,0 +1,75 @@
+module NetworkChangeTests
+
+// NetworkChange, NetworkChangeEvent and NetworkChangeSequence (Sable.Net):
+// run with
+//     tools/stdlib-coverage.sh Sable.Net
+//
+// Nothing here changes the machine's interfaces: what a change is found to
+// be is tested by lists of interfaces, and the watch by its start and end.
+
+import NetSupport
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+import Sable.Time
+
+fn entry(_ address: String, _ length: Int) -> InterfaceAddress {
+    return InterfaceAddress(address: ip(address), prefixLength: length)
+}
+
+@test
+fn anInterfaceGoingDownOrUpIsAChange() {
+    let up = NetworkInterface(name: "eth0", index: 2, isUp: true, addresses: [entry("192.0.2.5", 24)])
+    let down = NetworkInterface(name: "eth0", index: 2, isUp: false, addresses: [entry("192.0.2.5", 24)])
+    assertEqual(NetworkChange.differences(from: [up], to: [down]), [NetworkChangeEvent.InterfaceDown(name: "eth0")])
+    assertEqual(NetworkChange.differences(from: [down], to: [up]), [NetworkChangeEvent.InterfaceUp(name: "eth0")])
+    expect(NetworkChange.differences(from: [up], to: [up]).isEmpty)
+}
+
+@test
+fn addressesGainedAndLostAreChanges() {
+    let before = NetworkInterface(name: "en0", index: 4, isUp: true, addresses: [entry("192.0.2.5", 24), entry("fe80::1%4", 64)])
+    let after = NetworkInterface(name: "en0", index: 4, isUp: true, addresses: [entry("fe80::1%4", 64), entry("198.51.100.7", 24)])
+    assertEqual(NetworkChange.differences(from: [before], to: [after]), [
+        NetworkChangeEvent.AddressRemoved(interface: "en0", address: entry("192.0.2.5", 24)),
+        NetworkChangeEvent.AddressAdded(interface: "en0", address: entry("198.51.100.7", 24)),
+    ])
+}
+
+@test
+fn interfacesAddedAndRemovedAreChanges() {
+    let loopback = NetworkInterface(name: "lo", index: 1, isUp: true, addresses: [entry("127.0.0.1", 8)])
+    let tunnel = NetworkInterface(name: "utun3", index: 9, isUp: true, addresses: [entry("10.8.0.2", 32)])
+    let changes = NetworkChange.differences(from: [loopback], to: [loopback, tunnel])
+    assertEqual(changes, [
+        NetworkChangeEvent.InterfaceAdded(name: "utun3"),
+        NetworkChangeEvent.InterfaceUp(name: "utun3"),
+        NetworkChangeEvent.AddressAdded(interface: "utun3", address: entry("10.8.0.2", 32)),
+    ])
+    assertEqual(changes.map { $0.interfaceName }, ["utun3", "utun3", "utun3"])
+    assertEqual(NetworkChange.differences(from: [loopback, tunnel], to: [loopback]), [NetworkChangeEvent.InterfaceRemoved(name: "utun3")])
+    let quiet = NetworkInterface(name: "eth1", index: 3, isUp: false)
+    assertEqual(NetworkChange.differences(from: [], to: [quiet]), [NetworkChangeEvent.InterfaceAdded(name: "eth1")])
+    assertEqual(NetworkChangeEvent.InterfaceDown(name: "eth1").interfaceName, "eth1")
+    assertEqual(NetworkChangeEvent.AddressRemoved(interface: "eth1", address: entry("10.0.0.1", 8)).interfaceName, "eth1")
+}
+
+@test
+fn theInterfacesAsTheyAreAreNoChange() throws {
+    let now = try NetworkInterface.all()
+    expect(NetworkChange.differences(from: now, to: now).isEmpty)
+}
+
+@test
+fn aWatchBeginsAndEndsWithTheTaskGoingThroughIt() async throws {
+    let changes = try NetworkChange.events()
+    let watching = Task.spawn { () -> Bool in
+        var iterator = changes.makeAsyncIterator()
+        // Until the task is cancelled, a change or none; then none.
+        while let _ = await iterator.next() { }
+        return true
+    }
+    try? await Task.sleep(for: Duration.milliseconds(5))
+    watching.cancel()
+    expect(await watching.value)
+}

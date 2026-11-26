@@ -1074,7 +1074,18 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     not it is UTF-8), Environment (variables and arguments
                     as text and as OsString, set and removed under
                     'unsafe', home, temporary and known folders by XDG,
-                    Apple and Windows rules)
+                    Apple and Windows rules), OsPipe (OsPipeReader
+                    OsPipeWriter, and PipeEnd for a child's stream:
+                    Stdio.Pipe), Fifo (mkfifo; below)
+Sable.IO.Ipc        LocalListener LocalStream (a Unix domain socket, or a
+                    Windows named pipe, by name; LocalAccess, peer
+                    credentials, Windows' messages), SharedMemory
+                    (shm_open, a paging file's mapping), NamedSemaphore,
+                    NamedMutex NamedMutexGuard (below)
+Sable.IO.Ports      SerialPort (termios, a COM port's DCB: rate, frames,
+                    flow control, control lines, break, queues, the ports
+                    there are), SerialOptions Parity StopBits FlowControl
+                    SerialLines
 Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they come
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
@@ -1095,8 +1106,13 @@ Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     IpAddress (strict parsing, RFC 5952, scopes, IANA's
                     special-purpose registries), SocketAddress, IpNetwork;
                     TcpListener TcpStream, UdpSocket (multicast),
-                    UnixListener UnixStream UnixDatagramSocket; Dns,
-                    HappyEyeballs (RFC 8305), NetworkInterface (below).
+                    UnixListener UnixStream UnixDatagramSocket
+                    (PeerCredentials); Dns, HappyEyeballs (RFC 8305),
+                    NetworkInterface (below); Ping (PingOptions PingReply
+                    PingStatus), RawSocket (IpProtocol), IcmpMessage
+                    Ipv4Header Ipv6Header InternetChecksum, NetworkChange
+                    (NetworkChangeEvent), NetworkStatistics (TcpConnection
+                    TcpState TcpStatistics UdpStatistics); below.
                     Not yet: Tls Http1 Http2
 Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     the primitives, UUID, optionals, arrays, Set, String-keyed
@@ -2004,6 +2020,60 @@ place.
 - **Cancellation.** `wait` throws `Cancelled`, and the child runs on:
   `withTimeout` limits a wait. `output` and `status` kill theirs.
 
+### Pipes, local streams, shared memory and serial ports
+
+The operating system's own channels between processes (#239), over
+`runtime/ipc.c` and `platform_ipc_posix.c` / `platform_ipc_win32.c`, which
+the library calls by `@extern` rather than as builtins; under WASI each
+throws `Unsupported`.
+
+- **OsPipe.** Each end this program has is an I/O source as a child's stream
+  is (§6.7): nonblocking on POSIX, an overlapped named pipe of its own name on
+  Windows. An end for a child (`PipeEnd`) blocks and is inherited by no one:
+  `Stdio.Pipe` gives the child a copy (`STDIO_HANDLE`), and this program
+  closes its own, or the other end never reads to its end. `betweenChildren`
+  is an anonymous pipe, as a shell's `|`.
+- **Fifo.** A writer waits for a reader by looking again (an open for writing
+  fails with ENXIO until there is one). A reader is opened at once; reading
+  nothing before any writer has come is no end, which macOS's poll cannot
+  tell apart from the end, so the reader looks again until it has seen a
+  writer (a byte, or a would-block). Windows has none.
+- **LocalListener, LocalStream.** One name everywhere: on POSIX a Unix domain
+  socket `<name>.socket` in a directory of the user's own
+  (`$XDG_RUNTIME_DIR`, else `/tmp/sable-<uid>`, made 0700 and refused if it
+  is anyone else's), or `/tmp`, writable by all, for `.AnyUser`; a socket
+  left by a server that ended is taken over (connecting to it is refused),
+  and the listener removes its file. A server for this user alone lets go of
+  a peer of another uid; a client asking so connects only to a server of its
+  own uid (SO_PEERCRED, getpeereid). On Windows a named pipe
+  `\\.\pipe\<name>`: duplex and overlapped, its first instance made with
+  FILE_FLAG_FIRST_PIPE_INSTANCE (AddressInUse otherwise), a DACL of the user's
+  SID alone for `.CurrentUserOnly`, the next instance made as one is
+  accepted; the client checks the pipe's owner, and a connected pipe is two
+  sources over duplicated handles, one to read and one to write. Messages
+  are Windows' alone; a named pipe has no half-close.
+- **SharedMemory, NamedSemaphore.** `shm_open` and `sem_open` with "/name"
+  (macOS takes 31 bytes), mode 0600; on Windows `Local\name`, a paging file's
+  mapping and a semaphore. The mapping is a U8 array as MappedFile's is
+  (FILE_MAP_SHARED), written through `write(_:at:)`. The maker removes the
+  name as it closes (POSIX); on Windows a name lives while any handle does.
+  A wait polls `sem_trywait` / `WaitForSingleObject(0)`, from 50 µs to 10 ms
+  apart, so that a task never blocks its thread and a cancel or a timeout is
+  heard; no system tells a waiter of another process's release.
+- **NamedMutex.** A file of the user's held by `flock` (POSIX) or opened to be
+  shared with no one (Windows): a holder that ends lets it go, as .NET's
+  abandoned mutex, and a thread-affine Windows mutex is no use to tasks that
+  move between threads. Waiting polls as a semaphore's does.
+- **SerialPort.** POSIX opens the device O_NOCTTY and nonblocking, takes it
+  with TIOCEXCL, and sets it raw (cfmakeraw, VMIN 1) with the frame, CRTSCTS
+  or IXON/IXOFF; Linux takes termios's named rates, macOS any by IOSSIOSPEED.
+  Windows opens `\\.\COMn` overlapped, sets its DCB, and has a read return as
+  soon as a byte has come (ReadIntervalTimeout and the multiplier MAXDWORD);
+  like a pipe, a source reads and another writes. A read's limit is
+  `withTimeout`. The ports are /dev's tty and cu devices on macOS, the ttys
+  of Linux that have a device, and the registry's SERIALCOMM on Windows.
+  Tests use a pseudo-terminal, which has no control lines.
+
 ### Dependency injection
 
 `Sable.DependencyInjection` (#81) is Microsoft.Extensions.DependencyInjection
@@ -2346,6 +2416,32 @@ other libraries, differ:
 - *SIGPIPE* is never raised and every descriptor is closed on exec.
 
 `IoError` says why, in cases the systems' codes are sorted into.
+
+**Ping, raw sockets, changes and statistics** (#226):
+
+- *Ping* sends an ICMP echo by the socket of ICMP datagrams that macOS gives
+  anyone and Linux gives the groups `net.ipv4.ping_group_range` names, and
+  by a raw socket (root) where there is none; on Windows by IcmpSendEcho2 on
+  the blocking pool. What comes is read by `PingStatus.of`: a reply of its
+  identifier and sequence (Linux's ping sockets put their own identifier in
+  an echo, so there the sequence alone is matched), or an error (time
+  exceeded, unreachable, too big) about it, by the echo the error carries.
+  Linux keeps a ping socket's errors in its error queue (IP_RECVERR), which
+  is read. The wait is `Task.limited`: `.TimedOut` is a reply, not a throw.
+- *RawSocket* is SOCK_RAW (or the ICMP datagram socket): what an IPv4 one
+  receives begins with the IP header, an IPv6 one's never; IP_HDRINCL sends
+  one's own, its length and offset turned to the host's order on macOS.
+  IcmpMessage, Ipv4Header, Ipv6Header and InternetChecksum (RFC 1071, and
+  ICMPv6's pseudo-header) build and read what goes over it.
+- *NetworkChange* is told that something changed by a routing socket (macOS),
+  netlink's link and address groups (Linux), or NotifyIpInterfaceChange and
+  NotifyUnicastIpAddressChange (Windows), and lists the interfaces again to
+  say what (`differences`): what the systems' messages carry is not read.
+- *NetworkStatistics* reads /proc/net (Linux), the pcblist_n sysctl (macOS,
+  whose records' layout is the kernel's, not the SDK's; without an
+  entitlement it lists only this process's sockets, and TCP's counters read
+  as zeros) and GetExtendedTcpTable, GetExtendedUdpTable, GetTcpStatisticsEx
+  (Windows, IPv4's and IPv6's added).
 
 ### X.509
 

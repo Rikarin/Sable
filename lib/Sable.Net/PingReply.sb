@@ -1,0 +1,19 @@
+module Sable.Net
+
+import Sable.Time
+
+/// What came of a ping (`Ping.send`): .NET's `PingReply`.
+public struct PingReply {
+    /// How it went.
+    public let status: PingStatus
+
+    /// Who answered: the address pinged, or the router that sent an error;
+    /// the address pinged when nothing did.
+    public let address: IpAddress
+
+    /// How long the answer took; the time waited when none came.
+    public let roundTrip: Duration
+
+    /// How many bytes the answer carried after its header.
+    public let payloadSize: Int
+}

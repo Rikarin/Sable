@@ -1,0 +1,212 @@
+module SerialPortTests
+
+// SerialPort, SerialOptions and SerialLines (Sable.IO.Ports): run with
+//     tools/stdlib-coverage.sh Sable.IO.Ports
+//
+// A pseudo-terminal stands in for a port and what is at its other end: its
+// secondary side is opened as the port, and the test reads and writes the
+// primary side as a device would.
+
+import Sable.Concurrency
+import Sable.Interop
+import Sable.IO
+import Sable.IO.Ports
+import Sable.Testing
+import Sable.Time
+
+@test
+fn optionsBeginAsMostDevicesAre() {
+    let options = SerialOptions()
+    assertEqual(options.baudRate, 9600)
+    assertEqual(options.dataBits, 8)
+    expect(options.parity == .None && options.stopBits == .One && options.flowControl == .None)
+}
+
+@test
+fn aPortThatIsNotThereIsNotFound() {
+    #if os(windows)
+    let name = "COM250"
+    #else
+    let name = "/dev/sable-no-such-port"
+    #endif
+    let error = expectThrows { _ = try SerialPort.open(name) }
+    expect("\(error!)".contains("NotFound"))
+}
+
+@test
+fn theMachinesPortsAreListedSorted() {
+    let ports = SerialPort.available()
+    expect(ports == ports.sorted())
+}
+
+#if !os(windows)
+
+@extern("c", "posix_openpt")
+fn openPseudoTerminal(_ flags: CInt) -> CInt
+
+@extern("c", "grantpt")
+fn grantPseudoTerminal(_ fd: CInt) -> CInt
+
+@extern("c", "unlockpt")
+fn unlockPseudoTerminal(_ fd: CInt) -> CInt
+
+@extern("c", "ptsname")
+fn pseudoTerminalName(_ fd: CInt) -> CStr
+
+@extern("c", "write")
+unsafe fn writeDescriptor(_ fd: CInt, _ bytes: RawPtr<U8>, _ count: CSize) -> Int
+
+@extern("c", "read")
+unsafe fn readDescriptor(_ fd: CInt, _ bytes: RawPtr<U8>, _ count: CSize) -> Int
+
+@extern("c", "close")
+fn closeDescriptor(_ fd: CInt) -> CInt
+
+/// A pseudo-terminal: the device's side, and the port's name.
+final class PseudoTerminal: Fixture {
+    let primary: CInt
+    let name: String
+
+    init() {
+        // O_RDWR | O_NOCTTY, whose number is the system's.
+        #if os(linux)
+        primary = openPseudoTerminal(2 | 0o400)
+        #else
+        primary = openPseudoTerminal(2 | 0x20000)
+        #endif
+        if primary >= 0 && grantPseudoTerminal(primary) == 0 && unlockPseudoTerminal(primary) == 0 {
+            name = pseudoTerminalName(primary).string
+        } else {
+            name = ""
+        }
+    }
+
+    /// Whether there is one: a container may have no /dev/ptmx.
+    var isThere: Bool => !name.isEmpty
+
+    /// What the device sends.
+    fn send(_ bytes: U8[>..]) {
+        unsafe {
+            _ = bytes.withPointer { writeDescriptor(primary, $0, CSize(bytes.count)) }
+        }
+    }
+
+    /// What the device has been sent: as much as has come, up to 'count'.
+    fn received(_ count: Int) -> U8[>..] {
+        var all: U8[>..] = []
+        while all.count < count {
+            var room = U8[>..](repeating: 0, count: count - all.count)
+            let got = room.withMutablePointer { (at: RawPtr<U8>) -> Int in
+                unsafe {
+                    return readDescriptor(primary, at, CSize(count - all.count))
+                }
+            }
+            if got <= 0 {
+                break
+            }
+            all.append(contentsOf: room[0..<got])
+        }
+        return all
+    }
+
+    async fn tearDown() throws {
+        if primary >= 0 {
+            _ = closeDescriptor(primary)
+        }
+    }
+}
+
+@test
+fn whatTheDeviceSendsIsReadAndWhatIsWrittenItIsSent(terminal: PseudoTerminal) async throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    let port = try SerialPort.open(terminal.name, SerialOptions { baudRate: 115200 })
+    assertEqual(port.name, terminal.name)
+    terminal.send([104, 105])
+    assertEqual(try await port.readExactly(2), [104, 105])
+    try await port.write([111, 107, 0, 255, 10])
+    // Raw: no byte is changed on the way, nor held for a line.
+    assertEqual(terminal.received(5), [111, 107, 0, 255, 10])
+    // The device has them all: none waits to go.
+    try await port.drain()
+    assertEqual(try port.bytesToWrite(), 0)
+    port.close()
+}
+
+@test
+fn aReadWaitsForTheDevice(terminal: PseudoTerminal) async throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    let port = try SerialPort.open(terminal.name)
+    let reading = Task.spawn { () -> U8[>..] in try! await port.read(upTo: 10) }
+    try? await Task.sleep(for: Duration.milliseconds(10))
+    terminal.send([1, 2, 3])
+    assertEqual(await reading.value, [1, 2, 3])
+    let cancelled = Task.spawn { () -> String in
+        do {
+            _ = try await port.read(upTo: 10)
+            return "read"
+        } catch {
+            return error.description()
+        }
+    }
+    cancelled.cancel()
+    assertEqual(await cancelled.value, IoError.Cancelled.description())
+}
+
+@test
+fn whatHasComeIsCountedAndMayBeDropped(terminal: PseudoTerminal) async throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    let port = try SerialPort.open(terminal.name)
+    terminal.send([1, 2, 3, 4])
+    var waited = 0
+    while try port.bytesToRead() < 4 && waited < 1000 {
+        try? await Task.sleep(for: Duration.milliseconds(1))
+        waited += 1
+    }
+    assertEqual(try port.bytesToRead(), 4)
+    try port.discardInput()
+    assertEqual(try port.bytesToRead(), 0)
+    try port.discardOutput()
+    assertEqual(try port.bytesToWrite(), 0)
+}
+
+@test(arguments: [Parity.None, Parity.Odd, Parity.Even])
+fn framesAreSetAsAsked(parity: Parity, terminal: PseudoTerminal) throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    let port = try SerialPort.open(terminal.name, SerialOptions { baudRate: 9600, dataBits: 7, parity: parity, stopBits: .Two, flowControl: .XonXoff })
+    try port.configure(SerialOptions { baudRate: 57600, dataBits: 8, flowControl: .RtsCts })
+    port.close()
+}
+
+@test
+fn whatNoPortTakesIsRefused(terminal: PseudoTerminal) throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    expectThrows(saying: IoError.InvalidInput(path: terminal.name).description()) {
+        _ = try SerialPort.open(terminal.name, SerialOptions { dataBits: 9 })
+    }
+    expectThrows(saying: IoError.InvalidInput(path: terminal.name).description()) {
+        _ = try SerialPort.open(terminal.name, SerialOptions { stopBits: .OnePointFive })
+    }
+    // A file is no terminal.
+    expectThrows(saying: IoError.InvalidInput(path: "/dev/null").description()) {
+        _ = try SerialPort.open("/dev/null")
+    }
+}
+
+@test
+fn aPseudoTerminalHasNoControlLines(terminal: PseudoTerminal) async throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    let port = try SerialPort.open(terminal.name)
+    // A real port says them; a pseudo-terminal, as the system has it, may not.
+    if let lines = try? port.lines() {
+        expect(lines == lines)
+        try? port.setDataTerminalReady(true)
+        try? port.setRequestToSend(false)
+    }
+    _ = try? await port.sendBreak(for: Duration.milliseconds(1))
+    port.close()
+    expectThrows(saying: IoError.Disconnected.description()) {
+        _ = try port.bytesToRead()
+    }
+}
+
+#endif

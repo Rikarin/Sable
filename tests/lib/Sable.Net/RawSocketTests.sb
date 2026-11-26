@@ -1,0 +1,174 @@
+module RawSocketTests
+
+// RawSocket, IpProtocol, IcmpMessage, Ipv4Header, Ipv6Header and
+// InternetChecksum (Sable.Net): run with
+//     tools/stdlib-coverage.sh Sable.Net
+//
+// A raw socket needs root: the tests that open one are skipped without it.
+
+import NetSupport
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+import Sable.Time
+
+// ---- Checksums and headers ---------------------------------------------------------
+
+@test
+fn theChecksumIsRfc1071s() {
+    assertEqual(InternetChecksum.of([]), 0xFFFF)
+    assertEqual(InternetChecksum.of([0x00, 0x01, 0xf2, 0x03, 0xf4, 0xf5, 0xf6, 0xf7]), 0x220d)
+    // An odd byte is the high half of a last word.
+    assertEqual(InternetChecksum.of([0x01]), 0xFEFF)
+    // Carries fold back in.
+    assertEqual(InternetChecksum.of([0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x02]), 0xFFFD)
+}
+
+@test
+fn anEchoIsBuiltAndReadBack() {
+    let request = IcmpMessage.echoRequest(.V6, identifier: 0x1_ABCD, sequence: 0x1_0002, payload: [7])
+    assertEqual(request.type, 128)
+    // Each is sixteen bits.
+    assertEqual(request.identifier, 0xABCD)
+    assertEqual(request.sequence, 2)
+    let bytes = request.bytes()
+    assertEqual(bytes[0..<2].toArray(), [128, 0])
+    assertEqual(IcmpMessage.parse(bytes)!, IcmpMessage(type: 128, code: 0, rest: 0xABCD_0002, body: [7]))
+    expect(IcmpMessage.parse(bytes[0..<7]) == none)
+}
+
+@test
+fn anIcmpv6ChecksumCoversItsPseudoHeader() {
+    // RFC 4443's sum: the message's words and the pseudo-header's add to
+    // all ones.
+    let source = ip("fe80::1")
+    let destination = ip("ff02::1")
+    let message = IcmpMessage.echoRequest(.V6, identifier: 1, sequence: 1, payload: [1, 2, 3])
+    let bytes = message.bytes(source: source, destination: destination)
+    var pseudo = source.bytes
+    pseudo.append(contentsOf: destination.bytes)
+    pseudo.append(contentsOf: [0, 0, 0, U8(bytes.count), 0, 0, 0, 58])
+    pseudo.append(contentsOf: bytes)
+    assertEqual(InternetChecksum.of(pseudo), 0)
+    expect(bytes != message.bytes())
+}
+
+@test
+fn anIpv4HeaderIsBuiltAndReadBack() {
+    var header = Ipv4Header(ipProtocol: .udp, source: ip("192.0.2.1"), destination: ip("198.51.100.2"), payloadLength: 100, timeToLive: 9)
+    header.identification = 0x1234
+    header.dontFragment = true
+    header.typeOfService = 0x10
+    header.options = [1, 1, 1, 0]
+    let bytes = header.bytes()
+    assertEqual(bytes.count, 24)
+    assertEqual(header.headerLength, 24)
+    assertEqual(bytes[0], 0x46)
+    assertEqual(InternetChecksum.of(bytes), 0)
+    let parsed = Ipv4Header.parse(bytes)!
+    assertEqual(parsed.totalLength, 120)
+    assertEqual(parsed.identification, 0x1234)
+    expect(parsed.dontFragment && !parsed.moreFragments)
+    assertEqual(parsed.fragmentOffset, 0)
+    assertEqual(parsed.timeToLive, 9)
+    assertEqual(parsed.ipProtocol, IpProtocol.udp)
+    assertEqual(parsed.typeOfService, 0x10)
+    assertEqual(parsed.options, [1, 1, 1, 0])
+    assertEqual(parsed.source, ip("192.0.2.1"))
+    assertEqual(parsed.destination, ip("198.51.100.2"))
+    expect(parsed.checksum != 0)
+    // Not IPv4's, or shorter than it says.
+    expect(Ipv4Header.parse(bytes[0..<20]) == none)
+    expect(Ipv4Header.parse(Ipv6Header(nextHeader: .tcp, source: .v6Loopback, destination: .v6Loopback, payloadLength: 0).bytes()) == none)
+}
+
+@test
+fn anIpv6HeaderIsBuiltAndReadBack() {
+    var header = Ipv6Header(nextHeader: .udp, source: ip("2001:db8::1"), destination: ip("2001:db8::2"), payloadLength: 300, hopLimit: 3)
+    header.trafficClass = 0xAB
+    header.flowLabel = 0xF_1234
+    let bytes = header.bytes()
+    assertEqual(bytes[0..<4].toArray(), [0x6A, 0xBF, 0x12, 0x34])
+    assertEqual(Ipv6Header.parse(bytes)!, header)
+    expect(Ipv6Header.parse(bytes[0..<39]) == none)
+    expect(Ipv6Header.parse(Ipv4Header(ipProtocol: .tcp, source: .v4Loopback, destination: .v4Loopback, payloadLength: 20).bytes()) == none)
+}
+
+@test
+fn protocolsAreTheirNumbers() {
+    assertEqual(IpProtocol.icmp.number, 1)
+    assertEqual(IpProtocol.tcp.number, 6)
+    assertEqual(IpProtocol.udp.number, 17)
+    assertEqual(IpProtocol.icmpV6.number, 58)
+    assertEqual(IpProtocol.raw.number, 255)
+    assertEqual(IpProtocol(number: 47), IpProtocol(number: 47))
+}
+
+// ---- Sockets ------------------------------------------------------------------------
+
+/// An ICMP socket, where this user may have one.
+fn icmpSocket(_ family: IpFamily) -> RawSocket? {
+    return try? RawSocket.icmp(family)
+}
+
+@test
+fn anIcmpSocketEchoesOverTheLoopback() async throws {
+    let socket = icmpSocket(.V4)
+    try skip(if: socket == none, "this user may not have an ICMP socket")
+    expect(socket!.isDatagram && socket!.family == .V4 && socket!.ipProtocol == IpProtocol.icmp)
+    try socket!.setHopLimit(7)
+    assertEqual(try socket!.hopLimit(), 7)
+    try socket!.setDontFragment(true)
+    let request = IcmpMessage.echoRequest(.V4, identifier: 77, sequence: 9, payload: [1, 2, 3])
+    try await socket!.send(request.bytes(), to: IpAddress.v4Loopback)
+    let datagram = try await socket!.receive()
+    assertEqual(datagram.source.ip, IpAddress.v4Loopback)
+    #if os(linux)
+    let identifier: Int? = none
+    #else
+    let identifier: Int? = 77
+    #endif
+    assertEqual(PingStatus.of(datagram.bytes, family: .V4, from: datagram.source.ip, identifier: identifier, sequence: 9), PingStatus.Success)
+    socket!.close()
+}
+
+@test
+fn aHopLimitOutOfRangeIsRefused() throws {
+    let socket = icmpSocket(.V4)
+    try skip(if: socket == none, "this user may not have an ICMP socket")
+    expectThrows(saying: IoError.InvalidInput(path: "a hop limit of 0").description()) {
+        try socket!.setHopLimit(0)
+    }
+}
+
+@test
+fn aRawSocketNeedsPrivilege() async throws {
+    do {
+        let socket = try RawSocket.open(.V4, protocol: .icmp)
+        // Root: it sends its own header, and receives the IP header first.
+        expect(!socket.isDatagram)
+        try socket.setHeaderIncluded(true)
+        let echo = IcmpMessage.echoRequest(.V4, identifier: 4242, sequence: 1, payload: [9]).bytes()
+        var packet = Ipv4Header(ipProtocol: .icmp, source: .v4Loopback, destination: .v4Loopback, payloadLength: echo.count).bytes()
+        packet.append(contentsOf: echo)
+        try await socket.send(packet, to: IpAddress.v4Loopback)
+        let reply = try await withRawReply(socket)
+        expect(reply)
+    } catch .PermissionDenied(let what) {
+        assertEqual(what, "a raw socket")
+    } catch .Unsupported(_) {
+        // WASI.
+    }
+}
+
+// Whether the echo's reply comes, among what a raw socket sees.
+fn withRawReply(_ socket: RawSocket) async throws(IoError) -> Bool {
+    for _ in 0..<16 {
+        let datagram = try await socket.receive()
+        expect(Ipv4Header.parse(datagram.bytes) != none)
+        if PingStatus.of(datagram.bytes, family: .V4, from: datagram.source.ip, identifier: 4242, sequence: 1) == PingStatus.Success {
+            return true
+        }
+    }
+    return false
+}

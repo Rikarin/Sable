@@ -1,0 +1,79 @@
+module Sable.Net
+
+extension PingStatus {
+    /// What the ICMP message received (from a raw IPv4 socket, its IP
+    /// header first) says of the echo of the identifier (any, for none)
+    /// and sequence: none for a message about something else.
+    ///
+    /// ```sable
+    /// let reply = IcmpMessage(type: 0, code: 0, rest: 0x0001_0002, body: [])
+    /// assert(PingStatus.of(reply.bytes(), family: .V4, from: .v4Loopback, identifier: 1, sequence: 2)! == .Success)
+    /// assert(PingStatus.of(reply.bytes(), family: .V4, from: .v4Loopback, identifier: 1, sequence: 3) == none)
+    /// ```
+    public static fn of(_ bytes: U8[:], family: IpFamily, from: IpAddress, identifier: Int?, sequence: Int) -> PingStatus? {
+        var data = bytes.toArray()
+        if family == .V4 && data.count >= 20 && data[0] >> 4 == 4 {
+            data = data[Int(data[0] & 0xF) * 4...].toArray()
+        }
+        guard let message = IcmpMessage.parse(data) else {
+            return none
+        }
+        if message.type == (family == .V4 ? 0 : 129) {
+            let mine = message.sequence == sequence && (identifier == none || message.identifier == identifier)
+            return mine ? PingStatus.Success : none
+        }
+        guard let status = PingStatus.ofError(family, type: message.type, code: message.code, from: from) else {
+            return none
+        }
+        // The datagram it is about: its IP header, then the echo's.
+        let inner = message.body
+        let skip = family == .V4 ? (inner.isEmpty ? 0 : Int(inner[0] & 0xF) * 4) : 40
+        if inner.count < skip + 8 {
+            return none
+        }
+        guard let echo = IcmpMessage.parse(inner[skip...]) else {
+            return none
+        }
+        let mine = echo.type == (family == .V4 ? 8 : 128) && echo.sequence == sequence && (identifier == none || echo.identifier == identifier)
+        return mine ? status : none
+    }
+
+    // An error's type and code, as a status; none for one that is not
+    // about an echo's delivery.
+    static fn ofError(_ family: IpFamily, type: Int, code: Int, from: IpAddress) -> PingStatus? {
+        if family == .V4 {
+            return match type {
+                case 11 => PingStatus.TtlExpired(from: from)
+                case 3  => code == 4 ? PingStatus.PacketTooBig(from: from) : PingStatus.Unreachable(code: code, from: from)
+                case _  => none
+            }
+        }
+        return match type {
+            case 3 => PingStatus.TtlExpired(from: from)
+            case 1 => PingStatus.Unreachable(code: code, from: from)
+            case 2 => PingStatus.PacketTooBig(from: from)
+            case _ => none
+        }
+    }
+
+    /// Windows' IP_STATUS for an echo (IcmpSendEcho2's: IP_SUCCESS, or
+    /// IP_STATUS_BASE 11000 and more) as a status, for an echo of IPv6 or
+    /// not.
+    ///
+    /// ```sable
+    /// assert(PingStatus.ofIpStatus(11010, six: false, from: .v4Loopback) == .TimedOut)
+    /// ```
+    public static fn ofIpStatus(_ status: Int, six: Bool, from: IpAddress) -> PingStatus {
+        return match status {
+            case 0            => PingStatus.Success
+            case 11010        => PingStatus.TimedOut
+            case 11013, 11014 => PingStatus.TtlExpired(from: from)
+            case 11002        => PingStatus.Unreachable(code: 0, from: from)
+            case 11003        => PingStatus.Unreachable(code: six ? 3 : 1, from: from)
+            case 11004        => PingStatus.Unreachable(code: six ? 1 : 2, from: from)
+            case 11005        => PingStatus.Unreachable(code: six ? 4 : 3, from: from)
+            case 11009        => PingStatus.PacketTooBig(from: from)
+            case _            => PingStatus.Failed(code: status)
+        }
+    }
+}

@@ -1,0 +1,130 @@
+module Sable.IO.Ipc
+
+import Sable.IO
+
+/// Memory that processes share by a name: POSIX's `shm_open`, a paging
+/// file's mapping on Windows (`CreateFileMapping`); .NET's
+/// `MemoryMappedFile.CreateNew(name)`. `bytes` is the mapping itself: what
+/// one process writes (`write(_:at:)`) the others read there, at once.
+/// Nothing orders their reads and writes: guard them with a
+/// `NamedSemaphore` or a `NamedMutex`.
+///
+/// The name is up to 30 letters, digits, '.', '_' and '-' (macOS takes no
+/// more). Its maker's `close()` removes it (POSIX), and opening it then
+/// throws NotFound; a mapping already open stays until it is closed. On
+/// Windows it lives while any process has it, and shares its names with
+/// semaphores.
+///
+/// ```sable
+/// let maker = try! SharedMemory.create(name: "sable-shared-example", size: 4096)
+/// let other = try! SharedMemory.open(name: "sable-shared-example")
+/// try! maker.write([7, 8, 9], at: 100)
+/// assert(other.bytes[100] == 7 && other.count >= 4096)
+/// other.close()
+/// maker.close()
+/// ```
+public final class SharedMemory {
+    /// Its name.
+    public let name: String
+    // Its handle (Windows keeps it: the name lives while a handle does).
+    var handle: Int
+    let made: Bool
+    var mapped: U8[>..]
+
+    init(name: String, handle: Int, made: Bool) {
+        self.name = name
+        self.handle = handle
+        self.made = made
+        self.mapped = []
+    }
+
+    deinit {
+        close()
+    }
+
+    /// Made, of the size, its bytes zero: AlreadyExists when the name is
+    /// another's already.
+    public static fn create(name: String, size: Int) throws(IoError) -> SharedMemory {
+        if size <= 0 {
+            throw IoError.InvalidInput(path: name)
+        }
+        return try SharedMemory.opening(name, size, create: true)
+    }
+
+    /// The shared memory of the name, made by another: NotFound when there
+    /// is none. Its `count` is at least the size it was made with, rounded
+    /// up to whole pages on some systems.
+    public static fn open(name: String) throws(IoError) -> SharedMemory {
+        return try SharedMemory.opening(name, 0, create: false)
+    }
+
+    static fn opening(_ name: String, _ size: Int, create: Bool) throws(IoError) -> SharedMemory {
+        try checkName(name, most: 30)
+        var actual: Int[>..] = [0]
+        let handle = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
+            return actual.withMutablePointer { (into: RawPtr<Int>) -> Int in
+                unsafe {
+                    return sharedOpen(at, count, size, create, into)
+                }
+            }
+        }
+        if handle < 0 {
+            throw IoError.lastSystemError(name)
+        }
+        let memory = SharedMemory(name: name, handle: handle, made: create)
+        let bytes = actual[0] > 0 ? Runtime.fileMap(handle, actual[0], 3) : []
+        if bytes.isEmpty {
+            let error = actual[0] > 0 ? IoError.Os(path: name, code: Runtime.fileErrorCode()) : IoError.InvalidData(what: "'\(name)' has no bytes")
+            memory.close()
+            throw error
+        }
+        memory.mapped = bytes
+        #if !os(windows)
+        // The mapping outlives the descriptor.
+        closeHandle(handle)
+        memory.handle = -1
+        #endif
+        return memory
+    }
+
+    /// The bytes, the mapping itself: what others write is seen in them.
+    /// Changing the array changes a copy of it; `write` writes the memory.
+    public var bytes: U8[>..] {
+        get {
+            return mapped
+        }
+    }
+
+    /// How many bytes there are.
+    public var count: Int {
+        get {
+            return mapped.count
+        }
+    }
+
+    /// The bytes written from the offset on, for every process to see:
+    /// InvalidInput past the end, or once closed.
+    public fn write(_ bytes: U8[:], at offset: Int) throws(IoError) {
+        if !Runtime.fileMapStore(mapped, offset, bytes) {
+            throw IoError.InvalidInput(path: name)
+        }
+    }
+
+    /// Let go of: the mapping, once no array taken from `bytes` holds it,
+    /// and, by its maker, the name.
+    public fn close() {
+        let wasOpen = !mapped.isEmpty || handle >= 0
+        mapped = []
+        if handle >= 0 {
+            closeHandle(handle)
+            handle = -1
+        }
+        if made && wasOpen {
+            _ = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Bool in
+                unsafe {
+                    return sharedRemove(at, count)
+                }
+            }
+        }
+    }
+}

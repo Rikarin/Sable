@@ -7588,7 +7588,7 @@ public sealed partial class SilGen {
                     return ReferenceTo(reference.Operand);
 
                 case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var target }:
-                    return ReferenceTo(target);
+                    return target.IsAssignable && IsElementPlace(target) ? ElementReference(target) : ReferenceTo(target);
 
                 // An object as one of its superclasses: the same object, owned as that.
                 // A function as a function type that throws more: a thunk.
@@ -7920,6 +7920,12 @@ public sealed partial class SilGen {
 
                 case BoundCall call: {
                     var result = Call(call);
+
+                    // A reference a mutating member gives is into its receiver,
+                    // which it holds until its last use (RootChecker.CheckExclusive).
+                    if (result is { Type: AddressType } && call.Function.IsMutating && Sub(call.Type) is ReferenceTypeSymbol) {
+                        function.ExclusiveReferences.Add(result);
+                    }
 
                     // A call to a function that gives Never does not come back:
                     // nothing after it runs.
@@ -8303,6 +8309,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
+                BeginDeferred(ends);
                 Unhold(value);
                 Emit(new BuiltinInst("array_set", SilType.Unit, arrayAddress, index, value));
                 EndAll(ends);
@@ -8314,6 +8321,7 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            BeginDeferred(borrows);
             Unhold(value);
             switch (((AddressType)address.Type).Pointee) {
                 // A weak or unowned field is given the object without taking the value.
@@ -8690,6 +8698,15 @@ public sealed partial class SilGen {
                 // The whole of an array, where an inout slice is wanted: 'fill(&values)'.
                 case BoundConversion { ConversionKind: ConversionKind.Identity } view when IsArrayView(view) && !IsInlineArray(view.Operand):
                     return ArrayForWriteBack(view, borrows);
+
+                // What a reference that writes refers to: 'r.v = 1', 'c.at(0).bump()'.
+                case BoundConversion { ConversionKind: ConversionKind.Dereference } dereference:
+                    return Expression(dereference.Operand) is { Type: AddressType } referred ? referred : Missing(target, $"storing through '{Describe(target.Syntax)}'");
+
+                // A slice's elements seen as another type's, where they are:
+                // 'xs.reinterpreted(as: U8.self)[0] = 1' (SilGen.Views.cs).
+                case BoundCall { IsView: true, Receiver: not null } reinterpretation:
+                    return ReinterpretedPlace(reinterpretation, borrows);
 
                 // An element of an array, where it is: 'bump(&values[0])'.
                 case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element
@@ -12860,6 +12877,26 @@ public sealed partial class SilGen {
                 var at = Emit(new BuiltinInst(name == "sliceEnd" ? "slice_end" : "slice_address", name == "sliceEnd" ? SilType.Unit : SilType.Int, slice));
                 End(slice);
                 return name == "sliceEnd" ? UnitValue.Instance : at;
+            }
+
+            // A slice's bytes as another type's slice: the same buffer (Array+Views.sb).
+            if (name == "reinterpret" && call.Arguments is [var reinterpreted, var fromStride, var toStride, _]) {
+                if (LowerType(call.Type) is not SliceType viewType) {
+                    return Missing(call, "the slice 'reinterpret' gives");
+                }
+
+                if (Borrow(reinterpreted) is not { } slice) {
+                    return null;
+                }
+
+                if (Expression(fromStride) is not { } from || Expression(toStride) is not { } to) {
+                    End(slice);
+                    return null;
+                }
+
+                var view = Emit(new BuiltinInst("slice_reinterpret", viewType, slice, from, to));
+                End(slice);
+                return view;
             }
 
             var builtin = name switch {

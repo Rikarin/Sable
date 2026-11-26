@@ -309,6 +309,13 @@ internal sealed class Conversions(CoreTypes core) {
                 && ConstraintsSatisfy(source, constraint, context);
         }
 
+        // PlainData too: a type is its bytes alone, or it is not.
+        if (PlainData.IsPlainDataProtocol(constraint)) {
+            return source is TypeParameterSymbol or DependentMemberTypeSymbol
+                ? ConstraintsSatisfy(source, constraint, context)
+                : PlainData.Why(source) is null;
+        }
+
         // CSignature is met by a function type C can have, by what it takes
         // and gives (Compilation.Interop.cs).
         if (source is FunctionTypeSymbol && Compilation.IsCSignatureProtocol(constraint)) {

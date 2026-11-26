@@ -1884,8 +1884,11 @@ default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
   loads of four lanes need no alignment on either processor. std140 and std430
   align a `vec3` and a `mat3`'s columns to 16, which is the buffer's padding
   to lay out: a `Vector4` or a `Matrix4x4`, or an `@align(16)` struct around
-  the field. `withComponents` views an array of them as `F32`s and `withBytes`
-  as bytes, with no copy; `simd` and `init(_: SIMD)` go to and from a register.
+  the field. They are PlainData, so `components` views an array of them as
+  `F32`s and Sable.Core's `bytes` as bytes, the same buffer with no copy, and
+  `withMutableComponents` lends the `F32`s to change in place, all safe code
+  (`reinterpreted(as:)`, docs/02 §2.5); `simd` and `init(_: SIMD)` go to and
+  from a register.
 - **Scalars, and F64.** The types are of `F32`, not generic: generics cost
   nothing specialised, but a build compiled once for every type
   (`SABLE_GENERICS=unspecialised`) would call an addition through a witness,

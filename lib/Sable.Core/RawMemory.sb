@@ -72,4 +72,11 @@ struct RawMemory {
     /// The end of what is done at the elements: they are there till then.
     @intrinsic
     unsafe static fn sliceEnd<T>(_ slice: T[:])
+
+    /// The slice's bytes, seen as a slice of 'T': the same buffer, held, the
+    /// run measured in the other stride. Traps unless the run's bytes are a
+    /// whole number of T's and start at a multiple of its stride. The
+    /// strides must be the two types', and both types PlainData.
+    @intrinsic
+    unsafe static fn reinterpret<E, T>(_ slice: E[:], _ fromStride: Int, _ toStride: Int, _ type: T.Type) -> T[:]
 }

@@ -102,6 +102,12 @@ internal static class ConformanceChecker {
             Report(diagnostics, ErrorCode.ERR_DeclaredSendableIsNot, type, notSendable);
         }
 
+        // PlainData, likewise: what it asks is the type's layout.
+        if (type.BaseTypes.Any(static b => !b.IsError && PlainData.Refines(b))
+            && PlainData.WhyNotAsDeclared(type) is { } notPlain) {
+            Report(diagnostics, ErrorCode.ERR_DeclaredPlainDataIsNot, type, notPlain);
+        }
+
         if (classBases > 1) {
             Report(
                 diagnostics,

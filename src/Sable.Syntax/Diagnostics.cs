@@ -144,6 +144,8 @@ public enum ErrorCode {
     ERR_ExposesHiddenType = 3063,
     ERR_OverrideSignatureMismatch = 3065,
     ERR_InvalidCast = 3066,
+    // A reference into an element of an object's or a global's array, kept past where it is made (S3067).
+    ERR_ElementReferenceKept = 3067,
     ERR_UnknownDerivation = 3070,
     ERR_CannotDerive = 3071,
     ERR_DerivedFieldDoesNotConform = 3072,
@@ -272,6 +274,9 @@ public enum ErrorCode {
     ERR_YieldInDefer = 3481,
     ERR_ReturnValueInGenerator = 3482,
     ERR_InoutParameterInGenerator = 3483,
+
+    // A type declared ': PlainData' that is not its bytes alone (S3490).
+    ERR_DeclaredPlainDataIsNot = 3490,
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,

@@ -437,6 +437,8 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            BeginDeferred(borrows);
+
             // What the builtin keeps is evaluated owned; it can only be known
             // from the operands, so the consumed positions are the array
             // operations' own: an appended element.

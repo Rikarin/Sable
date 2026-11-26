@@ -34,6 +34,24 @@ public abstract class BoundExpression(SyntaxNode syntax, TypeSymbol type) : Boun
 
     /// <summary>True when this expression names storage that can be assigned.</summary>
     public virtual bool IsAssignable => false;
+
+    /// <summary>
+    ///     True for a reference that may be written through (SYNTAX.md
+    ///     "References that write"): <c>&amp;x</c> of a place that may be
+    ///     written, what a <c>mutating</c> member returns, and a local that
+    ///     holds one. A <c>T&amp;</c> parameter, and what any other function
+    ///     returns, only read.
+    /// </summary>
+    public static bool IsWritableReference(BoundExpression expression) =>
+        expression switch {
+            BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var place } => place.IsAssignable,
+            BoundConversion { ConversionKind: ConversionKind.Reference, Operand: var place } => place.IsAssignable,
+            BoundConversion { ConversionKind: ConversionKind.Identity, Operand: var same } => IsWritableReference(same),
+            BoundCall { Function.IsMutating: true, Type: ReferenceTypeSymbol } => true,
+            BoundLocalAccess { Local.IsWritableReference: true } => true,
+            BoundConditional conditional => IsWritableReference(conditional.WhenTrue) && IsWritableReference(conditional.WhenFalse),
+            _ => false,
+        };
 }
 
 public abstract class BoundStatement(SyntaxNode syntax) : BoundNode(syntax);
@@ -256,6 +274,37 @@ public sealed class BoundCall(
     ///     them. Empty for a call to nothing generic.
     /// </summary>
     public TypeSubstitution Substitution { get; init; } = TypeSubstitution.Empty;
+
+    /// <summary>
+    ///     A view of the receiver's elements as another type's,
+    ///     <c>xs.reinterpreted(as: U8.self)</c>: a place where the receiver
+    ///     is one (SYNTAX.md "Views of a slice's bytes"), changed where the
+    ///     receiver's elements are.
+    /// </summary>
+    public bool IsView => IsReinterpretation(Function);
+
+    public override bool IsAssignable =>
+        IsView && Receiver is { } viewed
+               && (viewed is BoundConversion { ConversionKind: ConversionKind.Identity } converted ? converted.Operand : viewed).IsAssignable;
+
+    /// <summary>Sable.Core's <c>reinterpreted(as:)</c> of <c>Element[:]</c>.</summary>
+    public static bool IsReinterpretation(FunctionSymbol function) {
+        var owner = function.ContainingSymbol switch {
+            NamedTypeSymbol type => type,
+            ExtensionSymbol extension => extension.ExtendedType,
+            _ => null,
+        };
+        if (function is not { Name: "reinterpreted", Parameters: [{ Label: "as" }] } || owner is not { ExtendedArray: not null }) {
+            return false;
+        }
+
+        Symbol? container = function;
+        while (container is not null and not ModuleSymbol) {
+            container = container.ContainingSymbol;
+        }
+
+        return container is ModuleSymbol { Name: "Sable.Core" };
+    }
 
     public override IEnumerable<BoundNode> Children => Nodes([Receiver, ..Arguments]);
 }
@@ -482,6 +531,9 @@ public sealed class BoundConversion(
 
     /// <summary><c>x unchecked as U8</c>: a numeric conversion that wraps or truncates rather than trapping.</summary>
     public bool IsUnchecked { get; init; }
+
+    /// <summary>What a reference that writes refers to may be written: <c>r.v = 1</c>, <c>c.at(0).bump()</c>.</summary>
+    public override bool IsAssignable => ConversionKind == ConversionKind.Dereference && IsWritableReference(Operand);
 
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }

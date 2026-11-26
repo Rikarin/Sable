@@ -2372,6 +2372,13 @@ public static class SilBuiltins {
             return operands is [var forgotten] ? new([forgotten], SilType.Unit) { Consumed = [0] } : null;
         }
 
+        // An enum's payload, borrowed out of it by a 'switch_enum', made the
+        // caller's own as the enum it was in ends with nothing released: a
+        // move-only value moved out of an optional (#344).
+        if (name == "enum_take_payload") {
+            return operands is [var payload, EnumType] ? new([operands[0], operands[1]], payload) { Consumed = [1] } : null;
+        }
+
         if (name == "c_address") {
             return operands is [FunctionType] ? new([operands[0]], SilType.Int) : null;
         }

@@ -6157,15 +6157,20 @@ public sealed partial class SilGen {
                     // The loop's 'break' goes to after too. 'while true' decides nothing: only a jump leaves it.
                     var decision = loop is { Syntax: WhileStatementSyntax written, Condition: not BoundLiteral } ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
                     _current = header;
+                    // What the condition binds ends with each time round, as an 'if''s does.
+                    _scopes.Add([]);
                     Condition(loop.Condition, Mark(body, decision, 0), Land(after, decision, 1));
 
                     _current = body;
                     InLoop(loop, after, header, () => Statement(loop.Body));
                     if (_current is not null) {
+                        RunDefers(_scopes.Count - 1);
                         Branch(header);
                     }
 
                     _current = after;
+                    RunDefers(_scopes.Count - 1);
+                    _scopes.RemoveAt(_scopes.Count - 1);
                     return;
                 }
 
@@ -6335,6 +6340,9 @@ public sealed partial class SilGen {
                 return;
             }
 
+            // What the condition binds ends with the statement: a move-only
+            // value's deinit runs as the 'if' is done, not as the function is.
+            _scopes.Add([]);
             var consequence = function.AddBlock();
             var alternative = ifStatement.Alternative is null ? after : function.AddBlock();
             Condition(ifStatement.Condition, Mark(consequence, decision, 0),
@@ -6355,6 +6363,8 @@ public sealed partial class SilGen {
             }
 
             _current = after;
+            RunDefers(_scopes.Count - 1);
+            _scopes.RemoveAt(_scopes.Count - 1);
         }
 
         /// <summary><c>for i in a..&lt;b</c> and <c>a...b</c>: a counting loop, with no range built.</summary>
@@ -6972,8 +6982,15 @@ public sealed partial class SilGen {
                     var payload = Payload(bound, optionalType.Cases[some].Payload);
                     Jump(new SwitchEnumInst(optional, [(some, bound)], Destroying(optional, Land(whenFalse, decision, 1))));
                     _current = bound;
-                    BindLocal(local, payload, binding.Syntax);
-                    Destroy(optional);
+                    // A move-only value is moved out of an optional the
+                    // condition owns: a temporary's, or one moved (#344).
+                    if (IsOwned(optional) && IsMoveOnly(payload.Type)) {
+                        BindLocal(local, Emit(new BuiltinInst("enum_take_payload", payload.Type, payload, optional)), binding.Syntax);
+                    } else {
+                        BindLocal(local, payload, binding.Syntax);
+                        Destroy(optional);
+                    }
+
                     Branch(whenTrue);
                     return;
                 }

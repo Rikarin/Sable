@@ -1506,6 +1506,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "forget":
                 return null;
 
+            case "enum_take_payload":
+                return operands[0];
+
             // An actor's identity: the interpreter's hops never wait, so need none.
             case "address_to_int":
                 return 0L;

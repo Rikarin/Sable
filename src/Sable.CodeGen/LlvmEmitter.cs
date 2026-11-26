@@ -4989,6 +4989,10 @@ public sealed partial class LlvmEmitter {
                 case "address_end" or "slice_end" or "forget":
                     return;
 
+                case "enum_take_payload":
+                    _names[builtin] = operands[0];
+                    return;
+
                 case "array_address": {
                     var addressed = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(addressed.Element))})");

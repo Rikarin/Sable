@@ -291,4 +291,124 @@ public sealed class ReportedGapTests {
             Assert.Equal(expected, Programs.BuildAndRun(source, optimise: false).Stdout);
         }
     }
+
+    /// <summary>'if let', 'guard let' and 'while let' move a move-only value out of an optional the condition owns; what an 'if' or a 'while' binds ends with it (#344).</summary>
+    [Fact]
+    public void IfLetMovesAMoveOnlyValueOutOfAnOptional() =>
+        Assert.Equal(
+            """
+            1
+            closed 1
+            after 1
+            none
+            small
+            closed 2
+            after 2
+            closed 3
+            30
+            -1
+            guarded 4
+            closed 4
+            4
+            loop 5
+            closed 5
+            loop 6
+            closed 6
+            cond 7
+            closed 7
+            closed 8
+            break 9
+            closed 9
+            t
+            gone t
+            end
+
+            """,
+            Programs.AssertAgree("""
+            module IfLetMoveOnly
+
+            @noncopy
+            struct Handle {
+                var id: Int
+
+                deinit {
+                    print("closed \(id)")
+                }
+            }
+
+            fn opened(_ id: Int) -> Handle? {
+                return id == 0 ? none : Handle { id: id }
+            }
+
+            fn early(_ id: Int) -> Int {
+                if let handle = opened(id) {
+                    return handle.id * 10
+                }
+                return -1
+            }
+
+            fn guarded(_ id: Int) -> Int {
+                guard let handle = opened(id) else {
+                    return -1
+                }
+                print("guarded \(handle.id)")
+                return handle.id
+            }
+
+            final class Tracked {
+                let name: String
+
+                init(_ name: String) {
+                    self.name = name
+                }
+
+                deinit {
+                    print("gone \(name)")
+                }
+            }
+
+            fn made(_ name: String) -> Tracked? {
+                return Tracked(name)
+            }
+
+            @main
+            fn main() {
+                if let handle = opened(1) {
+                    print(handle.id)
+                }
+                print("after 1")
+                if let handle = opened(0) {
+                    print(handle.id)
+                } else {
+                    print("none")
+                }
+                if let handle = opened(2), handle.id > 5 {
+                    print("big")
+                } else {
+                    print("small")
+                }
+                print("after 2")
+                print(early(3))
+                print(early(0))
+                print(guarded(4))
+                var n = 0
+                while let handle = opened(n < 2 ? 5 + n : 0) {
+                    print("loop \(handle.id)")
+                    n += 1
+                }
+                var m = 0
+                while let handle = opened(7 + m), handle.id < 8 {
+                    print("cond \(handle.id)")
+                    m += 1
+                }
+                while let handle = opened(9) {
+                    print("break \(handle.id)")
+                    break
+                }
+                if let t = made("t") {
+                    print(t.name)
+                }
+                print("end")
+            }
+            """).Stdout);
 }

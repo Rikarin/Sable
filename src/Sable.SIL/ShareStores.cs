@@ -198,7 +198,7 @@ static class ShareStores {
                         case StoreInst store when Base(store.Address) is AllocRefInst or AllocStackInst:
                             break;
 
-                        case StructElementAddrInst or TupleElementAddrInst or BuiltinInst { Name: "opaque_cast" or "opaque_address" or "opaque_borrow_as" } when direct:
+                        case StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or BuiltinInst { Name: "opaque_cast" or "opaque_address" or "opaque_borrow_as" } when direct:
                             if (use.Type is not AddressType { Pointee.IsTrivial: true } && seen.Add(use)) {
                                 pending.Push((use, true));
                             }
@@ -207,7 +207,7 @@ static class ShareStores {
 
                         // A part of what holds it, or what holds that.
                         case LoadInst or LoadBorrowInst or CopyValueInst or UncheckedRefCastInst or UpcastInst or PartialApplyInst or StructInst or TupleInst or EnumInst
-                            or StructExtractInst or TupleExtractInst or RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst
+                            or StructExtractInst or StructTakeInst or OwnedUpcastInst or TupleExtractInst or RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst
                             or BuiltinInst { Name: "opaque_cast" or "opaque_address" or "opaque_borrow_as" }:
                             Holds(use);
                             break;
@@ -252,6 +252,7 @@ static class ShareStores {
             address switch {
                 StructElementAddrInst element => Base(element.Address),
                 TupleElementAddrInst element => Base(element.Address),
+                EnumPayloadAddrInst element => Base(element.Address),
                 RefElementAddrInst field => field.Reference,
                 _ => address,
             };

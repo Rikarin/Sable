@@ -383,10 +383,27 @@ public sealed class BorrowLoads : ISilPass {
 
         var slot = ExclusiveOf(load.Address);
         var owner = Owner(load.Address);
+        // A field of an object borrowed from storage, the borrow ended before
+        // the copy is destroyed — 'program.ops[pc]' of a class's field each
+        // turn of a loop: the borrow's end sinks to the destroy, where
+        // nothing on the way writes the storage it is of.
+        EndBorrowInst? sunk = null;
         for (var k = index + 1; k < end; k++) {
-            if (MayWrite(block.Instructions[k], slot, owner)) {
+            var instruction = block.Instructions[k];
+            if (sunk is null && owner is LoadBorrowInst && instruction is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, owner)) {
+                sunk = (EndBorrowInst)instruction;
+                continue;
+            }
+
+            if (MayWrite(instruction, slot, owner)
+                || sunk is not null && owner is LoadBorrowInst outer && MayWrite(instruction, ExclusiveOf(outer.Address), Owner(outer.Address))) {
                 return null;
             }
+        }
+
+        if (sunk is not null) {
+            block.Instructions.Remove(sunk);
+            block.Instructions.Insert(block.Instructions.IndexOf(destroy) + 1, sunk);
         }
 
         return destroy;
@@ -407,6 +424,7 @@ public sealed class BorrowLoads : ISilPass {
             SilArgument { Type: AddressType } parameter when parameter.Block == parameter.Block.Function.Entry => parameter,
             StructElementAddrInst element => ExclusiveOf(element.Address),
             TupleElementAddrInst element => ExclusiveOf(element.Address),
+            EnumPayloadAddrInst element => ExclusiveOf(element.Address),
             _ => null,
         };
 
@@ -415,6 +433,7 @@ public sealed class BorrowLoads : ISilPass {
             AllocStackInst slot => slot,
             StructElementAddrInst element => SlotOf(element.Address),
             TupleElementAddrInst element => SlotOf(element.Address),
+            EnumPayloadAddrInst element => SlotOf(element.Address),
             _ => null,
         };
 
@@ -428,6 +447,7 @@ public sealed class BorrowLoads : ISilPass {
             RefElementAddrInst field => KeptBy(field.Reference),
             StructElementAddrInst element => Owner(element.Address),
             TupleElementAddrInst element => Owner(element.Address),
+            EnumPayloadAddrInst element => Owner(element.Address),
             _ => null,
         };
 
@@ -452,7 +472,7 @@ public sealed class BorrowLoads : ISilPass {
             // A stack slot, or an inout parameter, is written only by something given its address.
             foreach (var operand in instruction.Operands) {
                 if (operand.Type is AddressType && SameStorage(ExclusiveOf(operand), slot)
-                    && instruction is not (LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or StructElementAddrInst or TupleElementAddrInst)) {
+                    && instruction is not (LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst)) {
                     return true;
                 }
             }
@@ -478,7 +498,7 @@ public sealed class BorrowLoads : ISilPass {
             LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or EndBorrowInst => false,
             IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or MetadataInst => false,
             StructInst or TupleInst or EnumInst or StructExtractInst or TupleExtractInst => false,
-            StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => false,
+            StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or RefElementAddrInst => false,
             CopyValueInst or UpcastInst or UncheckedRefCastInst or ClassMethodInst => false,
             // An exclusivity marker or check reads where an access is; it writes nothing the program sees.
             BuiltinInst builtin => !SharedStorage.IsMarker(builtin.Name)
@@ -528,7 +548,8 @@ public sealed class ForwardCopies : ISilPass {
             var uses = new Uses(function);
             foreach (var block in function.Blocks) {
                 for (var i = 0; i < block.Instructions.Count; i++) {
-                    if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst } load && TryTake(function, block, i, load, uses)) {
+                    if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst } load
+                        && (TryTake(function, block, i, load, uses) || TryMoveToConsumer(function, block, i, load, uses))) {
                         changed = true;
                         break;
                     }
@@ -689,7 +710,7 @@ public sealed class ForwardCopies : ISilPass {
         instruction switch {
             IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or MetadataInst => true,
             StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => true,
-            StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => true,
+            StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or RefElementAddrInst => true,
             LoadInst { Kind: LoadKind.Trivial } or LoadBorrowInst or CopyValueInst => true,
             EndBorrowInst ended => root is null || !ReferenceEquals(ended.Borrowed, root),
             StructInst or TupleInst or EnumInst => instruction.Type.IsTrivial,
@@ -798,7 +819,7 @@ public sealed class ForwardCopies : ISilPass {
     ///     ended before the switch is ended in each case instead.
     /// </summary>
     static bool TryBorrowedElementAcrossSwitch(SilFunction function, SilBlock block, int index, BuiltinInst read, Uses uses) {
-        if (block.Terminator is not SwitchEnumInst switchEnum || !ReferenceEquals(switchEnum.Value, read)) {
+        if (block.Terminator is not SwitchEnumInst { Takes: false } switchEnum || !ReferenceEquals(switchEnum.Value, read)) {
             return false;
         }
 
@@ -949,6 +970,62 @@ public sealed class ForwardCopies : ISilPass {
 
         return false;
     }
+
+    /// <summary>
+    ///     A local's last use, a call's <c>consuming</c> argument: the value
+    ///     is moved into the call, not copied for it, so that what the callee
+    ///     is given it holds alone — a buffer it changes in place rather than
+    ///     copying it first. Nothing may use the slot between the load and its
+    ///     destroy, in the load's block; and the value must hold no object
+    ///     but arrays' buffers and strings: one an object holds, the move
+    ///     could free sooner than the scope says — under an 'unowned'
+    ///     reference to it, or before its deinit was to run.
+    /// </summary>
+    static bool TryMoveToConsumer(SilFunction function, SilBlock block, int index, LoadInst load, Uses uses) {
+        var slot = (AllocStackInst)load.Address;
+        if (slot.Unmanaged || uses.Of(load) is not [{ } call] || call is not (ApplyInst or TryApplyInst) || !Uses.Consumes(call, load)
+            || !HoldsNoObject(load.Type)) {
+            return false;
+        }
+
+        for (var k = index + 1; k < block.Instructions.Count; k++) {
+            var instruction = block.Instructions[k];
+            if (instruction is DestroyAddrInst { Uncounted: false } destroy && ReferenceEquals(destroy.Address, slot)) {
+                var taken = new LoadInst(slot, LoadKind.Take) { Block = block, Location = load.Location };
+                block.Instructions[index] = taken;
+                Uses.Replace(function, load, taken);
+                block.Instructions.Remove(destroy);
+                return true;
+            }
+
+            if (instruction.Operands.Any(o => o.Type is AddressType && SlotUnder(o) == slot)) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether a value holds nothing that can be referred to but by it: trivial bits, strings, arrays of such, and aggregates of them.</summary>
+    static bool HoldsNoObject(SilType type, int depth = 0) =>
+        depth < 16 && type switch {
+            _ when type.IsTrivial => true,
+            _ when type == SilType.String => true,
+            ArrayType array => HoldsNoObject(array.Element, depth + 1),
+            StructType { Deinit: null, IsInline: false } structType => structType.Fields.TrueForAll(f => HoldsNoObject(f.Type, depth + 1)),
+            TupleType tuple => tuple.Elements.All(e => HoldsNoObject(e, depth + 1)),
+            EnumType enumType => enumType.Cases.TrueForAll(c => c.Payload is null || HoldsNoObject(c.Payload, depth + 1)),
+            _ => false,
+        };
+
+    static AllocStackInst? SlotUnder(SilValue address) =>
+        address switch {
+            AllocStackInst slot => slot,
+            StructElementAddrInst element => SlotUnder(element.Address),
+            TupleElementAddrInst element => SlotUnder(element.Address),
+            EnumPayloadAddrInst element => SlotUnder(element.Address),
+            _ => null,
+        };
 
     /// <summary>
     ///     An instruction that leaves every value it is given alive: one with

@@ -208,7 +208,7 @@ public sealed class Simplify : ISilPass {
                 }
 
                 var known = box;
-                while (known is UpcastInst or CopyValueInst) {
+                while (known is UpcastInst or OwnedUpcastInst or CopyValueInst) {
                     known = ((SilInstruction)known).Operands[0];
                 }
 
@@ -403,6 +403,15 @@ public sealed class Simplify : ISilPass {
                 continue;
             }
 
+            // A switch that took the enum it was given passes the payload on, owned: the enum is never made.
+            if (block.Terminator is SwitchEnumInst { Takes: true, Value: EnumInst taken }) {
+                if (function.Blocks.Any(b => b.Instructions.Any(i => i != block.Terminator && i.Operands.Contains(taken)))) {
+                    continue;
+                }
+
+                taken.Block.Instructions.Remove(taken);
+            }
+
             replacement.Location = block.Terminator!.Location;
             replacement.Block = block;
             block.Instructions[^1] = replacement;
@@ -419,6 +428,7 @@ public sealed class Simplify : ISilPass {
             null => null,
             { Arguments.Count: 0 } => new BranchInst(target),
             { Arguments: [{ Type.IsTrivial: true }] } when made.Payload is { } payload && target != switchEnum.Default => new BranchInst(target, payload),
+            { Arguments: [{ IsGuaranteed: false }] } when switchEnum.Takes && made.Payload is { } owned && target != switchEnum.Default => new BranchInst(target, owned),
             _ => null,
         };
     }
@@ -820,7 +830,7 @@ public sealed class Simplify : ISilPass {
         && (instruction.Type.IsTrivial || SilVerifier.OwnershipOf(instruction) != Ownership.Owned)
         && instruction switch {
             IntegerLiteralInst or FloatLiteralInst or FunctionRefInst or GlobalAddrInst or ClassMethodInst => true,
-            RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst => true,
+            RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst => true,
             StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => true,
             StructInst or TupleInst or EnumInst => instruction.Type.IsTrivial,
             LoadInst { Kind: LoadKind.Trivial } => true,

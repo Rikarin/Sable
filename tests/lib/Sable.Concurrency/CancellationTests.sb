@@ -331,15 +331,15 @@ fn tasksAreWaitedForAllAnyOrEach() async {
     assertEqual(firstDone.value, 2)
     var order: Int[>..] = []
     var indices: Int[>..] = []
-    var opened = false
     for await done in whenEach([slow, fast, middle]) {
         order.append(done.value)
         indices.append(done.index)
-        // The fast one is done already; then the middle, then the slow.
-        if !opened {
-            opened = true
+        // The fast one is done already. Each gate is opened once the one
+        // before has been given: whenEach gives a task when it hears of it,
+        // which need not be in the order they finished.
+        if done.value == 2 {
             middleGate.close()
-            _ = await middle.value
+        } else if done.value == 3 {
             slowGate.close()
         }
     }

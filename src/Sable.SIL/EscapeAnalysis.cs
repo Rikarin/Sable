@@ -420,7 +420,7 @@ public sealed class PromoteToStack : ISilPass {
                 pending.Push(load);
                 return false;
 
-            case StructElementAddrInst or TupleElementAddrInst when value.Type is AddressType:
+            case StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst when value.Type is AddressType:
                 pending.Push(user);
                 return false;
 

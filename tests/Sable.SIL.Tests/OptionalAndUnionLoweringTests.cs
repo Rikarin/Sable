@@ -484,4 +484,52 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal(7L, Run(module, "spread"));
         Assert.Equal(6L, Run(module, "generic"));
     }
+    /// <summary>
+    ///     A store through '?.' or '!' into a value an optional holds changes
+    ///     it where it is (enum_payload_addr): no copy of the payload is taken
+    ///     out and written back, and a none is left alone, or traps.
+    /// </summary>
+    [Fact]
+    public void AStoreIntoAnOptionalsValueChangesItWhereItIs() {
+        var module = Lower(
+            """
+            struct Entry { var key: String, var value: Int }
+            fn put(_ entries: inout Entry?[>..], _ i: Int, _ v: Int) {
+                entries[i]!.value = v
+            }
+            fn chain(_ entries: inout Entry?[>..], _ i: Int, _ v: Int) {
+                entries[i]?.value = v
+            }
+            fn total() -> Int {
+                var entries: Entry?[>..] = [Entry { key: "a", value: 1 }, none, Entry { key: "c", value: 3 }]
+                put(&entries, 0, 10)
+                chain(&entries, 1, 20)
+                chain(&entries, 2, 30)
+                entries[2]!.value += 5
+                entries[0]!.key = "z"
+                var flag: Bool? = true
+                flag! = false
+                var word: String? = "x"
+                word! = "yz"
+                return entries[0]!.value + (entries[1]?.value ?? 100) + entries[2]!.value + entries[0]!.key.count
+                    + (flag! ? 1000 : 0) + word!.count
+            }
+            fn missing() -> Int {
+                var entries: Entry?[>..] = [none]
+                put(&entries, 0, 1)
+                return 0
+            }
+            """
+        );
+
+        foreach (var name in new[] { "M.put", "M.chain" }) {
+            var function = module.Functions.Single(f => f.Name == name);
+            var instructions = function.Blocks.SelectMany(static b => b.Instructions).ToList();
+            Assert.Contains(instructions, static i => i is EnumPayloadAddrInst);
+            Assert.DoesNotContain(instructions, static i => i is EnumInst);
+        }
+
+        Assert.Equal(10L + 100 + 35 + 1 + 2, Run(module, "total"));
+        Assert.Contains("unwrapped a none", Assert.Throws<SilTrap>(() => Run(module, "missing")).Message);
+    }
 }

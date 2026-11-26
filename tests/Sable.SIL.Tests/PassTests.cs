@@ -64,6 +64,267 @@ public sealed class PassTests {
         Assert.Equal(390L, new SilInterpreter(module).Run("M.probe"));
     }
 
+    /// <summary>
+    ///     'if let' of an optional a call gave, whose payload is kept: the
+    ///     switch takes the optional apart, and the payload is kept with no
+    ///     copy made of it.
+    /// </summary>
+    [Fact]
+    public void ASwitchOnAnOptionalItOwnsTakesItsPayload() {
+        var module = Lowered(
+            """
+            class Item {
+                let n: Int
+                init(_ n: Int) { self.n = n }
+            }
+
+            @inline(never)
+            fn make(_ n: Int) -> Item? { return n > 0 ? Item(n) : none }
+
+            fn keep(_ n: Int) -> Int {
+                var items: Item[>..] = []
+                if let item = make(n) {
+                    items.append(item)
+                }
+                return items.count
+            }
+
+            fn probe() -> Int { return keep(3) * 10 + keep(0) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var keep = module.Find("M.keep")!;
+        Assert.DoesNotContain(keep.Blocks.SelectMany(static b => b.Instructions), static i => i is CopyValueInst);
+        Assert.Contains(keep.Blocks, static b => b.Terminator is SwitchEnumInst { Takes: true });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(10L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("switch_enum [take]", text);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+    }
+
+    /// <summary>
+    ///     An object put into an array of its base class just after it is
+    ///     made is taken as the base: an owned upcast, with no copy of it.
+    /// </summary>
+    [Fact]
+    public void AnObjectKeptAsItsBaseIsTakenAsIt() {
+        var module = Lowered(
+            """
+            open class Animal {
+                var legs: Int
+                init(_ legs: Int) { self.legs = legs }
+                open fn weight() -> Int { return legs }
+            }
+
+            class Dog: Animal {
+                init() { super.init(4) }
+                override fn weight() -> Int { return 20 }
+            }
+
+            fn herd(_ n: Int) -> Int {
+                var animals: Animal[>..] = []
+                for _ in 0..<n {
+                    animals.append(Dog())
+                }
+                var total = 0
+                for animal in animals {
+                    total += animal.weight() + animal.legs
+                }
+                return total
+            }
+
+            fn probe() -> Int { return herd(3) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var herd = module.Find("M.herd")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.Contains(herd, static i => i is OwnedUpcastInst);
+        Assert.DoesNotContain(herd, static i => i is CopyValueInst { Value: UpcastInst });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(72L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("upcast [owned]", text);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+    }
+
+    /// <summary>
+    ///     The bytes of a digest a call gave, kept, are taken out of it: the
+    ///     struct's one field to destroy, with no copy of it.
+    /// </summary>
+    [Fact]
+    public void TheOneFieldKeptOfAStructACallGaveIsTakenOut() {
+        var module = Lowered(
+            """
+            struct Digest {
+                let bytes: U8[>..]
+                let size: Int
+            }
+
+            @inline(never)
+            fn digest(_ n: Int) -> Digest {
+                var bytes: U8[>..] = []
+                for i in 0..<n {
+                    bytes.append(U8(i))
+                }
+                return Digest { bytes: bytes, size: n }
+            }
+
+            fn keep(_ n: Int) -> Int {
+                var kept: (U8[>..])[>..] = []
+                kept.append(digest(n).bytes)
+                kept.append(digest(n + 1).bytes)
+                return kept[0].count + kept[1].count
+            }
+
+            fn probe() -> Int { return keep(3) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var keep = module.Find("M.keep")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.Contains(keep, static i => i is StructTakeInst);
+        Assert.DoesNotContain(keep, static i => i is CopyValueInst { Value: StructExtractInst });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(7L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("struct_extract [take]", text);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+    }
+
+    /// <summary>
+    ///     Views of a local array a loop changes, passed to calls on either
+    ///     side of a branch each turn, borrow the array for as long as they
+    ///     last: no retain of its buffer each turn, though each turn changes it.
+    /// </summary>
+    [Fact]
+    public void AViewOfALocalArrayBorrowsItWhileNothingWritesIt() {
+        var module = Lowered(
+            """
+            @inline(never)
+            fn dot(_ a: Int[:], _ b: Int[:]) -> Int {
+                var total = 0
+                for i in 0..<a.count {
+                    total += a[i] * b[i]
+                }
+                return total
+            }
+
+            fn pick(_ a: Int[:], _ b: Int[:], _ first: Bool) -> Int {
+                if first {
+                    return dot(a, b)
+                }
+                return dot(b, a) * 2
+            }
+
+            fn turns(_ n: Int) -> Int {
+                var x: Int[>..] = [1, 2, 3]
+                let y: Int[>..] = [4, 5, 6]
+                var total = 0
+                for round in 0..<n {
+                    x[round % 3] = round
+                    total += pick(x, y, round % 2 == 0)
+                }
+                return total
+            }
+
+            fn probe() -> Int { return turns(4) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var turns = module.Find("M.turns")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.DoesNotContain(turns, static i => i is BuiltinInst { Name: "slice_of" });
+        Assert.Contains(turns, static i => i is BuiltinInst { Name: "slice_of_borrowed" });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(28L + 46 + 17 + 58, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>
+    ///     An array in a field of an object in a field of self, read each turn
+    ///     of a loop: the borrow of the inner object lasts until the element
+    ///     is read, so the array is borrowed too, not copied each turn.
+    /// </summary>
+    [Fact]
+    public void AFieldOfABorrowedObjectIsReadWithTheBorrowStillOn() {
+        var module = Lowered(
+            """
+            class Code {
+                var ops: Int[>..]
+                init(_ ops: Int[>..]) { self.ops = ops }
+            }
+
+            class Runner {
+                var program: Code
+                init(_ program: Code) { self.program = program }
+
+                fn run(_ n: Int) -> Int {
+                    var total = 0
+                    for i in 0..<n {
+                        total += program.ops[i % 3]
+                    }
+                    return total
+                }
+            }
+
+            fn probe() -> Int { return Runner(Code([1, 2, 3])).run(5) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Equal(0, Copies(module, "M.Runner.run"));
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(9L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>
+    ///     A local's last use into a consuming parameter moves an array, but
+    ///     not an object: what keeps an unowned reference to the object may
+    ///     outlive the call, the local keeping the object alive meanwhile.
+    /// </summary>
+    [Fact]
+    public void AnObjectGivenAtItsLastUseIsNotMovedFromUnderAnUnownedReference() {
+        var module = Lowered(
+            """
+            class Owner {
+                var label: Int
+                init(_ label: Int) { self.label = label }
+            }
+
+            class Pet {
+                unowned var owner: Owner
+                init(_ owner: Owner) { self.owner = owner }
+            }
+
+            @inline(never)
+            fn sum(_ xs: consuming Int[>..]) -> Int {
+                var total = 0
+                for x in xs {
+                    total += x
+                }
+                return total
+            }
+
+            fn probe() -> Int {
+                let xs: Int[>..] = [1, 2, 3]
+                let total = sum(xs)
+                let o = Owner(7)
+                let pet = Pet(o)
+                return pet.owner.label + total
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(13L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
     /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
     [Fact]
     public void ALocalIsBorrowedAcrossACallThatCanThrow() {

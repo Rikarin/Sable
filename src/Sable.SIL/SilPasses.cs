@@ -32,8 +32,8 @@ public static class SilPassManager {
     ///     uncovers more of the other.
     /// </remarks>
     public static IReadOnlyList<ISilPass> Default { get; } = [
-        new PromoteSlots(), new InitFields(), new ForwardCopies(), new BorrowLoads(), new ReadInPlace(), new LendInlineArrays(), new BorrowHeld(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new BorrowLets(), new BorrowWalks(),
-        new PromoteToStack(), new ReadInPlace(), new HoistUniqueness(),
+        new PromoteSlots(), new InitFields(), new ForwardCopies(), new BorrowLoads(), new ReadInPlace(), new LendInlineArrays(), new BorrowHeld(), new BorrowViews(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new BorrowLets(), new BorrowWalks(),
+        new PromoteToStack(), new ReadInPlace(), new HoistUniqueness(), new TakePayloads(), new OwnUpcasts(),
     ];
 
     /// <summary>The passes an optimised build runs, in order.</summary>

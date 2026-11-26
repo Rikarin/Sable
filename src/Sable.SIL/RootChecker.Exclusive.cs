@@ -125,7 +125,7 @@ public static partial class RootChecker {
 
                 used.Add(user);
                 switch (user) {
-                    case StructElementAddrInst or TupleElementAddrInst or CopyValueInst:
+                    case StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or CopyValueInst:
                         Hold(user);
                         break;
 

@@ -1489,6 +1489,9 @@ public sealed partial class SilGen {
                     && CallAllowed(new BoundCall(property.Syntax, of, setter, [Standing(property)], generator.Core.Void)),
                 BoundFieldAccess { Receiver: { } on, Field: { IsStatic: false, IsComputed: false, Builtin: null } } field =>
                     PropertyAllowed(field) && (on.Type is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } ? Produces(on) : IsPlace(on)),
+                // What an optional holds, where it is: 'entries[i]!.value = v'.
+                BoundConversion { IsForceUnwrap: true, Operand: BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var array } } when IsOwnArray(array.Type) => IsPlace(array),
+                BoundConversion { IsForceUnwrap: true } unwrap => IsPlace(unwrap.Operand),
                 _ => false,
             };
 

@@ -119,6 +119,7 @@ public sealed partial class LlvmEmitter {
             RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } } => true,
             StructElementAddrInst { Address.Type: AddressType { Pointee: StructType { IsInline: false } } } element => IsTyped(element.Address),
             TupleElementAddrInst element => IsTyped(element.Address),
+            // A tagged enum's payload area is read whole, as the area's type, or as any case's payload: no type of its own.
             BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } => true,
             _ => false,
         };
@@ -4000,6 +4001,10 @@ public sealed partial class LlvmEmitter {
                     _names[upcast] = Name(upcast.Value);
                     return;
 
+                case OwnedUpcastInst owned:
+                    _names[owned] = Name(owned.Value);
+                    return;
+
                 // The object's metadata is its first word; the method is in its slot there.
                 case ClassMethodInst method: {
                     var owner = (ClassType)method.Reference.Type;
@@ -4129,6 +4134,13 @@ public sealed partial class LlvmEmitter {
                     _names[instruction] = "zeroinitializer";
                     return;
 
+                case StructTakeInst take: {
+                    var name = Fresh();
+                    _names[take] = name;
+                    Line($"{name} = extractvalue {Type(take.Value.Type)} {Name(take.Value)}, {FieldSlot((StructType)take.Value.Type, take.Field)}");
+                    return;
+                }
+
                 case StructExtractInst extract: {
                     var name = Fresh();
                     _names[extract] = name;
@@ -4158,6 +4170,13 @@ public sealed partial class LlvmEmitter {
                     Line($"{name} = getelementptr inbounds {Type(tupleType)}, ptr {Name(element.Address)}, i32 0, i32 {LayoutOf(tupleType).Slots[element.Element]}");
                     return;
                 }
+
+                // A nullable reference and a niche are their payload; a tagged enum has it past the tag, or where its metadata says.
+                case EnumPayloadAddrInst payloadAddress:
+                    _names[payloadAddress] = IsNullable(payloadAddress.EnumType) || Niche(payloadAddress.EnumType) is not null
+                        ? Name(payloadAddress.Address)
+                        : EnumPayloadAt(Name(payloadAddress.Address), payloadAddress.EnumType);
+                    return;
 
                 case EnumInst indirectEnum when Held(indirectEnum.Type):
                     IndirectEnum(indirectEnum);
@@ -5668,6 +5687,22 @@ public sealed partial class LlvmEmitter {
                     var sole = Fresh();
                     var mortal = Fresh();
                     Line($"{objectPointer} = load ptr, ptr {operands[0]}");
+                    // An empty array holds no buffer: it is read as a header of its own, counted once.
+                    if (builtin.Operands[0].Type is AddressType { Pointee: StructType { Fields: [(_, ArrayType)] } }) {
+                        var alone = Scratch("%SableObjectHeader", 8);
+                        var aloneStrong = Fresh();
+                        Line($"{aloneStrong} = getelementptr inbounds %SableObjectHeader, ptr {alone}, i32 0, i32 1");
+                        Line($"store i32 1, ptr {aloneStrong}");
+                        var aloneFlags = Fresh();
+                        Line($"{aloneFlags} = getelementptr inbounds %SableObjectHeader, ptr {alone}, i32 0, i32 2");
+                        Line($"store i32 0, ptr {aloneFlags}");
+                        var none = Fresh();
+                        Line($"{none} = icmp eq ptr {objectPointer}, null");
+                        var buffer = Fresh();
+                        Line($"{buffer} = select i1 {none}, ptr {alone}, ptr {objectPointer}");
+                        objectPointer = buffer;
+                    }
+
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 1");
                     Line($"{strong} = load atomic i32, ptr {strongField} acquire, align 4");
                     Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 2");

@@ -327,6 +327,9 @@ public static partial class SilVerifier {
             case StructExtractInst extract when extract.Value.Type is not StructType:
                 return $"struct_extract needs a struct, not {extract.Value.Type}";
 
+            case StructTakeInst take when !StructTakeInst.CanTake(take.Value.Type, take.Field):
+                return $"struct_extract [take] needs a struct with no deinit whose other fields are trivial, not {take.Value.Type}";
+
             case StructElementAddrInst element when element.Address.Type is not AddressType { Pointee: StructType }:
                 return $"struct_element_addr needs a struct's address, not {element.Address.Type}";
 
@@ -342,6 +345,10 @@ public static partial class SilVerifier {
             case TupleElementAddrInst element when element.Address.Type is not AddressType { Pointee: TupleType { } tupleType }
                                                    || element.Element >= tupleType.Elements.Length:
                 return $"tuple_element_addr {element.Element} of {element.Address.Type}";
+
+            case EnumPayloadAddrInst payloadAddress when payloadAddress.Address.Type is not AddressType { Pointee: EnumType { } enumType }
+                                                          || payloadAddress.Case >= enumType.Cases.Count || enumType.Cases[payloadAddress.Case].Payload is null:
+                return $"enum_payload_addr needs an enum's address and a case with a payload, not {payloadAddress.Address.Type} #{payloadAddress.Case}";
 
             case EnumInst enumInst: {
                 var (name, payload) = enumInst.EnumType.Cases[enumInst.Case];
@@ -369,10 +376,18 @@ public static partial class SilVerifier {
                         return $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take ({string.Join(", ", expected.Select(static t => t.ToString()))})";
                     }
 
-                    // The payload is borrowed from the enum, which the switch does not consume.
-                    if (payload is { IsTrivial: false } && !target.Arguments[0].IsGuaranteed) {
-                        return $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take its payload @guaranteed";
+                    // The payload is borrowed from the enum, which the switch does not consume — unless it takes it.
+                    if (payload is { IsTrivial: false } && target.Arguments[0].IsGuaranteed == switchEnum.Takes) {
+                        return switchEnum.Takes
+                            ? $"switch_enum [take]'s block for #{enumType.Cases[caseIndex].Name} must take its payload owned"
+                            : $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take its payload @guaranteed";
                     }
+                }
+
+                // What a taking switch's default stands for has nothing to destroy.
+                if (switchEnum.Takes && switchEnum.Default is not null
+                    && enumType.Cases.Where((_, i) => !seen.Contains(i)).FirstOrDefault(static c => c.Payload is { IsTrivial: false }) is { Name: { } carried }) {
+                    return $"switch_enum [take]'s default stands for #{carried}, whose payload it would leak";
                 }
 
                 if (switchEnum.Default is { } fallback && fallback.Arguments.Count > 0) {
@@ -404,6 +419,9 @@ public static partial class SilVerifier {
 
             case UpcastInst upcast when upcast.Value.Type is not ClassType from || !from.IsSubclassOf((ClassType)upcast.Type):
                 return $"upcast of {upcast.Value.Type} to {upcast.Type}, which it does not inherit from";
+
+            case OwnedUpcastInst owned when owned.Value.Type is not ClassType from || !from.IsSubclassOf((ClassType)owned.Type):
+                return $"upcast [owned] of {owned.Value.Type} to {owned.Type}, which it does not inherit from";
 
             case ClassMethodInst method:
                 if (method.Reference.Type is not ClassType owner) {
@@ -590,6 +608,9 @@ public static partial class SilVerifier {
             case StructInst or TupleInst or EnumInst or ReturnInst or ThrowInst or DestroyValueInst:
                 return Enumerable.Range(0, instruction.Operands.Count);
 
+            case SwitchEnumInst { Takes: true } or OwnedUpcastInst or StructTakeInst:
+                return [0];
+
             case PartialApplyInst { Context: not null }:
                 return [1];
 
@@ -700,7 +721,7 @@ public static partial class SilVerifier {
                     case StructExtractInst or TupleExtractInst when !instruction.Type.IsTrivial:
                     case UncheckedRefCastInst:
                     case UpcastInst:
-                    case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when Tracked(instruction.Operands[0]):
+                    case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst when Tracked(instruction.Operands[0]):
                     case BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" or "fixed_lend" or "fixed_lend_slice" } when !instruction.Type.IsTrivial && Tracked(instruction.Operands[0]):
                         roots[instruction] = RootOf(instruction.Operands[0]);
                         break;
@@ -799,6 +820,7 @@ public static partial class SilVerifier {
             AllocStackInst slot => slot,
             StructElementAddrInst element => SlotOf(element.Address),
             TupleElementAddrInst element => SlotOf(element.Address),
+            EnumPayloadAddrInst element => SlotOf(element.Address),
             _ => null,
         };
 

@@ -1,0 +1,111 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+
+/// What makes instruments, named for the library or the part of the program
+/// they measure: OpenTelemetry's Meter, .NET's `Meter`. Made once, kept —
+/// the program's meters are what a reader collects — and used from any
+/// task. Its instruments' names follow OpenTelemetry's semantic conventions
+/// where one fits; units are UCUM's ("s", "By", "{request}").
+///
+/// ```sable
+/// let meter = Meter("orders", version: "1.4")
+/// let placed = meter.counter("orders.placed")
+/// let size = meter.histogram("orders.size", unit: "{item}", buckets: .Explicit(boundaries: [1.0, 5.0, 10.0]))
+/// placed.add(1)
+/// size.record(3.0)
+/// ```
+@immutable
+public final class Meter {
+    public let name: String
+    public let version: String
+    let instruments: Mutex<Instrument[>..]>
+
+    public init(_ name: String, version: String = "") {
+        self.name = name
+        self.version = version
+        instruments = Mutex([])
+        Metrics.add(self)
+    }
+
+    fn made(_ instrument: Instrument) -> Instrument {
+        instruments.withLock { $0.append(instrument) }
+        return instrument
+    }
+
+    /// A counter of integers.
+    public fn counter(_ name: String, unit: String = "", description: String = "") -> Counter<Int> {
+        return counter(name, of: Int.self, unit: unit, description: description)
+    }
+
+    /// A counter of the type, Int or F64.
+    public fn counter<Value: MetricNumber>(_ name: String, of type: Value.Type, unit: String = "", description: String = "") -> Counter<Value> {
+        return Counter(made(Instrument(meter: self, name: name, unit: unit, description: description, kind: .Counter, isInteger: Value.isInteger)))
+    }
+
+    /// An up-down counter of integers.
+    public fn upDownCounter(_ name: String, unit: String = "", description: String = "") -> UpDownCounter<Int> {
+        return upDownCounter(name, of: Int.self, unit: unit, description: description)
+    }
+
+    /// An up-down counter of the type.
+    public fn upDownCounter<Value: MetricNumber>(_ name: String, of type: Value.Type, unit: String = "", description: String = "") -> UpDownCounter<Value> {
+        return UpDownCounter(made(Instrument(meter: self, name: name, unit: unit, description: description, kind: .UpDownCounter, isInteger: Value.isInteger)))
+    }
+
+    /// A histogram of numbers, its buckets OpenTelemetry's default bounds
+    /// unless given.
+    public fn histogram(_ name: String, unit: String = "", description: String = "", buckets: HistogramBuckets = HistogramBuckets.standard) -> Histogram<F64> {
+        return histogram(name, of: F64.self, unit: unit, description: description, buckets: buckets)
+    }
+
+    /// A histogram of the type.
+    public fn histogram<Value: MetricNumber>(_ name: String, of type: Value.Type, unit: String = "", description: String = "", buckets: HistogramBuckets = HistogramBuckets.standard) -> Histogram<Value> {
+        return Histogram(made(Instrument(meter: self, name: name, unit: unit, description: description, kind: .Histogram, isInteger: Value.isInteger, buckets: buckets)))
+    }
+
+    /// A gauge of the type.
+    public fn gauge<Value: MetricNumber>(_ name: String, unit: String = "", description: String = "", of type: Value.Type) -> Gauge<Value> {
+        return Gauge(made(Instrument(meter: self, name: name, unit: unit, description: description, kind: .Gauge, isInteger: Value.isInteger)))
+    }
+
+    /// A gauge whose values the callback gives as it is collected, on the
+    /// collecting task.
+    ///
+    /// ```sable
+    /// let meter = Meter("process")
+    /// _ = meter.observableGauge("process.threads", unit: "{thread}") { () -> Measurement<Int>[>..] in [Measurement(4)] }
+    /// ```
+    @discardable
+    public fn observableGauge<Value: MetricNumber>(_ name: String, unit: String = "", description: String = "", _ observe: @escaping @Sendable () -> Measurement<Value>[>..]) -> ObservableInstrument<Value> {
+        return observable(name, unit, description, .ObservableGauge, observe)
+    }
+
+    /// A counter whose sums, from the start, the callback gives.
+    @discardable
+    public fn observableCounter<Value: MetricNumber>(_ name: String, unit: String = "", description: String = "", _ observe: @escaping @Sendable () -> Measurement<Value>[>..]) -> ObservableInstrument<Value> {
+        return observable(name, unit, description, .ObservableCounter, observe)
+    }
+
+    /// An up-down counter whose sums the callback gives.
+    @discardable
+    public fn observableUpDownCounter<Value: MetricNumber>(_ name: String, unit: String = "", description: String = "", _ observe: @escaping @Sendable () -> Measurement<Value>[>..]) -> ObservableInstrument<Value> {
+        return observable(name, unit, description, .ObservableUpDownCounter, observe)
+    }
+
+    fn observable<Value: MetricNumber>(_ name: String, _ unit: String, _ description: String, _ kind: InstrumentKind, _ observe: @escaping @Sendable () -> Measurement<Value>[>..]) -> ObservableInstrument<Value> {
+        let read: () -> (F64, KeyValue[>..])[>..] = {
+            var values: (F64, KeyValue[>..])[>..] = []
+            for measurement in observe() {
+                values.append((measurement.value.metricNumber, measurement.attributes))
+            }
+            return values
+        }
+        return ObservableInstrument(made(Instrument(meter: self, name: name, unit: unit, description: description, kind: kind, isInteger: Value.isInteger, observe: read)))
+    }
+
+    fn collect(_ time: Int) -> MetricData[>..] {
+        let all = instruments.withLock { $0 }
+        return all.map { $0.collect(time) }
+    }
+}

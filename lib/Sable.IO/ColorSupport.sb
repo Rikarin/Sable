@@ -1,0 +1,88 @@
+module Sable.IO
+
+/// What a stream shows of a `Style`: nothing, where it is a file or a pipe;
+/// bold, underline and the like but no colour, where NO_COLOR asks for none;
+/// or colours, of sixteen, 256 or all. `Console.colorSupport` is its output's.
+///
+/// What is asked for is followed, in this order:
+///
+/// - CLICOLOR_FORCE set, and not '0': styles, though the stream is no
+///   terminal;
+/// - else none on what is no terminal, nor on TERM=dumb;
+/// - NO_COLOR set, and not empty (no-color.org), or CLICOLOR=0: no colour;
+/// - COLORTERM 'truecolor' or '24bit', a TERM ending in '-direct', Windows
+///   Terminal or a Windows console: all colours; a TERM with '256' in it:
+///   256; else sixteen.
+///
+/// ```sable
+/// let variables = ["TERM": "xterm-256color", "NO_COLOR": "1"]
+/// let support = ColorSupport.detect(isTerminal: true, variables: { variables[$0] })
+/// assert(support == .Monochrome)
+/// assert(ColorSupport.detect(isTerminal: false, variables: { _ in none }) == .None)
+/// ```
+@derive(Equatable, Debug)
+public enum ColorSupport {
+    /// No escape sequence at all.
+    None
+    /// Bold, underline and the rest, but no colour.
+    Monochrome
+    /// The sixteen colours.
+    Basic
+    /// 256 colours.
+    Extended
+    /// Any colour, of 24 bits.
+    TrueColor
+
+    // Its place, from None up.
+    var rank: Int {
+        get {
+            return match self {
+                case .None       => 0
+                case .Monochrome => 1
+                case .Basic      => 2
+                case .Extended   => 3
+                case .TrueColor  => 4
+            }
+        }
+    }
+
+    /// Whether it shows colours at all.
+    public var hasColor: Bool => self.rank >= ColorSupport.Basic.rank
+
+    /// What a stream shows, told whether it is a terminal, and with the
+    /// environment's variables as 'variables' gives them.
+    public static fn detect(isTerminal: Bool, variables: (String) -> String?) -> ColorSupport {
+        let forced = (variables("CLICOLOR_FORCE") ?? "0") != "0" && !(variables("CLICOLOR_FORCE") ?? "").isEmpty
+        let term = variables("TERM") ?? ""
+        if !forced && (!isTerminal || term == "dumb") {
+            return .None
+        }
+        if !(variables("NO_COLOR") ?? "").isEmpty || variables("CLICOLOR") == "0" {
+            return .Monochrome
+        }
+        let colorTerm = variables("COLORTERM") ?? ""
+        if colorTerm == "truecolor" || colorTerm == "24bit" || term.hasSuffix("-direct") || variables("WT_SESSION") != none {
+            return .TrueColor
+        }
+        #if os(windows)
+        if term.isEmpty {
+            return .TrueColor
+        }
+        #endif
+        if term.contains("256") {
+            return .Extended
+        }
+        return .Basic
+    }
+
+    /// What the standard stream (1 output, 2 error) shows, by this program's
+    /// environment: on Windows, its console asked to read escape sequences.
+    public static fn of(stream: Int) -> ColorSupport {
+        let forced = (Runtime.environment("CLICOLOR_FORCE") ?? "0") != "0"
+        let isTerminal = Runtime.terminalStyles(stream)
+        if !isTerminal && !forced {
+            return .None
+        }
+        return ColorSupport.detect(isTerminal: isTerminal, variables: { Runtime.environment($0) })
+    }
+}

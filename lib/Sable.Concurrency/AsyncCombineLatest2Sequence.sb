@@ -1,0 +1,131 @@
+module Sable.Concurrency
+
+/// Two async sequences' latest elements, in pairs: once each has given one,
+/// a pair for every element either gives, with the other's latest —
+/// swift-async-algorithms' and Rx's `combineLatest`. It ends when both
+/// have ended, or when one ends without having given anything; the first
+/// to throw ends it, with the error.
+///
+/// ```sable
+/// let prices = Channel<Int>()
+/// let rates = Channel<Int>()
+/// await prices.send(100)
+/// await rates.send(2)
+/// await prices.close()
+/// await rates.close()
+/// var converted: Int[>..] = []
+/// for await (price, rate) in combineLatest(prices, rates) {
+///     converted.append(price * rate)
+/// }
+/// assert(converted == [200])
+/// ```
+public fn combineLatest<First: AsyncSequence, Second: AsyncSequence>(_ first: First, _ second: Second) -> AsyncCombineLatest2Sequence<First, Second>
+    where First: Sendable, Second: Sendable, First.Element: Sendable, Second.Element: Sendable, Second.Failure == First.Failure {
+    return AsyncCombineLatest2Sequence<First, Second> { first: first, second: second }
+}
+
+/// What 'combineLatest(_:_:)' makes: two sequences' latest elements, paired.
+public struct AsyncCombineLatest2Sequence<First: AsyncSequence, Second: AsyncSequence>: AsyncSequence
+    where First: Sendable, Second: Sendable, First.Element: Sendable, Second.Element: Sendable, Second.Failure == First.Failure {
+    let first: First
+    let second: Second
+
+    /// An iterator of the pairs from now on: the tasks that go through the
+    /// two sequences are started.
+    public fn makeAsyncIterator() -> AsyncCombineLatestIterator<First.Element, Second.Element, First.Failure> {
+        let events = ThrowingChannel<CombineEvent<First.Element, Second.Element>, First.Failure>(capacity: 1)
+        let first = self.first
+        let second = self.second
+        let one = Task.detached {
+            var iterator = first.makeAsyncIterator()
+            do {
+                while let value = try await iterator.next() {
+                    if await events.send(.First(value)) != .Sent {
+                        return
+                    }
+                }
+            } catch {
+                await events.close(error: error)
+                return
+            }
+            _ = await events.send(.FirstEnded)
+        }
+        let two = Task.detached {
+            var iterator = second.makeAsyncIterator()
+            do {
+                while let value = try await iterator.next() {
+                    if await events.send(.Second(value)) != .Sent {
+                        return
+                    }
+                }
+            } catch {
+                await events.close(error: error)
+                return
+            }
+            _ = await events.send(.SecondEnded)
+        }
+        return AsyncCombineLatestIterator<First.Element, Second.Element, First.Failure> {
+            events: events, pumps: TaskCanceller([one, two]), first: none, second: none, firstEnded: false, secondEnded: false, done: false
+        }
+    }
+}
+
+/// Gives two sequences' latest elements, paired, as either changes.
+public struct AsyncCombineLatestIterator<A: Sendable, B: Sendable, Failure: Error>: AsyncIterator {
+    public alias Element = (A, B)
+
+    let events: ThrowingChannel<CombineEvent<A, B>, Failure>
+    let pumps: TaskCanceller
+    var first: A?
+    var second: B?
+    var firstEnded: Bool
+    var secondEnded: Bool
+    var done: Bool
+
+    /// The next pair; none once the pairs have ended, or if the task is
+    /// cancelled while it waits.
+    public mutating fn next() async throws(Failure) -> (A, B)? {
+        while !done {
+            let received: CombineEvent<A, B>? = try await events.receive()
+            guard let event = received else {
+                done = true
+                return none
+            }
+            match event {
+                case .First(let value) => {
+                    first = value
+                }
+                case .Second(let value) => {
+                    second = value
+                }
+                case .FirstEnded => {
+                    firstEnded = true
+                    done = first == none || secondEnded
+                    continue
+                }
+                case .SecondEnded => {
+                    secondEnded = true
+                    done = second == none || firstEnded
+                    continue
+                }
+            }
+            if let a = first {
+                if let b = second {
+                    return (a, b)
+                }
+            }
+        }
+        for task in pumps.tasks {
+            task.cancel()
+        }
+        return none
+    }
+}
+
+// What the two sequences' tasks send.
+union CombineEvent<A, B> {
+    First(A)
+    Second(B)
+    FirstEnded
+    SecondEnded
+}

@@ -57,6 +57,7 @@
 #include "fs.c"
 #include "watch.c"
 #include "process.c"
+#include "terminal.c"
 #include "ipc.c"
 #include "locks.c"
 #include "foreign.c"

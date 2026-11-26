@@ -1,0 +1,20 @@
+module Sable.Diagnostics
+
+/// An instrument whose values are asked for as it is collected, by the
+/// callback it was made with (`Meter.observableGauge`,
+/// `observableCounter`, `observableUpDownCounter`): memory in use, a
+/// queue's length, a total a library keeps itself. .NET's
+/// `ObservableGauge<T>` and its like.
+@immutable
+public final class ObservableInstrument<Value: MetricNumber> {
+    let instrument: Instrument
+
+    init(_ instrument: Instrument) {
+        self.instrument = instrument
+    }
+
+    public var name: String => instrument.name
+
+    /// Which of the three it is.
+    public var kind: InstrumentKind => instrument.kind
+}

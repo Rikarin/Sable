@@ -1,0 +1,56 @@
+module Sable.IO
+
+/// A key pressed (`KeyEvent`): a character, or one of the keys that types
+/// none. .NET's `ConsoleKey`, crossterm's `KeyCode`.
+///
+/// ```sable
+/// assert(Key.Character('q') != Key.Escape)
+/// assert(Key.Function(5).description() == "F5")
+/// ```
+@derive(Equatable, Debug)
+public union Key {
+    /// A character, as typed: 'A' with Shift held is "A".
+    Character(Char)
+    Enter
+    Tab
+    Backspace
+    Escape
+    Up
+    Down
+    Left
+    Right
+    Home
+    End
+    PageUp
+    PageDown
+    Insert
+    Delete
+    /// F1 to F24, by number.
+    Function(Int)
+    /// A sequence the terminal sent that is no key known here — a mouse's,
+    /// a pasted text's bracket — as it came, without its ESC.
+    Unrecognised(String)
+
+    /// Its name, as a key binding writes it: "q", "Enter", "PageUp", "F5".
+    public fn description() -> String {
+        return match self {
+            case .Character(let c)       => c == ' ' ? "Space" : String.fromChar(c)
+            case .Enter                  => "Enter"
+            case .Tab                    => "Tab"
+            case .Backspace              => "Backspace"
+            case .Escape                 => "Escape"
+            case .Up                     => "Up"
+            case .Down                   => "Down"
+            case .Left                   => "Left"
+            case .Right                  => "Right"
+            case .Home                   => "Home"
+            case .End                    => "End"
+            case .PageUp                 => "PageUp"
+            case .PageDown               => "PageDown"
+            case .Insert                 => "Insert"
+            case .Delete                 => "Delete"
+            case .Function(let n)        => "F\(n)"
+            case .Unrecognised(let text) => "ESC\(text)"
+        }
+    }
+}

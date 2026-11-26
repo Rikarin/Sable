@@ -496,4 +496,71 @@ public sealed class LoweringGapTests {
                 print(generic(Key.self).text)
             """
         );
+
+    [Fact]
+    public void RequirementsOfOneNameAreMetByTheOverloadOfTheirArray() =>
+        Prints(
+            "spans 2\nmetrics 1\nspans 1\nmetrics 3\n",
+            """
+            struct Span { let n: Int }
+            struct Metric { let n: Int }
+
+            protocol SpanSink {
+                fn export(_ spans: Span[>..])
+            }
+
+            protocol MetricSink {
+                fn export(_ metrics: Metric[>..])
+            }
+
+            final class Printer: SpanSink, MetricSink {
+                init() { }
+                fn export(_ spans: Span[>..]) { print("spans \(spans.count)") }
+                fn export(_ metrics: Metric[>..]) { print("metrics \(metrics.count)") }
+            }
+
+            fn spans<S: SpanSink>(_ sink: S, _ count: Int) {
+                var all: Span[>..] = []
+                for i in 0..<count { all.append(Span(n: i)) }
+                sink.export(all)
+            }
+
+            fn metrics<M: MetricSink>(_ sink: M, _ count: Int) {
+                var all: Metric[>..] = []
+                for i in 0..<count { all.append(Metric(n: i)) }
+                sink.export(all)
+            }
+            """,
+            """
+                let printer = Printer()
+                spans(printer, 2)
+                metrics(printer, 1)
+                let a: any SpanSink = printer
+                let b: any MetricSink = printer
+                a.export([Span(n: 1)])
+                b.export([Metric(n: 1), Metric(n: 2), Metric(n: 3)])
+            """
+        );
+
+    [Fact]
+    public void AnOptionalIsComparedWithACapturedValue() =>
+        Prints(
+            "true\nfalse\ntrue\n",
+            """
+            @derive(Equatable)
+            struct Context { let n: Int; let s: String }
+
+            fn current(_ n: Int) -> Context? { return n == 0 ? none : Context(n: n, s: "a") }
+
+            fn run(_ body: () -> Void) { body() }
+            """,
+            """
+                let remote = Context(n: 1, s: "a")
+                run {
+                    print(current(1) == remote)
+                    print(current(0) == remote)
+                    print(remote == current(1))
+                }
+            """
+        );
 }

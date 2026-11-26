@@ -313,13 +313,17 @@ fn anErrorFirstIsTheRaces() async {
 
 @test
 fn tasksAreWaitedForAllAnyOrEach() async {
+    // Each ends when its gate opens: the test opens them in the order it
+    // wants, so no runner's speed decides which comes first.
+    let slowGate = Channel<Int>()
+    let middleGate = Channel<Int>()
     let slow = Task.spawn { () -> Int in
-        try? await Task.sleep(for: Duration.milliseconds(30))
+        _ = await slowGate.receive()
         return 1
     }
     let fast = Task.spawn { 2 }
     let middle = Task.spawn { () -> Int in
-        try? await Task.sleep(for: Duration.milliseconds(10))
+        _ = await middleGate.receive()
         return 3
     }
     let firstDone = await whenAny([slow, fast, middle])
@@ -327,9 +331,17 @@ fn tasksAreWaitedForAllAnyOrEach() async {
     assertEqual(firstDone.value, 2)
     var order: Int[>..] = []
     var indices: Int[>..] = []
+    var opened = false
     for await done in whenEach([slow, fast, middle]) {
         order.append(done.value)
         indices.append(done.index)
+        // The fast one is done already; then the middle, then the slow.
+        if !opened {
+            opened = true
+            middleGate.close()
+            _ = await middle.value
+            slowGate.close()
+        }
     }
     assertEqual(order, [2, 3, 1])
     assertEqual(indices, [1, 2, 0])

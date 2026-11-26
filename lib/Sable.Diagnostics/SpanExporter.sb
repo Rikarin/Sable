@@ -1,0 +1,16 @@
+module Sable.Diagnostics
+
+/// Where ended spans go: the console, memory for a test, or a collector
+/// (OTLP, #249). OpenTelemetry's SpanExporter. Given spans by a processor
+/// (`SimpleSpanProcessor`), from any task.
+public protocol SpanExporter: Sendable {
+    /// The spans sent on.
+    fn export(_ spans: SpanRecord[>..])
+
+    /// What is held back sent now.
+    fn flush()
+}
+
+extension SpanExporter {
+    public fn flush() { }
+}

@@ -1,0 +1,138 @@
+module Sable.Diagnostics
+
+/// What starts spans, named for the library or the part of the program that
+/// does the work: OpenTelemetry's Tracer, .NET's `ActivitySource`. Made
+/// once, kept, and used from any task.
+///
+/// With nothing listening (`Tracing.addListener`), starting a span is one
+/// atomic load, and the body is run with `Span.invalid`; the attributes, an
+/// autoclosure, are not even made.
+///
+/// ```sable
+/// let tracer = Tracer("orders", version: "1.4")
+/// let total = tracer.withSpan("price", attributes: [KeyValue("items", 3)]) { span in
+///     return 3 * 20
+/// }
+/// assert(total == 60)
+/// ```
+@immutable
+public final class Tracer {
+    public let name: String
+    public let version: String
+
+    public init(_ name: String, version: String = "") {
+        self.name = name
+        self.version = version
+    }
+
+    /// The body run in a span of the name, current for all it calls and
+    /// spawns, ended as it returns; as it throws, its status the error.
+    // A closure given here is inlined into the caller's code, in both
+    // places, and makes no context (InlineClosures).
+    @inline(always)
+    public fn withSpan<R, E: Error>(_ name: String, kind: SpanKind = .Internal, attributes: @autoclosure () -> KeyValue[>..] = [], _ body: (Span) throws(E) -> R) throws(E) -> R {
+        if !Tracing.isListening {
+            return try body(Span(context: SpanContext.zero, state: none))
+        }
+        let span = enter(name, kind, attributes())
+        do {
+            let result = try body(span)
+            Tracer.leave(span)
+            return result
+        } catch {
+            Tracer.fail(span, error)
+            throw error
+        }
+    }
+
+    /// The async body run in a span of the name: current across its every
+    /// `await`, and in the tasks it spawns.
+    @inline(always)
+    public fn withSpan<R, E: Error>(_ name: String, kind: SpanKind = .Internal, attributes: @autoclosure () -> KeyValue[>..] = [], _ body: async (Span) throws(E) -> R) async throws(E) -> R {
+        if !Tracing.isListening {
+            return try await body(Span(context: SpanContext.zero, state: none))
+        }
+        let span = enter(name, kind, attributes())
+        do {
+            let result = try await body(span)
+            Tracer.leave(span)
+            return result
+        } catch {
+            Tracer.fail(span, error)
+            throw error
+        }
+    }
+
+    // A span started under the current one, and made current itself.
+    @inline(never)
+    fn enter(_ name: String, _ kind: SpanKind, _ attributes: KeyValue[>..]) -> Span {
+        let span = start(name, kind, attributes, parent: Tracing.currentContext)
+        Tracing.push(span)
+        return span
+    }
+
+    @inline(never)
+    static fn leave(_ span: Span) {
+        Tracing.pop()
+        span.end()
+    }
+
+    @inline(never)
+    static fn fail(_ span: Span, _ error: any Error) {
+        Tracing.pop()
+        span.recordError(error)
+        span.end()
+    }
+
+    /// A span started now, which is not made current, and is ended by
+    /// `end()`: for work that does not fit a closure. Its parent is the
+    /// current span unless another is given — a remote one, or none for a
+    /// trace of its own.
+    ///
+    /// ```sable
+    /// let tracer = Tracer("jobs")
+    /// let span = tracer.startSpan("batch", kind: .Consumer)
+    /// span.addEvent("half way")
+    /// span.end()
+    /// ```
+    public fn startSpan(_ name: String, kind: SpanKind = .Internal, attributes: @autoclosure () -> KeyValue[>..] = [], parent: SpanContext?? = none) -> Span {
+        if !Tracing.isListening {
+            return Span.invalid
+        }
+        let given: SpanContext? = parent ?? Tracing.currentContext
+        return start(name, kind, attributes(), parent: given)
+    }
+
+    fn start(_ name: String, _ kind: SpanKind, _ attributes: KeyValue[>..], parent given: SpanContext?) -> Span {
+        var parent: SpanContext? = none
+        if let context = given {
+            if context.isValid {
+                parent = context
+            }
+        }
+        let listeners = Tracing.listeners.withLock { $0 }
+        let traceId = parent?.traceId ?? TraceId.random()
+        var decision = SamplingDecision.Drop
+        var wanting: (any SpanListener)[>..] = []
+        for listener in listeners {
+            let wanted = listener.sample(self, name, kind, traceId: traceId, parent: parent)
+            if wanted != .Drop {
+                wanting.append(listener)
+            }
+            if wanted.rank > decision.rank {
+                decision = wanted
+            }
+        }
+        let flags = decision == .RecordAndSample ? 1 : 0
+        let context = SpanContext(traceId: traceId, spanId: SpanId.random(), flags: flags, traceState: parent?.traceState ?? "")
+        if decision == .Drop {
+            return Span(context: context, state: none)
+        }
+        let state = SpanState(name: name, context: context, parentSpanId: parent?.spanId, kind: kind, tracer: self, attributes: attributes, listeners: wanting)
+        let span = Span(context: context, state: state)
+        for listener in wanting {
+            listener.started(span)
+        }
+        return span
+    }
+}

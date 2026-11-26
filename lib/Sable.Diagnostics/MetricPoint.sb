@@ -1,0 +1,20 @@
+module Sable.Diagnostics
+
+/// One set of attributes' value (`MetricData.points`).
+@derive(Debug)
+public struct MetricPoint {
+    public let attributes: KeyValue[>..]
+    public let value: MetricValue
+
+    /// The sum or the gauge's value; a histogram's sum.
+    public var number: F64 {
+        get {
+            return match value {
+                case .Sum(let n)                  => n
+                case .Gauge(let n)                => n
+                case .Histogram(let h)            => h.sum
+                case .ExponentialHistogram(let h) => h.sum
+            }
+        }
+    }
+}

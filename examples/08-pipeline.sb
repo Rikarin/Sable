@@ -1,0 +1,145 @@
+module Examples.Pipeline
+
+import Sable.Concurrency
+
+// ---------------------------------------------------------------------------
+// A three-stage dataflow pipeline: lines are parsed, the records batched,
+// and the batches saved. Each block holds a bounded number of items, so a
+// slow last stage slows the producer down instead of letting the backlog
+// grow; and a fault in one block completes the blocks after it with the
+// error, and stops the producer.
+// ---------------------------------------------------------------------------
+
+public struct Record: Sendable {
+    public let id: Int
+    public let amount: Int
+}
+
+@derive(Equatable, Debug)
+public struct BadLine: Error {
+    public let line: String
+
+    public fn description() -> String {
+        return "not a record: '\(line)'"
+    }
+}
+
+fn parse(_ line: String) throws(BadLine) -> Record {
+    let parts = line.split(separator: ',')
+    guard parts.count == 2 else {
+        throw BadLine { line: line }
+    }
+    guard let id = try? Int.parse(parts[0]), let amount = try? Int.parse(parts[1]) else {
+        throw BadLine { line: line }
+    }
+    return Record { id: id, amount: amount }
+}
+
+/// A gate the store waits at until it is opened: a database that is slow.
+@immutable
+final class Gate {
+    let isOpen: Atomic<Bool>
+    let opened: WaitList
+
+    init() {
+        isOpen = Atomic(false)
+        opened = WaitList()
+    }
+
+    fn pass() async {
+        while true {
+            let ticket = opened.ticket
+            if isOpen.load() {
+                return
+            }
+            await opened.park(since: ticket)
+        }
+    }
+
+    fn open() {
+        isOpen.store(true)
+        opened.wakeAll()
+    }
+}
+
+/// The pipeline: parse → batch → save, linked with completion propagated.
+struct Pipeline {
+    let parser: TransformBlock<String, Record>
+    let batcher: BatchBlock<Record>
+    let store: ActionBlock<Record[>..]>
+
+    init(_ gate: Gate, _ saved: Atomic<Int>, _ batches: Atomic<Int>) {
+        parser = TransformBlock<String, Record>(capacity: 20, parallelism: 4) { line in try parse(line) }
+        batcher = BatchBlock<Record>(size: 25, capacity: 4)
+        store = ActionBlock<Record[>..]>(capacity: 2) { batch in
+            await gate.pass()
+            saved.add(batch.count)
+            batches.add(1)
+        }
+        parser.link(to: batcher, propagateCompletion: true)
+        batcher.link(to: store, propagateCompletion: true)
+    }
+}
+
+fn lines(_ count: Int, badAt: Int? = none) -> String[>..] {
+    return (0..<count).map { i in i == badAt ? "garbage" : "\(i),\(i % 97)" }
+}
+
+@main
+fn main() async {
+    // A slow store: the producer is held back, and the pipeline holds what
+    // its blocks' capacities allow — not the two thousand lines it is given.
+    let gate = Gate()
+    let saved = Atomic(0)
+    let batches = Atomic(0)
+    let pipeline = Pipeline(gate, saved, batches)
+    let sent = Atomic(0)
+    let input = lines(2_000)
+    let producer = Task.spawn {
+        for line in input {
+            if await pipeline.parser.send(line) != .Sent {
+                return
+            }
+            sent.add(1)
+        }
+        pipeline.parser.complete()
+    }
+    await Task.settle()
+    let held = sent.load()
+    print("while the store is stuck, the pipeline took \(held) of \(input.count) lines")
+    print("bounded: \(held <= 20 + 4 + 20 + 1 + 4 + 1 + 24 + 25 * (4 + 1 + 2 + 1))")
+    gate.open()
+    await producer.value
+    do {
+        try await pipeline.store.completion()
+        print("saved \(saved.load()) records in \(batches.load()) batches")
+    } catch {
+        print("failed: \(error)")
+    }
+
+    // A bad line faults the parser: the batcher and the store complete with
+    // its error, and the producer's sends are refused.
+    let quick = Gate()
+    quick.open()
+    let failing = Pipeline(quick, Atomic(0), Atomic(0))
+    var refused = 0
+    for line in lines(200, badAt: 100) {
+        if await failing.parser.send(line) != .Sent {
+            refused += 1
+        }
+    }
+    failing.parser.complete()
+    do {
+        try await failing.batcher.completion()
+        print("batcher: completed")
+    } catch {
+        print("batcher: \(error)")
+    }
+    do {
+        try await failing.store.completion()
+        print("store: completed")
+    } catch {
+        print("store: \(error)")
+    }
+    print("some sends were refused: \(refused > 0)")
+}

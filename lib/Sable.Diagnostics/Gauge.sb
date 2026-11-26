@@ -1,0 +1,38 @@
+module Sable.Diagnostics
+
+/// A value set now and then — a temperature, a setting — the last one set
+/// being what is collected (`Meter.gauge`). OpenTelemetry's Gauge, .NET 9's
+/// `Gauge<T>`. A value asked for as it is collected is an observable gauge
+/// (`Meter.observableGauge`).
+///
+/// ```sable
+/// let meter = Meter("room")
+/// let temperature = meter.gauge("room.temperature", unit: "Cel", of: F64.self)
+/// temperature.record(21.5)
+/// ```
+@immutable
+public final class Gauge<Value: MetricNumber> {
+    let instrument: Instrument
+
+    init(_ instrument: Instrument) {
+        self.instrument = instrument
+    }
+
+    public var name: String => instrument.name
+
+    /// The value set, for no attributes.
+    @inline(always)
+    public fn record(_ value: Value) {
+        if Metrics.isCollecting {
+            instrument.set(value.metricInteger, value.metricNumber, instrument.plain)
+        }
+    }
+
+    /// The value set, for the attributes.
+    @inline(always)
+    public fn record(_ value: Value, _ attributes: @autoclosure () -> KeyValue[>..]) {
+        if Metrics.isCollecting {
+            instrument.set(value.metricInteger, value.metricNumber, instrument.series(attributes()))
+        }
+    }
+}

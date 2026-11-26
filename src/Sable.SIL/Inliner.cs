@@ -243,19 +243,25 @@ public sealed class Inliner : ISilPass {
 
     /// <summary>
     ///     Whether to inline the code of a closure that is only called and
-    ///     destroyed where it is made, at each of its calls: as a callee is,
-    ///     where a closure called once is moved rather than copied. What it
-    ///     saves is more than a call's: its context, made and destroyed, and
-    ///     the copies of what it captured. One called once may loop: what
-    ///     it borrows it borrows from its context, which is then gone, and
-    ///     its body is where LLVM would put it anyway.
+    ///     destroyed where it is made, at each of its calls. What that saves
+    ///     is more than a call: its context, made and destroyed, and the
+    ///     copies of what it captured. Called once, its code is moved rather
+    ///     than copied, and is inlined as a single caller's callee is — loops
+    ///     and all, as what it borrows it borrows from its context, which is
+    ///     then gone, and LLVM would put its body there anyway. Called in two
+    ///     places — the two ways of an inlined function's branch — it is
+    ///     inlined as any small callee is; in more, not. One never called is
+    ///     only its context, destroyed.
     /// </summary>
     internal static bool InlinesClosure(SilFunction code, int calls) =>
         !code.Vectorised && !code.IsUnspecialised
         && code.Blocks.Any(static b => b.Terminator is ReturnInst)
-        && (calls == 1
-            ? Cost(code, SingleCallerThreshold) <= SingleCallerThreshold
-            : Cost(code, Threshold) <= Threshold && !Loops(code));
+        && calls switch {
+            0 => true,
+            1 => Cost(code, SingleCallerThreshold) <= SingleCallerThreshold,
+            2 => Cost(code, Threshold) <= Threshold && !Loops(code),
+            _ => false,
+        };
 
     /// <summary>What inlining the function costs, counted until it passes <paramref name="limit" />.</summary>
     public static int Cost(SilFunction function, int limit = int.MaxValue) {

@@ -1,0 +1,243 @@
+module Sable.Concurrency
+
+// A subject keeps, under one lock, a stream continuation for each
+// subscriber, and the last so many values for those to come. A send yields
+// to each; finishing takes the subscribers out under the lock and finishes
+// them after it, as their termination handlers take it again to leave.
+
+/// A BroadcastSubject that cannot fail: a ThrowingBroadcastSubject whose
+/// Failure is Never.
+///
+/// ```sable
+/// let prices = BroadcastSubject<Int>(replay: 1)
+/// prices.send(100)
+/// let watcher = Task.spawn {
+///     var seen: Int[>..] = []
+///     for await price in prices {
+///         seen.append(price)
+///     }
+///     return seen
+/// }
+/// await Task.settle()
+/// prices.send(101)
+/// prices.finish()
+/// assert(await watcher.value == [100, 101])
+/// ```
+public alias BroadcastSubject<Element: Sendable> = ThrowingBroadcastSubject<Element, Never>
+
+/// Values sent to every subscriber, as an async sequence of its own for
+/// each: Rx's `Subject` and `ReplaySubject`, Combine's
+/// `PassthroughSubject`. Each `for await` over it, or iterator made of it,
+/// is a subscriber, which gets every value sent from then on — first the
+/// last `replay` sent before it came — until the subject is finished, or
+/// the subscriber is let go. A send never waits: each subscriber holds what
+/// it has not yet taken, as its buffering policy says. Finished with an
+/// error, its subscribers throw it once they have the values before it.
+///
+/// ```sable
+/// enum Feed: Error {
+///     Lost
+/// }
+/// let events = ThrowingBroadcastSubject<String, Feed>()
+/// var first = events.makeAsyncIterator()
+/// var second = events.makeAsyncIterator()
+/// events.send("tick")
+/// events.finish(throwing: .Lost)
+/// assert(try! await first.next() == "tick")
+/// assert(try! await second.next() == "tick")
+/// do {
+///     _ = try await first.next()
+/// } catch {
+///     assert(error == .Lost)
+/// }
+/// ```
+@immutable
+public final class ThrowingBroadcastSubject<Element: Sendable, Failure: Error>: AsyncSequence {
+    public alias Iter = SubjectIterator<Element, Failure>
+
+    let core: SubjectCore<Element, Failure>
+
+    /// A subject that gives each new subscriber the last so many values sent
+    /// before it subscribed, and holds for each what it has not yet taken as
+    /// the policy says.
+    public init(replay: Int = 0, bufferingPolicy: StreamBufferingPolicy = .Unbounded) {
+        precondition(replay >= 0, "a subject cannot replay \(replay) values")
+        core = SubjectCore<Element, Failure>(replay, bufferingPolicy)
+    }
+
+    /// The value sent to every subscriber: whether it was, false once the
+    /// subject is finished.
+    @discardable
+    public fn send(_ value: Element) -> Bool {
+        return core.send(value)
+    }
+
+    /// No more values: each subscriber has those sent, then none.
+    public fn finish() {
+        core.end(none)
+    }
+
+    /// No more values: each subscriber has those sent, then the error.
+    public fn finish(throwing error: Failure) {
+        core.end(error)
+    }
+
+    /// Whether it has been finished.
+    public var isFinished: Bool => core.state.withLock { $0.ended }
+
+    /// How many subscribers it has now.
+    public var subscriberCount: Int => core.state.withLock { $0.subscribers.count }
+
+    /// A subscriber of the values from now on, after those replayed.
+    public fn makeAsyncIterator() -> SubjectIterator<Element, Failure> {
+        return core.subscribe()
+    }
+}
+
+/// A subscriber of a subject: its values, as they are sent. Let go, it
+/// leaves the subject.
+public struct SubjectIterator<Value: Sendable, Failure: Error>: AsyncIterator {
+    public alias Element = Value
+
+    var stream: StreamIterator<Value, Failure>
+    let subscription: SubjectSubscription<Value, Failure>
+
+    /// The next value sent; none once the subject is finished and its
+    /// values taken, or if the task is cancelled while it waits. A subject
+    /// finished with an error throws it, once.
+    public mutating fn next() async throws(Failure) -> Value? {
+        return try await stream.next()
+    }
+}
+
+// A subscriber's place in its subject, given up as the last copy of its
+// iterator goes.
+@immutable
+final class SubjectSubscription<Value: Sendable, Failure: Error> {
+    let core: SubjectCore<Value, Failure>
+    let id: Int
+
+    init(_ core: SubjectCore<Value, Failure>, _ id: Int) {
+        self.core = core
+        self.id = id
+    }
+
+    deinit {
+        core.remove(id)
+    }
+}
+
+struct SubjectState<T: Sendable, Failure: Error> {
+    var subscribers: [Int: StreamContinuation<T, Failure>] = [:]
+    var lastId: Int = 0
+    var replayed: ValueQueue<T> = ValueQueue<T>()
+    var ended: Bool = false
+    var failure: Failure? = none
+
+    init() { }
+}
+
+@immutable
+final class SubjectCore<T: Sendable, Failure: Error> {
+    let state: Mutex<SubjectState<T, Failure>>
+    let replay: Int
+    let policy: StreamBufferingPolicy
+
+    init(_ replay: Int, _ policy: StreamBufferingPolicy) {
+        state = Mutex(SubjectState<T, Failure>())
+        self.replay = replay
+        self.policy = policy
+    }
+
+    fn send(_ value: T) -> Bool {
+        Runtime.share(value)
+        let replay = self.replay
+        return state.withLock { (state: inout SubjectState<T, Failure>) -> Bool in
+            if state.ended {
+                return false
+            }
+            if replay > 0 {
+                if state.replayed.count == replay {
+                    _ = state.replayed.removeFirst()
+                }
+                state.replayed.append(value)
+            }
+            for (_, subscriber) in state.subscribers {
+                _ = subscriber.yield(value)
+            }
+            return true
+        }
+    }
+
+    // The newest value replayed, if any.
+    fn latest() -> T? {
+        return state.withLock { (state: inout SubjectState<T, Failure>) -> T? in
+            if state.replayed.isEmpty {
+                return none
+            }
+            return state.replayed.at(state.replayed.count - 1)
+        }
+    }
+
+    fn end(_ error: Failure?) {
+        Runtime.share(error)
+        let subscribers = state.withLock { (state: inout SubjectState<T, Failure>) -> StreamContinuation<T, Failure>[>..] in
+            if state.ended {
+                return []
+            }
+            state.ended = true
+            state.failure = error
+            var all: StreamContinuation<T, Failure>[>..] = []
+            for (_, subscriber) in state.subscribers {
+                all.append(subscriber)
+            }
+            state.subscribers = [:]
+            return all
+        }
+        for subscriber in subscribers {
+            if let failure = error {
+                subscriber.finish(throwing: failure)
+            } else {
+                subscriber.finish()
+            }
+        }
+    }
+
+    fn subscribe() -> SubjectIterator<T, Failure> {
+        let (stream, continuation) = AsyncThrowingStream<T, Failure>.make(bufferingPolicy: policy)
+        let (id, ended, failure) = state.withLock { (state: inout SubjectState<T, Failure>) -> (Int, Bool, Failure?) in
+            var i = 0
+            while i < state.replayed.count {
+                _ = continuation.yield(state.replayed.at(i))
+                i += 1
+            }
+            if state.ended {
+                return (0, true, state.failure)
+            }
+            state.lastId += 1
+            state.subscribers[state.lastId] = continuation
+            return (state.lastId, false, none)
+        }
+        if ended {
+            if let error = failure {
+                continuation.finish(throwing: error)
+            } else {
+                continuation.finish()
+            }
+        } else {
+            let core = self
+            continuation.onTermination { reason in
+                core.remove(id)
+            }
+        }
+        return SubjectIterator<T, Failure> { stream: stream.makeAsyncIterator(), subscription: SubjectSubscription<T, Failure>(self, id) }
+    }
+
+    fn remove(_ id: Int) {
+        if id == 0 {
+            return
+        }
+        let gone = state.withLock { $0.subscribers.remove(id) }
+        _ = gone
+    }
+}

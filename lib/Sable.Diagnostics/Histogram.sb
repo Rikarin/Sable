@@ -1,0 +1,40 @@
+module Sable.Diagnostics
+
+/// How values were spread — request durations, payload sizes — recorded
+/// from any task, without a lock (`Meter.histogram`): their count, sum, min
+/// and max, and how many fell in each bucket, of bounds given or
+/// exponential (`HistogramBuckets`). NaN and infinities are left out, and
+/// negative values from an exponential one. OpenTelemetry's Histogram,
+/// .NET's `Histogram<T>`.
+///
+/// ```sable
+/// let meter = Meter("http")
+/// let duration = meter.histogram("http.server.request.duration", unit: "s", buckets: .exponential)
+/// duration.record(0.023, [KeyValue("http.route", "/orders")])
+/// ```
+@immutable
+public final class Histogram<Value: MetricNumber> {
+    let instrument: Instrument
+
+    init(_ instrument: Instrument) {
+        self.instrument = instrument
+    }
+
+    public var name: String => instrument.name
+
+    /// The value recorded, with no attributes.
+    @inline(always)
+    public fn record(_ value: Value) {
+        if Metrics.isCollecting {
+            instrument.record(value.metricNumber, instrument.plain)
+        }
+    }
+
+    /// The value recorded with the attributes.
+    @inline(always)
+    public fn record(_ value: Value, _ attributes: @autoclosure () -> KeyValue[>..]) {
+        if Metrics.isCollecting {
+            instrument.record(value.metricNumber, instrument.series(attributes()))
+        }
+    }
+}

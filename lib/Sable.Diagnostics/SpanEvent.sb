@@ -1,0 +1,17 @@
+module Sable.Diagnostics
+
+/// Something that happened at a moment of a span (`Span.addEvent`): a name,
+/// the time, attributes. An error recorded is one named "exception".
+@derive(Equatable, Debug)
+public struct SpanEvent {
+    public let name: String
+    /// When, in nanoseconds since 1970 (UTC).
+    public let time: Int
+    public let attributes: KeyValue[>..]
+
+    public init(name: String, time: Int, attributes: KeyValue[>..] = []) {
+        self.name = name
+        self.time = time
+        self.attributes = attributes
+    }
+}

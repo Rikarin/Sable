@@ -305,7 +305,11 @@ public sealed class AsyncTests {
         var many = Counts(BuildAndRun(AwaitChain(1000), environment: stats).Stderr);
         Assert.NotEqual("", few.Allocations);
         Assert.Equal(few, many);
-        Assert.Equal("0", many.Chunks);
+        // chain(6) down to chain(0) are seven frames on main's slab, as a
+        // function that calls itself is inlined nowhere (once, chain(6)
+        // was inlined into main, and six fitted): one chunk past the
+        // slab's first, made once and kept for every round after.
+        Assert.Equal("1", many.Chunks);
     }
 
     /// <summary>

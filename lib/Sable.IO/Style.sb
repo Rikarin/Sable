@@ -1,0 +1,161 @@
+module Sable.IO
+
+/// How text is shown on a terminal: its colour, the colour behind it, and
+/// bold, dim, italic, underlined, blinking, inverse, hidden or struck
+/// through. A value, each call giving one with more said. Written as the
+/// escape sequences (SGR) every terminal reads, and only as far as the
+/// stream shows them (`ColorSupport`): nothing to a file or a pipe, no
+/// colour where NO_COLOR asks for none, the nearest colour a terminal of
+/// fewer has. .NET's `ForegroundColor` and `BackgroundColor`; Rust's
+/// `anstyle`.
+///
+/// ```sable
+/// let alert = Style().foreground(.red).bold()
+/// Console.writeLine("disk full", style: alert)
+/// assert(alert.apply(to: "disk full", for: .Basic) == "\u{1B}[1;31mdisk full\u{1B}[0m")
+/// assert(alert.apply(to: "disk full", for: .Monochrome) == "\u{1B}[1mdisk full\u{1B}[0m")
+/// assert(alert.apply(to: "disk full", for: .None) == "disk full")
+/// ```
+@derive(Equatable, Debug)
+public struct Style {
+    /// The text's colour; the terminal's own for none.
+    public var foregroundColor: TerminalColor?
+    /// The colour behind it; the terminal's own for none.
+    public var backgroundColor: TerminalColor?
+    public var isBold: Bool
+    public var isDim: Bool
+    public var isItalic: Bool
+    public var isUnderlined: Bool
+    public var isBlinking: Bool
+    public var isInverse: Bool
+    public var isHidden: Bool
+    public var isStrikethrough: Bool
+
+    /// Text as the terminal shows it of itself.
+    public init() {
+        foregroundColor = none
+        backgroundColor = none
+        isBold = false
+        isDim = false
+        isItalic = false
+        isUnderlined = false
+        isBlinking = false
+        isInverse = false
+        isHidden = false
+        isStrikethrough = false
+    }
+
+    /// Whether it changes nothing.
+    public var isPlain: Bool => self == Style()
+
+    /// In the colour.
+    public fn foreground(_ color: TerminalColor) -> Style {
+        var style = self
+        style.foregroundColor = color
+        return style
+    }
+
+    /// On the colour.
+    public fn background(_ color: TerminalColor) -> Style {
+        var style = self
+        style.backgroundColor = color
+        return style
+    }
+
+    public fn bold() -> Style {
+        var style = self
+        style.isBold = true
+        return style
+    }
+
+    public fn dim() -> Style {
+        var style = self
+        style.isDim = true
+        return style
+    }
+
+    public fn italic() -> Style {
+        var style = self
+        style.isItalic = true
+        return style
+    }
+
+    public fn underlined() -> Style {
+        var style = self
+        style.isUnderlined = true
+        return style
+    }
+
+    public fn blinking() -> Style {
+        var style = self
+        style.isBlinking = true
+        return style
+    }
+
+    /// With the colours of the text and behind it swapped.
+    public fn inverse() -> Style {
+        var style = self
+        style.isInverse = true
+        return style
+    }
+
+    /// Not shown, though it takes its place.
+    public fn hidden() -> Style {
+        var style = self
+        style.isHidden = true
+        return style
+    }
+
+    public fn strikethrough() -> Style {
+        var style = self
+        style.isStrikethrough = true
+        return style
+    }
+
+    /// The escape sequence that starts text so shown, on a stream that shows
+    /// so much; empty where it shows none of it.
+    ///
+    /// ```sable
+    /// let style = Style().foreground(.Rgb(red: 255, green: 128, blue: 0)).underlined()
+    /// assert(style.escape(for: .TrueColor) == "\u{1B}[4;38;2;255;128;0m")
+    /// assert(style.escape(for: .Extended) == "\u{1B}[4;38;5;208m")
+    /// ```
+    public fn escape(for support: ColorSupport) -> String {
+        if support == .None {
+            return ""
+        }
+        var parts: String[>..] = []
+        let flags = [isBold, isDim, isItalic, isUnderlined, isBlinking, isInverse, isHidden, isStrikethrough]
+        let codes = ["1", "2", "3", "4", "5", "7", "8", "9"]
+        for i in 0..<flags.count {
+            if flags[i] {
+                parts.append(codes[i])
+            }
+        }
+        if support.hasColor {
+            if let color = foregroundColor {
+                parts.append(color.nearest(for: support).parameters(background: false))
+            }
+            if let color = backgroundColor {
+                parts.append(color.nearest(for: support).parameters(background: true))
+            }
+        }
+        if parts.isEmpty {
+            return ""
+        }
+        return "\u{1B}[" + parts.joined(separator: ";") + "m"
+    }
+
+    /// The text so shown, and the terminal's own style after it, on a stream
+    /// that shows so much; the text alone where it shows none of it.
+    public fn apply(to text: String, for support: ColorSupport) -> String {
+        let start = escape(for: support)
+        if start.isEmpty {
+            return text
+        }
+        return start + text + Style.reset
+    }
+
+    /// What puts the terminal's own style back.
+    public static var reset: String => "\u{1B}[0m"
+}

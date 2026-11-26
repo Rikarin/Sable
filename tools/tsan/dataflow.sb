@@ -1,0 +1,124 @@
+module DataflowStress
+
+import Sable.Concurrency
+import Sable.Time
+
+// Dataflow blocks, the multi-stream operators and the subjects, many at
+// once, for ThreadSanitizer (tools/tsan/run.sh): parallel blocks giving in
+// order, links with predicates, a fault flowing both ways, concurrent maps,
+// merges and switches, subjects with subscribers on every worker.
+
+struct Stop: Error { }
+
+@main
+fn main() async {
+    let total = Atomic(0)
+    for round in 0..<6 {
+        // parse → batch → (evens | the rest), the parse in parallel.
+        let parse = TransformBlock<Int, Int>(capacity: 16, parallelism: 4) { n in
+            await Task.yield()
+            return n * 2 + round
+        }
+        let batch = BatchBlock<Int>(size: 7, capacity: 4)
+        let fan = BroadcastBlock<Int[>..]>(capacity: 2)
+        let evens = ActionBlock<Int[>..]>(capacity: 2, parallelism: 2) { rows in total.add(rows.count) }
+        let all = ActionBlock<Int[>..]>(capacity: 2) { rows in total.add(rows[0]) }
+        parse.link(to: batch, propagateCompletion: true)
+        batch.link(to: fan, propagateCompletion: true)
+        fan.link(to: evens, propagateCompletion: true, where: { $0[0] % 2 == 0 })
+        fan.link(to: all, propagateCompletion: true)
+        let producers = (0..<3).map { p in
+            Task.spawn {
+                for i in 0..<200 {
+                    _ = await parse.send(p * 1000 + i)
+                }
+            }
+        }
+        for producer in producers {
+            await producer.value
+        }
+        parse.complete()
+        try! await all.completion()
+        try! await evens.completion()
+
+        // A fault downstream stops the producer.
+        let source = TransformBlock<Int, Int>(capacity: 4, parallelism: 2) { $0 }
+        let failing = ActionBlock<Int>(parallelism: 2) { (n: Int) throws -> Void in
+            if n == 50 {
+                throw Stop()
+            }
+        }
+        source.link(to: failing, propagateCompletion: true)
+        var refused = 0
+        for i in 0..<1000 {
+            if await source.send(i) != .Sent {
+                refused += 1
+                break
+            }
+        }
+        total.add(refused)
+
+        // Concurrent maps and merges.
+        let mapped = try! await (0..<300).async.mapConcurrent(maxParallel: 8) { n in
+            await Task.yield()
+            return n + 1
+        }.collect()
+        total.add(mapped.count)
+        let flat = try! await (0..<50).async.flatMapConcurrent(maxParallel: 4) { n in [n, n].async }.collect()
+        total.add(flat.count)
+        let a = Channel<Int>(capacity: 2)
+        let b = Channel<Int>(capacity: 2)
+        let c = Channel<Int>(capacity: 2)
+        let feeders = [a, b, c].map { channel in
+            Task.spawn {
+                for i in 0..<100 {
+                    await channel.send(i)
+                }
+                channel.close()
+            }
+        }
+        total.add(await merge(a, b, c).collect().count)
+        for feeder in feeders {
+            await feeder.value
+        }
+
+        // Subjects with subscribers on every worker.
+        let subject = BroadcastSubject<Int>(replay: 2)
+        let listeners = (0..<6).map { _ in
+            Task.spawn {
+                var seen = 0
+                for await _ in subject {
+                    seen += 1
+                }
+                return seen
+            }
+        }
+        await Task.settle()
+        let senders = (0..<3).map { s in
+            Task.spawn {
+                for i in 0..<100 {
+                    subject.send(s * 100 + i)
+                }
+            }
+        }
+        for sender in senders {
+            await sender.value
+        }
+        subject.finish()
+        for listener in listeners {
+            total.add(await listener.value)
+        }
+
+        // Timed operators on the real clock, briefly.
+        let ticks = Channel<Int>()
+        let sampled = Task.spawn {
+            await ticks.debounce(for: Duration.milliseconds(1)).collect().count
+        }
+        for i in 0..<50 {
+            await ticks.send(i)
+        }
+        ticks.close()
+        total.add(await sampled.value)
+    }
+    print(total.load() > 0)
+}

@@ -1017,6 +1017,71 @@ public sealed class PassTests {
     }
 
     /// <summary>
+    ///     A trailing closure that is no autoclosure, given to an inlined
+    ///     function that calls it on both ways of a branch, is inlined in
+    ///     both: no closure is made, nor its context, and the result is as
+    ///     before.
+    /// </summary>
+    [Fact]
+    public void ASmallClosureCalledOnBothWaysOfAnInlinedBranchMakesNoContext() {
+        var module = Lowered(
+            """
+            @inline(always)
+            fn either(_ flag: Bool, _ body: (Int) -> Int) -> Int {
+                if flag {
+                    return body(1) + 100
+                }
+                return body(2)
+            }
+            fn probe(_ n: Int) -> Int {
+                var total = 0
+                for i in 0..<n {
+                    total += either(i % 2 == 0) { x in x * i }
+                }
+                return total
+            }
+            """
+        );
+        var before = new SilInterpreter(module).Run("M.probe", 6L);
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.DoesNotContain(Instructions(module.Find("M.probe")!), static i => i is PartialApplyInst or AllocRefInst);
+        Assert.Equal(before, new SilInterpreter(module).Run("M.probe", 6L));
+    }
+
+    /// <summary>
+    ///     A global <c>let</c>'s value is borrowed where it is read, across
+    ///     calls, as nothing can write it: no copy, and no destroy.
+    /// </summary>
+    [Fact]
+    public void AGlobalLetIsBorrowedAcrossCalls() {
+        var module = Lowered(
+            """
+            final class Box {
+                let n: Int
+                init(_ n: Int) { self.n = n }
+                fn get() -> Int { return n }
+            }
+            let shared = Box(3)
+            var changing = Box(4)
+            @inline(never)
+            fn other() -> Int { return 1 }
+            fn probe() -> Int {
+                return shared.get() + other() + shared.n + changing.get()
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var probe = Instructions(module.Find("M.probe")!).ToList();
+        Assert.Contains(probe, static i => i is LoadBorrowInst { Address: GlobalAddrInst { Global: "M.shared" } });
+        Assert.DoesNotContain(probe, static i => i is LoadInst { Kind: LoadKind.Copy, Address: GlobalAddrInst { Global: "M.shared" } });
+        Assert.Contains("M.shared", module.ConstantGlobals);
+        Assert.DoesNotContain("M.changing", module.ConstantGlobals);
+    }
+
+    /// <summary>
     ///     A <c>let</c> in a loop that borrows what stays put is held in an
     ///     unmanaged slot, stored each turn and never destroyed: the slot owns
     ///     nothing, so the store of the next turn, <c>[init]</c> as the slot

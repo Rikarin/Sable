@@ -8,10 +8,14 @@ namespace Sable.SIL;
 /// <remarks>
 ///     <para>
 ///         A closure whose code is <c>inline(always)</c> — an autoclosure's
-///         — or small as the inliner counts, as a body given to
-///         <c>withPointer</c> is, that the function only calls and destroys
-///         is no closure at all: each call is its code, inlined with the context as its
-///         argument, and each destroy the context's. Nothing is left of the
+///         — that the function only calls and destroys is no closure at
+///         all: each call is its code, inlined with the context as its
+///         argument, and each destroy the context's. So is one whose code
+///         the inliner would inline there (<see cref="Inliner.InlinesClosure" />),
+///         in code that is not compiled once for every type: a body given
+///         to <c>withPointer</c>, or a trailing closure given to an inlined
+///         function, as <c>tracer.withSpan("a") { … }</c> with nothing
+///         listening. Nothing is left of the
 ///         <c>partial_apply</c>. A callee that never asked for the value,
 ///         as <c>assert</c> in a release build, leaves it only destroyed,
 ///         and its argument is then never worked out.
@@ -42,7 +46,7 @@ public sealed class InlineClosures : ISilPass {
                     && module.Find(code.Function) is { Blocks.Count: > 0 } callee
                     && callee != function && callee.Inline != SilInline.Never
                     && OnlyCalled(closure, new Uses(function)) is { } uses
-                    && (callee.Inline == SilInline.Always || Inliner.InlinesClosure(callee, uses.Count(static u => u is ApplyInst)))) {
+                    && (callee.Inline == SilInline.Always || !function.IsUnspecialised && Inliner.InlinesClosure(callee, uses.Count(static u => u is ApplyInst)))) {
                     Unclose(function, closure, code, callee, uses);
                     changed = true;
                 }

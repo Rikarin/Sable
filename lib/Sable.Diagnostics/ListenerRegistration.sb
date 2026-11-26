@@ -1,0 +1,20 @@
+module Sable.Diagnostics
+
+/// A listener's place among those of spans, or of metrics: let go of by
+/// `cancel`.
+public final class ListenerRegistration {
+    let id: Int
+    var cancelled: Bool = false
+
+    init(id: Int) {
+        self.id = id
+    }
+
+    /// The listener told of nothing more.
+    public fn cancel() {
+        if !cancelled {
+            cancelled = true
+            Tracing.remove(id)
+        }
+    }
+}

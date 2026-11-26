@@ -5488,6 +5488,42 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 asm \"\", \"=r,0\"(i64 {operands[0]})");
                     return;
 
+                // An array's buffer, the only reference to it: the empty
+                // array, which has none, is.
+                case "ref_is_unique" when builtin.Operands[0].Type is AddressType { Pointee: ArrayType }: {
+                    var array = Fresh();
+                    var isNull = Fresh();
+                    var empty = NewLabel("unique.empty");
+                    var check = NewLabel("unique.check");
+                    var done = NewLabel("unique.done");
+                    Line($"{array} = load ptr, ptr {operands[0]}, !tbaa {TbaaReference}");
+                    Line($"{isNull} = icmp eq ptr {array}, null");
+                    Line($"br i1 {isNull}, label %{empty}, label %{check}");
+                    Continue(empty);
+                    Line($"br label %{done}");
+                    Continue(check);
+                    var strongField = Fresh();
+                    var strong = Fresh();
+                    var flagsField = Fresh();
+                    var flags = Fresh();
+                    var immortal = Fresh();
+                    var sole = Fresh();
+                    var mortal = Fresh();
+                    var both = Fresh();
+                    Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
+                    Line($"{strong} = load atomic i32, ptr {strongField} acquire, align 4");
+                    Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 2");
+                    Line($"{flags} = load atomic i32, ptr {flagsField} monotonic, align 4");
+                    Line($"{immortal} = and i32 {flags}, 1");
+                    Line($"{mortal} = icmp eq i32 {immortal}, 0");
+                    Line($"{sole} = icmp eq i32 {strong}, 1");
+                    Line($"{both} = and i1 {sole}, {mortal}");
+                    Line($"br label %{done}");
+                    Continue(done);
+                    Line($"{Result()} = phi i1 [ true, %{empty} ], [ {both}, %{check} ]");
+                    return;
+                }
+
                 // The only reference, and not immortal: free to change in place.
                 case "ref_is_unique": {
                     var objectPointer = Fresh();

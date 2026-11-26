@@ -6606,6 +6606,9 @@ public sealed partial class Binder {
     ///     any other, and a call of itself can be given them.
     /// </summary>
     TypeSymbol Said(TypeSymbol type, ImmutableArray<TypeParameterSymbol> inferrable) {
+        // What the requirements in force say a type parameter is, it is:
+        // 'self' in 'extension Box where T == F32' is a Box<F32>.
+        type = _conversions.Equivalence.Canonical(type);
         Dictionary<TypeParameterSymbol, TypeSymbol>? unsaid = null;
         foreach (var parameter in inferrable) {
             if (TypeSubstitution.Mentions(type, parameter) && !IsInScope(parameter)) {
@@ -10473,6 +10476,10 @@ public sealed partial class Binder {
                 continue;
             }
 
+            // Of the operators that fit, the first, unless a later one is
+            // more specific: 'extension Tensor where T == F32' over 'where
+            // T: Numeric', as a call's overloads are chosen (MoreSpecific).
+            UserOperator? fit = null;
             foreach (var member in named.OriginalDefinition.Members) {
                 if (member is not FunctionSymbol { FunctionKind: FunctionKind.Operator } function) {
                     continue;
@@ -10504,8 +10511,14 @@ public sealed partial class Binder {
                 if (_conversions.HasImplicitConversion(left, leftParameter, leftLiteral)
                     && _conversions.HasImplicitConversion(right, rightParameter, rightLiteral)
                     && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
-                    return new UserOperator(function, leftParameter, rightParameter, members);
+                    if (fit is null || ReferenceEquals(MoreSpecific(function, fit.Value.Method), function)) {
+                        fit = new UserOperator(function, leftParameter, rightParameter, members);
+                    }
                 }
+            }
+
+            if (fit is not null) {
+                return fit;
             }
         }
 

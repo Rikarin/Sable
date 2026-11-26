@@ -136,6 +136,13 @@ extension<Element> Element[>..] {
     @builtin("array_append_holes")
     package mutating fn append(holes count: Int)
 
+    // Whether the array is the only reference to its buffer, so that a write
+    // would change it in place rather than a copy: true of the empty one.
+    // What the library's own copy-on-write values ask before they choose to
+    // reuse a buffer (Sable.Math.Tensors' arithmetic).
+    @builtin("ref_is_unique")
+    package mutating fn isUniquelyReferenced() -> Bool
+
     // The element at the place, moved out: where it was is a hole.
     @builtin("array_take")
     package mutating fn take(at index: Int) -> Element

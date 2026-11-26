@@ -682,7 +682,9 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                if (SignatureOf(symbol, source.Syntax, TypeSubstitution.Empty) is { } signature) {
+                // A library's declared from its interface needs no file read for
+                // it: the syntax is only where a failure would be reported.
+                if (SignatureOf(symbol, source.SyntaxOr(_compilation.SyntaxTrees[0].Root), TypeSubstitution.Empty) is { } signature) {
                     _module.Foreign[_names[symbol]] = (foreign, signature);
                 }
 

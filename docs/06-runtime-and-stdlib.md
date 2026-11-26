@@ -1968,7 +1968,8 @@ A `Tensor` owns its elements and is a value, copied on write.
   foreign array (below), the struct's deleter called when the last reference
   goes; copied, and the deleter called at once, where no layout fits the
   strides or a tensor is asked for of read-only elements. Of the CPU and
-  DLPackElement's types (integers, floats, BF16).
+  DLPackElement's types (integers, floats, BF16); unsupported, a trap, where
+  pointers are 32 bits (WASI).
 - `Array2D<T>` and `Array3D<T>` are rectangular arrays of any element, for
   grids rather than arithmetic, .NET's `T[,]` and `T[,,]`.
 

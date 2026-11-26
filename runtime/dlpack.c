@@ -11,6 +11,11 @@
 // the elements' buffer, which its deleter lets go of — on whichever thread
 // the consumer calls it from, so the buffer is shared (counted atomically)
 // first.
+//
+// The library reads and writes the structs at their 64-bit offsets, so where
+// pointers are 32 bits (wasm32 under WASI) DLPack is unsupported: these trap.
+
+#if UINTPTR_MAX == UINT64_MAX
 
 typedef struct {
     uint32_t major;
@@ -146,3 +151,17 @@ void sable_dlpack_delete(int64_t at, bool versioned) {
         }
     }
 }
+
+#else
+
+int64_t sable_dlpack_export(int64_t at, int64_t start, int64_t ndim, int64_t shape_at, int64_t strides_at, int64_t code, int64_t bits, bool versioned) {
+    (void)at, (void)start, (void)ndim, (void)shape_at, (void)strides_at, (void)code, (void)bits, (void)versioned;
+    sable_trap("DLPack is unsupported where pointers are 32 bits (WASI)");
+}
+
+void sable_dlpack_delete(int64_t at, bool versioned) {
+    (void)at, (void)versioned;
+    sable_trap("DLPack is unsupported where pointers are 32 bits (WASI)");
+}
+
+#endif

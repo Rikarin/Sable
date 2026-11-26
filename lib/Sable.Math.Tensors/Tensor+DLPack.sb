@@ -24,6 +24,14 @@ module Sable.Math.Tensors
 //   read-only and asked for as a Tensor, which writes). The producer must
 //   not free or write them meanwhile.
 
+/// Traps where pointers are not 64 bits (wasm32 under WASI): the structs are
+/// read and written at their 64-bit offsets.
+fn checkDLPackPlatform() {
+    if Platform.pointerWidth != 64 {
+        preconditionFailure("DLPack is unsupported where pointers are 32 bits (WASI)")
+    }
+}
+
 /// Where a DLPack struct's DLTensor is, and its deleter and flags.
 struct DLPackFields {
     let tensor: Int
@@ -33,6 +41,7 @@ struct DLPackFields {
 
 /// The fields of a struct at an address, of the kind 'versioned' says.
 unsafe fn dlpackFields(_ managed: RawPtr<Opaque>, versioned: Bool) -> DLPackFields {
+    checkDLPackPlatform()
     let bytes = managed.cast(to: U8.self)
     if managed.isNull {
         preconditionFailure("a DLPack tensor at a null address")

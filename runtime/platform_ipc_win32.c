@@ -4,9 +4,12 @@
 // changes and statistics". Part of platform_win32.c, after
 // platform_process_win32.c, whose pipes (WinPipe) these are.
 
-#include <aclapi.h>
+// Only what windows.h (lean) and iphlpapi.h bring, and icmpapi.h: aclapi.h
+// and sddl.h would bring rpcndr.h, whose macros (small, hyper) are words the
+// runtime's other parts use, the runtime being one translation unit.
 #include <icmpapi.h>
-#include <sddl.h>
+#undef small
+#undef hyper
 
 static int ipc_error_kind(DWORD code) {
     switch (code) {
@@ -159,26 +162,33 @@ static PSID current_user(void) {
     return sid;
 }
 
-// Who may open the pipe: this user alone (a DACL of its SID), or, NULL, as
-// the system's default has it. The descriptor is LocalFree'd.
+// Who may open the pipe: this user alone (a DACL of one ACE, its SID's), or,
+// NULL, as the system's default has it. The descriptor and its ACL are one
+// block, which the caller frees.
 static PSECURITY_DESCRIPTOR local_security(int flags) {
     if ((flags & LOCAL_CURRENT_USER) == 0) {
         return NULL;
     }
 
     PSID sid = current_user();
-    wchar_t *text = NULL;
-    if (sid == NULL || !ConvertSidToStringSidW(sid, &text)) {
-        free(sid);
+    if (sid == NULL) {
         return NULL;
     }
 
-    wchar_t sddl[256];
-    swprintf(sddl, sizeof sddl / sizeof *sddl, L"D:P(A;;GA;;;%ls)", text);
-    LocalFree(text);
+    DWORD acl_size = (DWORD)(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(sid));
+    size_t at = (SECURITY_DESCRIPTOR_MIN_LENGTH + 7) & ~(size_t)7;
+    char *block = malloc(at + acl_size);
+    if (block == NULL) {
+        sable_trap("out of memory");
+    }
+
+    PSECURITY_DESCRIPTOR descriptor = block;
+    PACL acl = (PACL)(block + at);
+    bool made = InitializeSecurityDescriptor(descriptor, SECURITY_DESCRIPTOR_REVISION) && InitializeAcl(acl, acl_size, ACL_REVISION)
+                && AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, sid) && SetSecurityDescriptorDacl(descriptor, TRUE, acl, FALSE);
     free(sid);
-    PSECURITY_DESCRIPTOR descriptor = NULL;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, NULL)) {
+    if (!made) {
+        free(block);
         return NULL;
     }
 
@@ -200,9 +210,7 @@ static PlatformPipe local_listen(const char *name, int flags, bool first) {
         descriptor == NULL ? NULL : &security);
     DWORD code = GetLastError();
     free(path);
-    if (descriptor != NULL) {
-        LocalFree(descriptor);
-    }
+    free(descriptor);
 
     if (pipe == INVALID_HANDLE_VALUE) {
         // The first instance of a name another has already.
@@ -270,16 +278,17 @@ static PlatformPipe local_writer(PlatformPipe which) {
 // Whether the pipe's owner is this user: a server another user made under
 // the name is not connected to.
 static bool owned_by_current_user(HANDLE pipe) {
+    DWORD size = 0;
+    GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, NULL, 0, &size);
+    PSECURITY_DESCRIPTOR descriptor = size == 0 ? NULL : malloc(size);
     PSID owner = NULL;
-    PSECURITY_DESCRIPTOR descriptor = NULL;
-    if (GetSecurityInfo(pipe, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, &owner, NULL, NULL, NULL, &descriptor) != ERROR_SUCCESS) {
-        return false;
-    }
-
-    PSID user = current_user();
+    BOOL defaulted = FALSE;
+    bool known = descriptor != NULL && GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, descriptor, size, &size)
+                 && GetSecurityDescriptorOwner(descriptor, &owner, &defaulted);
+    PSID user = known ? current_user() : NULL;
     bool same = user != NULL && owner != NULL && EqualSid(owner, user);
     free(user);
-    LocalFree(descriptor);
+    free(descriptor);
     return same;
 }
 

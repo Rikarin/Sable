@@ -419,15 +419,17 @@ static bool serial_open(const char *name, const SerialSettings *settings, Platfo
         return false;
     }
 
-    // No other program opens it while this one has it: a hint, which a
-    // pseudo-terminal may not take.
-    ioctl(fd, TIOCEXCL);
     if (!make_nonblocking(fd) || !serial_configure(fd, settings)) {
         NetFailure failure = net_last_failure;
         close(fd);
         net_last_failure = failure;
         return false;
     }
+
+    // No other program opens it while this one has it: once it is set, as
+    // Linux keeps the mark until no one has the terminal open (a
+    // pseudo-terminal's other side keeps it open).
+    ioctl(fd, TIOCEXCL);
 
     ends[0] = fd;
     ends[1] = PIPE_NONE;

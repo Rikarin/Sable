@@ -659,6 +659,9 @@ static void pipes_wait(const PlatformPipe pipes[3]);
 // What is ready, said by another thread than the one in reactor_wait: a
 // pipe of Windows's. tasks.c gives it.
 static void reactor_ready(void *key, int events);
+// That an event (tasks.c's io_event_open) has happened, said from any
+// thread: Windows' change notifications call it. tasks.c gives it.
+static void io_event(int64_t handle);
 
 // ---- Pipes, local streams, shared memory and serial ports ------------------
 

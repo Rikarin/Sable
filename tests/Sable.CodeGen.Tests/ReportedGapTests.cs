@@ -652,4 +652,79 @@ public sealed class ReportedGapTests {
                 print(upTo([1, 2, 0, 5]))
             }
             """).Stdout);
+
+    /// <summary>
+    ///     A closure an async closure gives Mutex.withLock, capturing its parameter, is made on the
+    ///     stack, as it is in a function: it is gone before the async closure can suspend (#343).
+    /// </summary>
+    [Fact]
+    public void AClosureMadeAndGoneBetweenSuspensionsIsOnTheStack() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        using var _ = SilGen.UseGenerics(GenericsMode.Specialised);
+        Assert.Equal("in an async closure: 0, in a function: 0\n", Programs.BuildAndRun("""
+            module WithLockCapture
+
+            import Sable.Concurrency
+
+            union Input<T> {
+                Item(T)
+                Flush
+            }
+
+            @immutable
+            final class Worker<T: Sendable> {
+                let work: async (Input<T>) -> Int
+
+                init(_ work: @escaping @Sendable async (Input<T>) -> Int) {
+                    self.work = work
+                }
+            }
+
+            fn sync(_ pending: Mutex<Int[>..]>, _ item: Input<Int>, _ size: Int) -> Int {
+                return pending.withLock { (held: inout Int[>..]) -> Int in
+                    match item {
+                        case .Item(let value) => {
+                            held.append(value)
+                        }
+                        case .Flush => { }
+                    }
+                    return held.count < size ? 0 : 1
+                }
+            }
+
+            @main
+            fn main() async {
+                let size = 100_000
+                let pending = Mutex<Int[>..]>([])
+                pending.withLock { $0.reserveCapacity(40_000) }
+                let worker = Worker<Int> { item in
+                    return pending.withLock { (held: inout Int[>..]) -> Int in
+                        match item {
+                            case .Item(let value) => {
+                                held.append(value)
+                            }
+                            case .Flush => { }
+                        }
+                        return held.count < size ? 0 : 1
+                    }
+                }
+                _ = await worker.work(.Item(0))
+                _ = sync(pending, .Item(0), size)
+                var before = MemoryStatistics.current().allocations
+                for i in 0..<10_000 {
+                    _ = await worker.work(.Item(i))
+                }
+                let inAsync = MemoryStatistics.current().allocations - before
+                before = MemoryStatistics.current().allocations
+                for i in 0..<10_000 {
+                    _ = sync(pending, .Item(i), size)
+                }
+                let inSync = MemoryStatistics.current().allocations - before
+                print("in an async closure: \(inAsync), in a function: \(inSync)")
+            }
+            """).Stdout);
+    }
 }

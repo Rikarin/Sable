@@ -135,6 +135,45 @@ public static class AsyncLowering {
         static bool IsWait(SilInstruction instruction) =>
             instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" or "task_hop" or "task_park" or "task_park_cancellable" or "task_io_wait" or "task_blocking" };
 
+        /// <summary>
+        ///     Whether an object promoted to the stack is gone before the
+        ///     function can suspend: it, and whatever is made of it (a field's
+        ///     address, a closure of it as its context, a copy, a cast), used
+        ///     only in its own block, after it and before any suspension
+        ///     there, and stored nowhere — not in a slot, which is the frame's.
+        ///     PromoteToStack has shown nothing keeps it past the call.
+        /// </summary>
+        static bool GoneBeforeItSuspends(AllocRefInst alloc) {
+            var block = alloc.Block;
+            var held = new HashSet<SilValue>(ReferenceEqualityComparer.Instance) { alloc };
+            var start = block.Instructions.IndexOf(alloc);
+            var last = start;
+            for (var i = start + 1; i < block.Instructions.Count; i++) {
+                var instruction = block.Instructions[i];
+                if (!instruction.Operands.Any(held.Contains)) {
+                    continue;
+                }
+
+                if (instruction.IsTerminator || IsSuspension(instruction) || instruction is StoreInst store && held.Contains(store.Value)) {
+                    return false;
+                }
+
+                if (instruction is RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or PartialApplyInst or CopyValueInst or UncheckedRefCastInst or UpcastInst or LoadBorrowInst) {
+                    held.Add(instruction);
+                }
+
+                last = i;
+            }
+
+            for (var i = start + 1; i < last; i++) {
+                if (IsSuspension(block.Instructions[i])) {
+                    return false;
+                }
+            }
+
+            return !block.Function.Blocks.Where(b => b != block).SelectMany(static b => b.Instructions).Any(i => i.Operands.Any(held.Contains));
+        }
+
         static bool IsSuspension(SilInstruction instruction) =>
             IsWait(instruction) || instruction is ApplyInst apply && IsAsyncCallee(apply.Callee) || instruction is TryApplyInst tryApply && IsAsyncCallee(tryApply.Callee);
 
@@ -438,10 +477,11 @@ public static class AsyncLowering {
 
             CoroutineSplit.SlotsToFields(function, fields);
 
-            // An object, an array or a block made in the frame would be gone when it suspends.
+            // An object, an array or a block made in the frame would be gone when it suspends —
+            // but for an object made and gone between two places it may (#343).
             foreach (var inFrame in function.Blocks.SelectMany(static b => b.Instructions)) {
                 switch (inFrame) {
-                    case AllocRefInst alloc:
+                    case AllocRefInst { OnStack: true } alloc when !GoneBeforeItSuspends(alloc):
                         alloc.OnStack = false;
                         break;
 

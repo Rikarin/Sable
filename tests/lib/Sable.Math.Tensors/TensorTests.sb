@@ -1,0 +1,219 @@
+module TensorTests
+
+// Tensor (Sable.Math.Tensors), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math.Tensors
+// NumpyTests.sb holds broadcasting, indexing, reductions and products to NumPy.
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+@test
+fn aTensorIsMadeOfAShape() {
+    let t = Tensor<F32>.zeros(shape: [2, 3, 4])
+    expect(t.shape == [2, 3, 4])
+    expect(t.rank == 3 && t.count == 24)
+    expect(t.strides == [12, 4, 1])
+    expect(t.layout == .RowMajor)
+    expect(Tensor<Int>.ones(shape: [2]).toArray() == [1, 1])
+    let scalar = Tensor<Int>(shape: [], repeating: 7)
+    expect(scalar.rank == 0 && scalar.count == 1 && scalar.toArray() == [7])
+    expect(Tensor<Int>(shape: [0, 3], repeating: 1).count == 0)
+}
+
+@test
+fn elementsAreReadAndWrittenAtTheirPlaces() {
+    var t = Tensor<Int>(shape: [2, 3, 4], repeating: 0)
+    t[1, 2, 3] = 9
+    t[index: [0, 1, 2]] = 5
+    expect(t[1, 2, 3] == 9 && t[index: [1, 2, 3]] == 9)
+    expect(t[0, 1, 2] == 5)
+    expect(t.elements[23] == 9)
+    var m = Tensor<Int>(shape: [2, 2], repeating: 0)
+    m[1, 0] = 4
+    expect(m.toArray() == [0, 0, 4, 0])
+    var v = Tensor<Int>(shape: [3], repeating: 0)
+    v[2] = 1
+    expect(v.toArray() == [0, 0, 1])
+}
+
+@test(traps: "index 3 is out of range for dimension 1 of length 3")
+fn aPlaceOutsideTraps() {
+    let t = Tensor<Int>(shape: [2, 3], repeating: 0)
+    _ = t[1, 3]
+}
+
+@test(traps: "an index of 2 for a tensor of rank 3")
+fn anIndexOfTheWrongRankTraps() {
+    let t = Tensor<Int>(shape: [2, 3, 4], repeating: 0)
+    _ = t[1, 2]
+}
+
+@test(traps: "5 elements for a tensor of shape [2, 3]")
+fn tooFewElementsTrap() {
+    _ = Tensor<Int>(shape: [2, 3], elements: [1, 2, 3, 4, 5])
+}
+
+@test
+fn aColumnMajorTensorKeepsItsPlaces() {
+    let rows = Tensor<Int>(shape: [2, 3]) { $0[0] * 10 + $0[1] }
+    let columns = Tensor<Int>(shape: [2, 3], layout: .ColumnMajor) { $0[0] * 10 + $0[1] }
+    expect(columns.strides == [1, 2])
+    expect(columns.elements.toArray() == [0, 10, 1, 11, 2, 12])
+    expect(columns.toArray() == rows.toArray())
+    expect(columns == rows)
+    expect(columns[1, 2] == 12)
+    expect(rows.laidOut(.ColumnMajor).elements.toArray() == [0, 10, 1, 11, 2, 12])
+    expect(columns.laidOut(.RowMajor).elements.toArray() == [0, 1, 2, 10, 11, 12])
+    expect(Tensor<Int>.zeros(shape: [2, 2], layout: .ColumnMajor).layout == .ColumnMajor)
+    expect(columns.reshaped([3, 2]).toArray() == [0, 1, 2, 10, 11, 12])
+}
+
+@test
+fn theIdentityHasOnesOnItsDiagonal() {
+    expect(Tensor<F64>.identity(3).toArray() == [1, 0, 0, 0, 1, 0, 0, 0, 1])
+}
+
+@test
+fn aTensorIsAValue() {
+    var a = Tensor<Int>(shape: [2], elements: [1, 2])
+    let b = a
+    a[0] = 9
+    expect(b.toArray() == [1, 2])
+    expect(a != b)
+}
+
+@test(traps: "24 elements cannot be shaped [5, -1]")
+fn aShapeThatDoesNotFitTraps() {
+    _ = Tensor<Int>(shape: [2, 3, 4], repeating: 0).reshaped([5, -1])
+}
+
+@test(traps: "a shape may have one -1, not more: [-1, -1]")
+fn twoUnknownLengthsTrap() {
+    _ = Tensor<Int>(shape: [4], repeating: 0).reshaped([-1, -1])
+}
+
+@test
+fn theIssuesExample() {
+    var t = Tensor<F32>.zeros(shape: [2, 3, 4])
+    let v: TensorView<F32> = t[.All, .range(1..<3), .step(2)]
+    expect(v.shape == [2, 2, 2])
+    t[1, 2, 3] = 1.0
+    let bias = Tensor<F32>(shape: [4], elements: [1, 2, 3, 4])
+    let s = (t + bias) * 2.0
+    expect(s[1, 2, 3] == 10)
+    let m = Tensor.matmul(Tensor<F32>.ones(shape: [2, 3]), Tensor<F32>.ones(shape: [3, 2]))
+    expect(m.toArray() == [3, 3, 3, 3])
+    let r = t.reshaped([6, 4]).transposed()
+    expect(r.shape == [4, 6])
+    let total = t.sum(axis: 2)
+    expect(total.shape == [2, 3] && total[1, 2] == 1)
+}
+
+@test
+fn arithmeticWithNumbers() {
+    let t = Tensor<F64>(shape: [3], elements: [1, 2, 4])
+    expect((t + 1).toArray() == [2, 3, 5])
+    expect((1 + t).toArray() == [2, 3, 5])
+    expect((t - 1).toArray() == [0, 1, 3])
+    expect((10 - t).toArray() == [9, 8, 6])
+    expect((t * 2).toArray() == [2, 4, 8])
+    expect((2 * t).toArray() == [2, 4, 8])
+    expect((t / 2).toArray() == [0.5, 1, 2])
+    expect((4 / t).toArray() == [4, 2, 1])
+    expect((t / t).toArray() == [1, 1, 1])
+    expect((-t).toArray() == [-1, -2, -4])
+    expect(t.clamped(1.5, 3).toArray() == [1.5, 2, 3])
+}
+
+@test
+fn comparisonsBroadcast() {
+    let t = Tensor<Int>(shape: [2, 2], elements: [1, 5, 3, 3])
+    let three = Tensor<Int>(shape: [], elements: [3])
+    expect(t.isLess(than: three).toArray() == [true, false, false, false])
+    expect(t.isGreater(than: three).toArray() == [false, true, false, false])
+    expect(t.isEqual(to: three).toArray() == [false, false, true, true])
+}
+
+@test
+fn dotAndProduct() {
+    let x = Tensor<Int>(shape: [3], elements: [1, 2, 3])
+    expect(Tensor.dot(x, x) == 14)
+    expect(x.product() == 6)
+    expect(Tensor<Int>(shape: [0], elements: []).product() == 1)
+}
+
+@test(traps: "the dot product of shapes [2] and [3], which are not vectors of one length")
+fn theDotProductOfOtherLengthsTraps() {
+    _ = Tensor.dot(Tensor<Int>(shape: [2], repeating: 0), Tensor<Int>(shape: [3], repeating: 0))
+}
+
+@test(traps: "matmul of shapes [2, 3] and [2, 3]: 3 columns against 2 rows")
+fn matmulOfShapesThatDoNotMeetTraps() {
+    _ = Tensor.matmul(Tensor<Int>(shape: [2, 3], repeating: 0), Tensor<Int>(shape: [2, 3], repeating: 0))
+}
+
+@test
+fn matmulOfLargerF32MatricesIsTheSameAsElementByElement() {
+    // Rows and columns past a whole tile of the kernel's, and not.
+    for size in [(1, 1, 1), (4, 16, 16), (5, 17, 33), (13, 9, 31), (64, 64, 64)] {
+        let (m, k, n) = size
+        let a = Tensor<F32>(shape: [m, k]) { F32(($0[0] * 7 + $0[1] * 3) % 11) - 5 }
+        let b = Tensor<F32>(shape: [k, n]) { F32(($0[0] * 5 + $0[1]) % 13) - 6 }
+        let fast = Tensor.matmul(a, b)
+        let slow = Tensor.matmul(a.map { Int($0) }, b.map { Int($0) }).map { F32($0) }
+        expect(fast == slow, "\(m) x \(k) x \(n)")
+    }
+}
+
+@test
+fn reductionsOfViews() {
+    let t = Tensor<Int>(shape: [2, 3], elements: [1, 9, 2, 7, 0, 7])
+    let column = t[.All, .At(2)]
+    expect(column.sum() == 9 && column.max() == 7 && column.min() == 2)
+    expect(column.argmax() == 1 && column.argmin() == 0)
+    expect(t.view.transposed().sum(axis: 0).toArray() == [12, 14])
+    let f = Tensor<F64>(shape: [2], elements: [1, 3])
+    expect(f.mean() == 2)
+    expect(f.view.mean() == 2)
+    expect(t.min(axis: 1).toArray() == [1, 0])
+    expect(t.argmin(axis: 0).toArray() == [0, 1, 0])
+    expect(t.view.min(axis: 0).toArray() == [1, 0, 2])
+    expect(t.view.argmin(axis: 1).toArray() == [0, 1])
+    expect(t.view.max(axis: 1, keepingDimension: true).shape == [2, 1])
+    expect(t.view.product() == 0)
+}
+
+@test(traps: "the least or greatest of no elements")
+fn theGreatestOfNoneTraps() {
+    _ = Tensor<Int>(shape: [0], elements: []).max()
+}
+
+@test(traps: "axis 2 is out of range for a tensor of rank 2")
+fn anAxisOutsideTraps() {
+    _ = Tensor<Int>(shape: [2, 2], repeating: 0).sum(axis: 2)
+}
+
+@test
+fn mapAndZip() {
+    let a = Tensor<Int>(shape: [2, 1], elements: [1, 2])
+    let b = Tensor<Int>(shape: [3], elements: [10, 20, 30])
+    expect(a.zip(b) { $0 + $1 }.shape == [2, 3])
+    expect(a.view.zip(b.view) { $0 * $1 }.toArray() == [10, 20, 30, 20, 40, 60])
+    expect(a.map { "\($0)" }.toArray() == ["1", "2"])
+}
+
+@test
+fn viewsAddAsTensorsDo() {
+    let t = Tensor<F64>(shape: [2, 2], elements: [1, 2, 3, 4])
+    let row = t[.At(0)]
+    let column = t[.All, .At(1)]
+    expect((row + column).toArray() == [3, 6])
+    expect((row - column).toArray() == [-1, -2])
+    expect((row * column).toArray() == [2, 8])
+    expect((row / column).toArray() == [0.5, 0.5])
+    expect((row + 1).toArray() == [2, 3] && (1 + row).toArray() == [2, 3])
+    expect((row - 1).toArray() == [0, 1] && (1 - row).toArray() == [0, -1])
+    expect((row * 2).toArray() == [2, 4] && (2 * row).toArray() == [2, 4])
+    expect((row / 2).toArray() == [0.5, 1] && (2 / row).toArray() == [2, 1])
+    expect((-row).toArray() == [-1, -2])
+}

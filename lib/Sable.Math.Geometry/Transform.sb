@@ -1,5 +1,7 @@
 module Sable.Math.Geometry
 
+import Sable.Math
+
 /// A scale, then a rotation, then a translation: where something is in its
 /// parent, or a bone in a pose. Unlike a matrix it can be interpolated, and
 /// its parts read. 40 bytes.
@@ -58,9 +60,9 @@ public struct Transform: Hashable, Sendable {
 
     /// The transform so far from this to the other, the amount held to
     /// 0...1: the translation and the scale in a line, the rotation by `nlerp`.
-    public fn lerp(to other: Transform, _ amount: F32) -> Transform {
-        let t = saturated(amount)
-        return Transform(translation: translation.lerp(to: other.translation, t), rotation: rotation.nlerp(to: other.rotation, t), scale: scale.lerp(to: other.scale, t))
+    public fn lerp(to other: Transform, by amount: F32) -> Transform {
+        let t = saturate(amount)
+        return Transform(translation: translation.lerp(to: other.translation, by: t), rotation: rotation.nlerp(to: other.rotation, by: t), scale: scale.lerp(to: other.scale, by: t))
     }
 
     /// What this does that the reference does not: what `adding` adds to another.
@@ -72,11 +74,11 @@ public struct Transform: Hashable, Sendable {
     /// The transform with so much of a difference (0...1) on top: at 0 this
     /// one, at 1 with all of it.
     public fn adding(_ difference: Transform, weight: F32) -> Transform {
-        let w = saturated(weight)
+        let w = saturate(weight)
         return Transform(
             translation: translation + difference.translation * w,
-            rotation: rotation * Quaternion.identity.nlerp(to: difference.rotation, w),
-            scale: scale * Vector3.one.lerp(to: difference.scale, w)
+            rotation: rotation * Quaternion.identity.nlerp(to: difference.rotation, by: w),
+            scale: scale * Vector3.one.lerp(to: difference.scale, by: w)
         )
     }
 

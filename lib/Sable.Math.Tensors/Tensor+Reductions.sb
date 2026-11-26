@@ -1,0 +1,267 @@
+module Sable.Math.Tensors
+
+import Sable.Math
+
+// Reductions: of every element, or along an axis, which the result is
+// without (or keeps, of length 1, with 'keepingDimension'), as NumPy's do.
+
+extension TensorView {
+    /// Each run along the axis: the body is given the offset of its first
+    /// element, the stride between them and their count, in row-major order
+    /// of the rest; and the shape of the rest.
+    fn forEachRun(along axis: Int, _ body: (Int, Int, Int) -> Void) -> Int[>..] {
+        let at = normalisedAxis(axis, rank: rank)
+        let rest = removing(shape, at: at)
+        let restStrides = removing(strides, at: at)
+        let length = shape[at]
+        let step = strides[at]
+        if elementCount(rest) == 0 {
+            return rest
+        }
+        let runs = TensorView<T>(storage: storage, offset: offset, shape: rest, strides: restStrides)
+        runs.forEachOffset { (start: Int) in
+            body(start, step, length)
+        }
+        return rest
+    }
+
+    /// The reduction of each run along the axis, by a closure given the
+    /// storage, the run's first offset, its stride and its count.
+    fn reduced<R>(axis: Int, keepingDimension: Bool, _ reduce: (T[:], Int, Int, Int) -> R) -> Tensor<R> {
+        var made: R[>..] = []
+        let rest = self.forEachRun(along: axis) { (start: Int, step: Int, count: Int) in
+            made.append(reduce(storage, start, step, count))
+        }
+        let shape = keepingDimension ? inserting(1, into: rest, at: normalisedAxis(axis, rank: rank)) : rest
+        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+    }
+}
+
+/// The sum of a run, from zero.
+fn runSum<T: Numeric>(_ storage: T[:], _ start: Int, _ step: Int, _ count: Int) -> T {
+    var total = T.zero
+    var at = start
+    var i = 0
+    while i < count {
+        total = total + storage[at]
+        at += step
+        i += 1
+    }
+    return total
+}
+
+/// The place in a run of its first least or greatest element.
+fn runExtreme<T: Comparable>(_ storage: T[:], _ start: Int, _ step: Int, _ count: Int, greatest: Bool) -> Int {
+    if count == 0 {
+        preconditionFailure("the least or greatest of no elements")
+    }
+    var best = storage[start]
+    var place = 0
+    var at = start + step
+    var i = 1
+    while i < count {
+        let x = storage[at]
+        if greatest ? best < x : x < best {
+            best = x
+            place = i
+        }
+        at += step
+        i += 1
+    }
+    return place
+}
+
+extension TensorView where T: Numeric {
+    /// The sum of every element: zero for none.
+    ///
+    /// ```sable
+    /// assert(Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4]).view.sum() == 10)
+    /// ```
+    public fn sum() -> T {
+        var total = T.zero
+        self.forEachOffset { (at: Int) in
+            total = total + storage[at]
+        }
+        return total
+    }
+
+    /// The sums along the axis.
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<T> {
+        return self.reduced(axis: axis, keepingDimension: keepingDimension) { runSum($0, $1, $2, $3) }
+    }
+
+    /// The product of every element: one for none.
+    public fn product() -> T {
+        var total = T.one
+        self.forEachOffset { (at: Int) in
+            total = total * storage[at]
+        }
+        return total
+    }
+}
+
+extension TensorView where T: FloatingPoint {
+    /// The mean of every element: NaN for none.
+    public fn mean() -> T => self.sum() / T.converting(count)
+
+    /// The means along the axis.
+    public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<T> {
+        let length = T.converting(shape[normalisedAxis(axis, rank: rank)])
+        return self.reduced(axis: axis, keepingDimension: keepingDimension) { runSum($0, $1, $2, $3) / length }
+    }
+}
+
+extension TensorView where T: Comparable {
+    /// The least element, by '<': traps for none.
+    public fn min() -> T => storage[self.extremeOffset(greatest: false)]
+
+    /// The greatest element, by '<': traps for none.
+    public fn max() -> T => storage[self.extremeOffset(greatest: true)]
+
+    /// The place, row-major, of the first greatest element: NumPy's flat
+    /// `argmax`. Traps for none.
+    public fn argmax() -> Int => self.extremePlace(greatest: true)
+
+    /// The place, row-major, of the first least element. Traps for none.
+    public fn argmin() -> Int => self.extremePlace(greatest: false)
+
+    /// The least elements along the axis.
+    public fn min(axis: Int, keepingDimension: Bool = false) -> Tensor<T> {
+        return self.reduced(axis: axis, keepingDimension: keepingDimension) { $0[$1 + $2 * runExtreme($0, $1, $2, $3, greatest: false)] }
+    }
+
+    /// The greatest elements along the axis.
+    public fn max(axis: Int, keepingDimension: Bool = false) -> Tensor<T> {
+        return self.reduced(axis: axis, keepingDimension: keepingDimension) { $0[$1 + $2 * runExtreme($0, $1, $2, $3, greatest: true)] }
+    }
+
+    /// The place along the axis of the first greatest element of each run.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 3], elements: [1, 9, 2, 7, 0, 7])
+    /// assert(t.view.argmax(axis: 1).toArray() == [1, 0])
+    /// assert(t.view.argmax(axis: 0).toArray() == [1, 0, 1])
+    /// ```
+    public fn argmax(axis: Int, keepingDimension: Bool = false) -> Tensor<Int> {
+        return self.reduced(axis: axis, keepingDimension: keepingDimension) { runExtreme($0, $1, $2, $3, greatest: true) }
+    }
+
+    /// The place along the axis of the first least element of each run.
+    public fn argmin(axis: Int, keepingDimension: Bool = false) -> Tensor<Int> {
+        return self.reduced(axis: axis, keepingDimension: keepingDimension) { runExtreme($0, $1, $2, $3, greatest: false) }
+    }
+
+    fn extremePlace(greatest: Bool) -> Int {
+        let offsets = self.offsets()
+        if offsets.count == 0 {
+            preconditionFailure("the least or greatest of no elements")
+        }
+        var place = 0
+        var i = 1
+        while i < offsets.count {
+            let x = storage[offsets[i]]
+            let best = storage[offsets[place]]
+            if greatest ? best < x : x < best {
+                place = i
+            }
+            i += 1
+        }
+        return place
+    }
+
+    fn extremeOffset(greatest: Bool) -> Int => self.offsets()[self.extremePlace(greatest: greatest)]
+}
+
+extension TensorView where T: ElementaryFunctions {
+    /// The softmax along the axis: each element's exponential over the sum of
+    /// its run's, the run's greatest taken from each first so that none
+    /// overflows. Each run is positive and sums to 1.
+    ///
+    /// ```sable
+    /// let t = Tensor<F64>(shape: [2], elements: [0, 0])
+    /// assert(t.view.softmax(axis: 0).toArray() == [0.5, 0.5])
+    /// ```
+    public fn softmax(axis: Int) -> Tensor<T> {
+        let at = normalisedAxis(axis, rank: rank)
+        var result = self.toTensor()
+        let contiguous = result.view
+        var made = result.storage
+        result.storage = []
+        _ = contiguous.forEachRun(along: at) { (start: Int, step: Int, count: Int) in
+            if count == 0 {
+                return
+            }
+            let greatest = made[start + step * runExtreme(made, start, step, count, greatest: true)]
+            var total = T.zero
+            var k = 0
+            while k < count {
+                let e = T.exp(made[start + k * step] - greatest)
+                made[start + k * step] = e
+                total = total + e
+                k += 1
+            }
+            k = 0
+            while k < count {
+                made[start + k * step] = made[start + k * step] / total
+                k += 1
+            }
+        }
+        result.storage = made
+        return result
+    }
+}
+
+extension Tensor where T: Numeric {
+    /// The sum of every element: zero for none.
+    public fn sum() -> T => self.view.sum()
+
+    /// The sums along the axis.
+    public fn sum(axis: Int, keepingDimension: Bool = false) -> Tensor<T> => self.view.sum(axis: axis, keepingDimension: keepingDimension)
+
+    /// The product of every element: one for none.
+    public fn product() -> T => self.view.product()
+}
+
+extension Tensor where T: FloatingPoint {
+    /// The mean of every element: NaN for none.
+    public fn mean() -> T => self.view.mean()
+
+    /// The means along the axis.
+    public fn mean(axis: Int, keepingDimension: Bool = false) -> Tensor<T> => self.view.mean(axis: axis, keepingDimension: keepingDimension)
+}
+
+extension Tensor where T: Comparable {
+    /// The least element: traps for none.
+    public fn min() -> T => self.view.min()
+
+    /// The greatest element: traps for none.
+    public fn max() -> T => self.view.max()
+
+    /// The row-major place of the first greatest element.
+    public fn argmax() -> Int => self.view.argmax()
+
+    /// The row-major place of the first least element.
+    public fn argmin() -> Int => self.view.argmin()
+
+    /// The least elements along the axis.
+    public fn min(axis: Int, keepingDimension: Bool = false) -> Tensor<T> => self.view.min(axis: axis, keepingDimension: keepingDimension)
+
+    /// The greatest elements along the axis.
+    public fn max(axis: Int, keepingDimension: Bool = false) -> Tensor<T> => self.view.max(axis: axis, keepingDimension: keepingDimension)
+
+    /// The place along the axis of the first greatest element of each run.
+    public fn argmax(axis: Int, keepingDimension: Bool = false) -> Tensor<Int> => self.view.argmax(axis: axis, keepingDimension: keepingDimension)
+
+    /// The place along the axis of the first least element of each run.
+    public fn argmin(axis: Int, keepingDimension: Bool = false) -> Tensor<Int> => self.view.argmin(axis: axis, keepingDimension: keepingDimension)
+}
+
+extension Tensor where T: ElementaryFunctions {
+    /// The softmax along the axis.
+    ///
+    /// ```sable
+    /// let t = Tensor<F64>(shape: [2, 2], elements: [1, 1, 0, 0])
+    /// assert(t.softmax(axis: 1).toArray() == [0.5, 0.5, 0.5, 0.5])
+    /// ```
+    public fn softmax(axis: Int) -> Tensor<T> => self.view.softmax(axis: axis)
+}

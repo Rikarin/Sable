@@ -1,0 +1,52 @@
+module XxHash64Tests
+
+// XxHash64 (Sable.IO.Hashing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO.Hashing
+
+import HashingSupport
+import Sable.IO.Hashing
+import Sable.Testing
+
+@test
+fn knownValues() {
+    expect(XxHash64.hash([]) == 0xEF46DB3751D8E999)
+    expect(XxHash64.hash("123456789".utf8Bytes()) == 0x8CB841DB40E6AE83)
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthOfTheSanityBuffer(_ index: Int) {
+    let bytes = sanityBuffer(vectorLengths[index])
+    expect("\(XxHash64.hash(bytes):x)" == vectors["xxh64"]![index])
+    expect("\(XxHash64.hash(bytes, seed: vectorSeed):x)" == seededVectors["xxh64"]![index])
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthInPieces(_ index: Int) {
+    let bytes = sanityBuffer(vectorLengths[index])
+    for sizes in pieceSizes {
+        expect(inPieces(XxHash64(), bytes, sizes) { "\($0.value:x)" } == vectors["xxh64"]![index])
+        expect(inPieces(XxHash64(seed: vectorSeed), bytes, sizes) { "\($0.value:x)" } == seededVectors["xxh64"]![index])
+    }
+}
+
+@test
+fn theBytesAreTheMostSignificantFirst() {
+    expect(XxHash64.hashBytes("123456789".utf8Bytes()) == [0x8C, 0xB8, 0x41, 0xDB, 0x40, 0xE6, 0xAE, 0x83])
+    expect(XxHash64.hashByteCount == 8)
+}
+
+@test
+fn aCopyGoesOnFromWhereItWasMadeAndResetKeepsTheSeed() {
+    let bytes = sanityBuffer(1000)
+    var hash = XxHash64(seed: 7)
+    hash.update(bytes[..<300])
+    var copy = hash
+    hash.update(bytes[300...])
+    expect(hash.value == XxHash64.hash(bytes, seed: 7))
+    expect(copy.seed == 7)
+    copy.update(bytes[300..<400])
+    expect(copy.value == XxHash64.hash(bytes[..<400], seed: 7))
+    copy.reset()
+    copy.update(bytes)
+    expect(copy.value == hash.value)
+}

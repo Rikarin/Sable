@@ -1,0 +1,52 @@
+module Crc64Tests
+
+// Crc64 (Sable.IO.Hashing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO.Hashing
+
+import HashingSupport
+import Sable.IO.Hashing
+import Sable.Testing
+
+@test
+fn theCatalogueCheckValues() {
+    let digits = "123456789".utf8Bytes()
+    expect(Crc64.hash(digits) == 0x6C40DF5F0B497347)
+    expect(Crc64.hash(digits, polynomial: .Nvme) == 0xAE8B14860A799888)
+    expect(Crc64.hash([]) == 0)
+    expect(Crc64.hash([], polynomial: .Nvme) == 0)
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthOfTheSanityBuffer(_ index: Int) {
+    let bytes = sanityBuffer(vectorLengths[index])
+    expect("\(Crc64.hash(bytes):x)" == vectors["crc64"]![index])
+    expect("\(Crc64.hash(bytes, polynomial: .Nvme):x)" == vectors["crc64nvme"]![index])
+}
+
+@test
+fn piecesOfAnySizeGiveTheSame() {
+    let bytes = sanityBuffer(4160)
+    for sizes in pieceSizes {
+        expect(inPieces(Crc64(), bytes, sizes) { "\($0.value:x)" } == vectors["crc64"]![17])
+        expect(inPieces(Crc64(.Nvme), bytes, sizes) { "\($0.value:x)" } == vectors["crc64nvme"]![17])
+    }
+}
+
+@test
+fn theBytesAreTheMostSignificantFirst() {
+    expect(Crc64.hashBytes("123456789".utf8Bytes()) == [0x6C, 0x40, 0xDF, 0x5F, 0x0B, 0x49, 0x73, 0x47])
+    expect(Crc64.hashByteCount == 8)
+}
+
+@test
+fn resetForgetsWhatWasGivenAndKeepsThePolynomial() {
+    var crc = Crc64(.Nvme)
+    crc.update("noise".utf8Bytes())
+    var copy = crc
+    crc.reset()
+    crc.update("123456789".utf8Bytes())
+    expect(crc.value == 0xAE8B14860A799888)
+    expect(copy.polynomial == .Nvme)
+    copy.update("!".utf8Bytes())
+    expect(copy.value == Crc64.hash("noise!".utf8Bytes(), polynomial: .Nvme))
+}

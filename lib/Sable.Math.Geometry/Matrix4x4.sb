@@ -376,8 +376,8 @@ public struct Matrix4x4: Hashable, Sendable {
     }
 
     /// The elements so far from these to the other's.
-    public fn lerp(to other: Matrix4x4, _ amount: F32) -> Matrix4x4 {
-        return Matrix4x4(row1.lerp(to: other.row1, amount), row2.lerp(to: other.row2, amount), row3.lerp(to: other.row3, amount), row4.lerp(to: other.row4, amount))
+    public fn lerp(to other: Matrix4x4, by amount: F32) -> Matrix4x4 {
+        return Matrix4x4(row1.lerp(to: other.row1, by: amount), row2.lerp(to: other.row2, by: amount), row3.lerp(to: other.row3, by: amount), row4.lerp(to: other.row4, by: amount))
     }
 
     /// The transform and then the rotation.

@@ -2915,9 +2915,11 @@ public static class SilBuiltins {
         // at an address, or 0; and the block freed.
         Add("trust_load", SilType.Int);
         Add("trust_free", SilType.Unit, SilType.Int);
-        // A CRC-32's state after the bytes at an address: how many of them were
-        // done in the high half (none, where there are no instructions for it).
-        Add("crc32_raw", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // Sable.IO.Hashing's CRCs by carry-less multiplication and the CRC
+        // instructions, where the processor has them: whether it has, and of a
+        // kind, from a state, the state after the bytes at an address.
+        Add("crc_available", SilType.Bool);
+        Add("crc_update", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has
         // more than the target's baseline: whether it has, a reduction of one
         // slice or two by its number (the sum, dot product or cosine), and an

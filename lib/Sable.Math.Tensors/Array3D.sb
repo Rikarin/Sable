@@ -1,0 +1,99 @@
+module Sable.Math.Tensors
+
+/// A rectangular array of three dimensions, of any element: .NET's `T[,,]`,
+/// for voxels and stacks of grids. Its last dimension's elements lie one after
+/// another, in one array, a value copied on write.
+///
+/// ```sable
+/// var voxels = Array3D<Bool>(depth: 2, rows: 3, columns: 4, repeating: false)
+/// voxels[1, 2, 3] = true
+/// assert(voxels[1, 2, 3] && !voxels[0, 2, 3])
+/// assert(voxels.length(of: 2) == 4)
+/// ```
+public struct Array3D<T> {
+    var storage: T[>..]
+
+    /// How many grids it has.
+    public let depth: Int
+
+    /// How many rows each grid has.
+    public let rows: Int
+
+    /// How many columns each grid has.
+    public let columns: Int
+
+    /// An array of the size with every element the value.
+    public init(depth: Int, rows: Int, columns: Int, repeating value: T) {
+        if depth < 0 || rows < 0 || columns < 0 {
+            preconditionFailure("an array of \(depth) by \(rows) by \(columns)")
+        }
+        self.depth = depth
+        self.rows = rows
+        self.columns = columns
+        storage = T[>..](repeating: value, count: depth * rows * columns)
+    }
+
+    /// An array of the size with the elements, the last dimension fastest: as
+    /// many as it has.
+    public init(depth: Int, rows: Int, columns: Int, elements: T[:]) {
+        if depth < 0 || rows < 0 || columns < 0 || depth * rows * columns != elements.count {
+            preconditionFailure("\(elements.count) elements for an array of \(depth) by \(rows) by \(columns)")
+        }
+        self.depth = depth
+        self.rows = rows
+        self.columns = columns
+        storage = elements.toArray()
+    }
+
+    /// How many elements it has.
+    public var count: Int => storage.count
+
+    /// The element at a place; any index outside traps.
+    public subscript(layer: Int, row: Int, column: Int) -> T {
+        get => storage[self.place(layer, row, column)]
+        set { storage[self.place(layer, row, column)] = newValue }
+    }
+
+    @inline(always)
+    fn place(_ layer: Int, _ row: Int, _ column: Int) -> Int {
+        if layer < 0 || layer >= depth || row < 0 || row >= rows || column < 0 || column >= columns {
+            preconditionFailure("(\(layer), \(row), \(column)) is outside an array of \(depth) by \(rows) by \(columns)")
+        }
+        return (layer * rows + row) * columns + column
+    }
+
+    /// The length of a dimension, 0 to 2: .NET's `GetLength`.
+    public fn length(of dimension: Int) -> Int {
+        if dimension == 0 {
+            return depth
+        }
+        if dimension == 1 {
+            return rows
+        }
+        if dimension == 2 {
+            return columns
+        }
+        preconditionFailure("an array of three dimensions has 0, 1 and 2, not \(dimension)")
+    }
+
+    /// One grid of it, copied.
+    public fn layer(_ layer: Int) -> Array2D<T> {
+        if layer < 0 || layer >= depth {
+            preconditionFailure("layer \(layer) is outside an array of depth \(depth)")
+        }
+        return Array2D<T>(rows: rows, columns: columns, elements: storage[layer * rows * columns..<(layer + 1) * rows * columns])
+    }
+
+    /// Every element, the last dimension fastest.
+    public var elements: T[:] => storage
+
+    /// The array as a tensor of shape [depth, rows, columns].
+    public fn toTensor() -> Tensor<T> => Tensor<T>(shape: [depth, rows, columns], elements: storage)
+}
+
+extension Array3D: Equatable where T: Equatable {
+    /// The same size and elements.
+    public operator == (lhs: Array3D<T>, rhs: Array3D<T>) -> Bool {
+        return lhs.depth == rhs.depth && lhs.rows == rhs.rows && lhs.columns == rhs.columns && lhs.storage == rhs.storage
+    }
+}

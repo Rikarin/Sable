@@ -1,0 +1,65 @@
+module Sable.IO.Hashing
+
+/// A 64-bit cyclic redundancy check: ECMA-182's by default, as .NET's `Crc64`
+/// is, or NVM Express's. Eight bytes a step by tables, and where the
+/// processor multiplies without carries (x86-64's PCLMULQDQ, AArch64's PMULL)
+/// sixty-four, folded.
+///
+/// ```sable
+/// assert(Crc64.hash("123456789".utf8Bytes()) == 0x6C40DF5F0B497347)
+/// assert(Crc64.hash("123456789".utf8Bytes(), polynomial: .Nvme) == 0xAE8B14860A799888)
+/// var crc = Crc64(.Nvme)
+/// crc.update(utf8: "1234")
+/// crc.update(utf8: "56789")
+/// assert(crc.value == 0xAE8B14860A799888)
+/// ```
+public struct Crc64: NonCryptographicHash {
+    var state: U64
+
+    /// Which CRC-64 it is.
+    public let polynomial: Crc64Polynomial
+
+    /// ECMA-182's, with nothing given yet.
+    public init() {
+        self.init(.Ecma182)
+    }
+
+    /// The polynomial's, with nothing given yet.
+    public init(_ polynomial: Crc64Polynomial) {
+        self.polynomial = polynomial
+        state = Crc64.initial(polynomial)
+    }
+
+    /// What each starts from, and is complemented by at the end.
+    static fn initial(_ polynomial: Crc64Polynomial) -> U64 => polynomial == .Nvme ? U64.max : 0
+
+    /// Eight bytes.
+    public static var hashByteCount: Int => 8
+
+    /// The CRC of every byte given so far.
+    public var value: U64 => state ^ Crc64.initial(polynomial)
+
+    /// The CRC of the bytes, at once.
+    public static fn hash(_ bytes: U8[:], polynomial: Crc64Polynomial = .Ecma182) -> U64 {
+        var crc = Crc64(polynomial)
+        crc.update(bytes)
+        return crc.value
+    }
+
+    public mutating fn update(_ bytes: U8[:]) {
+        let kind = polynomial == .Nvme ? crc64NvmeKind : crc64EcmaKind
+        let before = state
+        state = bytes.withPointer { (start: RawPtr<U8>) -> U64 in
+            unsafe {
+                return crcAdvance(kind, before, start.address, bytes.count)
+            }
+        }
+    }
+
+    public mutating fn reset() {
+        state = Crc64.initial(polynomial)
+    }
+
+    /// The CRC as eight bytes, the most significant first, as .NET writes it.
+    public fn hashBytes() -> U8[>..] => value.bigEndianBytes()
+}

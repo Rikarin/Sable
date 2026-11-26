@@ -1,0 +1,139 @@
+module InterpolationTests
+
+// Interpolation, periodic values and angles (Sable.Math/Interpolation.sb), for
+// each width of float. Run with
+//     tools/stdlib-coverage.sh Sable.Math
+
+import Sable.Math
+import Sable.Testing
+
+@test(arguments: [(-1.0, 0.0), (0.0, 0.0), (0.25, 0.25), (1.0, 1.0), (7.0, 1.0), (F64.infinity, 1.0), (-F64.infinity, 0.0)])
+fn saturateHoldsANumberWithinZeroAndOne(_ value: F64, _ held: F64) {
+    assertEqual(saturate(value), held)
+    assertEqual(saturate(F32(value)), F32(held))
+    assertEqual(saturate(F16(value)), F16(held))
+    assertEqual(saturate(BF16(value)), BF16(held))
+}
+
+@test
+fn saturateKeepsANaN() {
+    expect(saturate(F64.nan).isNaN)
+    expect(saturate(F16.nan).isNaN)
+}
+
+@test(arguments: [(10.0, 20.0, 10.0, 0.0), (10.0, 20.0, 20.0, 1.0), (10.0, 20.0, 12.5, 0.25), (10.0, 20.0, 5.0, -0.5), (20.0, 10.0, 12.5, 0.75), (3.0, 3.0, 9.0, 0.0)])
+fn inverseLerpIsHowFarAlongAValueIs(_ from: F64, _ to: F64, _ value: F64, _ amount: F64) {
+    assertEqual(inverseLerp(value, from: from, to: to), amount)
+    assertEqual(inverseLerp(F32(value), from: F32(from), to: F32(to)), F32(amount))
+    assertEqual(inverseLerp(F16(value), from: F16(from), to: F16(to)), F16(amount))
+}
+
+@test
+fn inverseLerpUndoesLerp() {
+    for i in 0...16 {
+        let t = F64(i) / 16
+        assertEqual(inverseLerp((-4.0).lerp(to: 12.0, by: t), from: -4.0, to: 12.0), t)
+        let narrow = F16(t)
+        assertEqual(inverseLerp((-4 as F16).lerp(to: 12, by: narrow), from: -4, to: 12), narrow)
+    }
+}
+
+@test
+fn remapCarriesAValueToAnotherRange() {
+    assertEqual(remap(5.0, from: (0.0, 10.0), to: (100.0, 200.0)), 150.0)
+    assertEqual(remap(-5.0, from: (0.0, 10.0), to: (100.0, 200.0)), 50.0)
+    assertEqual(remap(0.25 as F32, from: (0, 1), to: (4, 0)), 3)
+    assertEqual(remap(0.75 as F16, from: (1, 0), to: (0, 8)), 2)
+    assertEqual(remap(9.0, from: (3.0, 3.0), to: (7.0, 8.0)), 7.0)
+}
+
+@test(arguments: [(-1.0, 0.0), (0.0, 0.0), (0.25, 0.15625), (0.5, 0.5), (0.75, 0.84375), (1.0, 1.0), (2.0, 1.0)])
+fn smoothStepEasesBetweenItsEnds(_ value: F64, _ eased: F64) {
+    assertEqual(smoothStep(value), eased)
+    assertEqual(smoothStep(F32(value)), F32(eased))
+    assertEqual(smoothStep(F16(value)), F16(eased))
+    assertEqual(smoothStep(10 + value * 4, from: 10, to: 14), eased)
+    assertEqual(smoothStep(14 - value * 4, from: 14, to: 10), eased)
+}
+
+@test(arguments: [(-1.0, 0.0), (0.0, 0.0), (0.25, 0.103515625), (0.5, 0.5), (0.75, 0.896484375), (1.0, 1.0), (2.0, 1.0)])
+fn smootherStepEasesBetweenItsEnds(_ value: F64, _ eased: F64) {
+    assertEqual(smootherStep(value), eased)
+    assertEqual(smootherStep(F32(value)), F32(eased))
+    assertEqual(smootherStep(F16(value)), F16(eased))
+    assertEqual(smootherStep(10 + value * 4, from: 10, to: 14), eased)
+}
+
+@test(arguments: [(0.0, 0.0), (7.5, 2.5), (5.0, 0.0), (-1.0, 4.0), (-5.0, 0.0), (-11.0, 4.0), (4.5, 4.5)])
+fn wrapBringsANumberWithinTheLength(_ value: F64, _ wrapped: F64) {
+    assertEqual(wrap(value, length: 5.0), wrapped)
+    assertEqual(wrap(F32(value), length: 5), F32(wrapped))
+    assertEqual(wrap(F16(value), length: 5), F16(wrapped))
+}
+
+@test
+fn wrapNeverReachesTheLength() {
+    // -1e-20 + 1 rounds to 1, which is not in [0, 1).
+    assertEqual(wrap(-1e-20, length: 1.0), 0.0)
+    assertEqual(wrap(-F16.leastNonzeroMagnitude, length: 1), 0)
+    assertEqual(wrap(3.0, length: 0.0), 0.0)
+    assertEqual(wrap(3.0, length: -2.0), 0.0)
+    expect(wrap(F64.infinity, length: 1.0).isNaN)
+}
+
+@test(arguments: [(0.0, 0.0), (3.0, 3.0), (5.0, 5.0), (7.0, 3.0), (10.0, 0.0), (12.0, 2.0), (-1.0, 1.0), (-7.0, 3.0)])
+fn pingPongGoesForthAndBack(_ value: F64, _ bounced: F64) {
+    assertEqual(pingPong(value, length: 5.0), bounced)
+    assertEqual(pingPong(F32(value), length: 5), F32(bounced))
+    assertEqual(pingPong(F16(value), length: 5), F16(bounced))
+    assertEqual(pingPong(value, length: 0.0), 0.0)
+}
+
+@test
+fn wrapAngleIsWithinHalfATurn() {
+    assertEqual(wrapAngle(1.0), 1.0)
+    assertEqual(wrapAngle(F64.pi), F64.pi)
+    assertEqual(wrapAngle(-F64.pi), F64.pi)
+    assertEqual(wrapAngle(F64.tau), 0.0)
+    assertEqual(wrapAngle(F32.pi), F32.pi)
+    assertEqual(wrapAngle(-F32.pi), F32.pi)
+    assertEqual(wrapAngle(F16.pi), F16.pi)
+    assertEqual(wrapAngle(-F16.pi), F16.pi)
+    // The remainder is exact, so only tau's own rounding is in it.
+    assertEqual(wrapAngle(1 + F64.tau), 1 + F64.tau - F64.tau)
+    for i in -40...40 {
+        let angle = F64(i) * 0.7
+        let wrapped = wrapAngle(angle)
+        expect(wrapped > -F64.pi && wrapped <= F64.pi)
+        expect((sin(wrapped) - sin(angle)).abs() < 1e-13)
+        expect((cos(wrapped) - cos(angle)).abs() < 1e-13)
+    }
+}
+
+@test
+fn deltaAngleIsTheShortWayRound() {
+    assertEqual(deltaAngle(from: 0.0, to: 1.0), 1.0)
+    assertEqual(deltaAngle(from: 1.0, to: 0.0), -1.0)
+    expect((deltaAngle(from: 3.0, to: -3.0) - (F64.tau - 6)).abs() < 1e-14)
+    expect((deltaAngle(from: -3 as F32, to: 3) + (F32.tau - 6)).abs() < 1e-6)
+    assertEqual(deltaAngle(from: 0 as F16, to: 0.5), 0.5)
+}
+
+@test
+fn moveTowardsDoesNotPassTheTarget() {
+    assertEqual(moveTowards(0.0, target: 10.0, by: 3.0), 3.0)
+    assertEqual(moveTowards(9.0, target: 10.0, by: 3.0), 10.0)
+    assertEqual(moveTowards(0.0, target: -10.0, by: 3.0), -3.0)
+    assertEqual(moveTowards(-9 as F32, target: -10, by: 3), -10)
+    assertEqual(moveTowards(4 as F16, target: 4, by: 0.5), 4)
+    assertEqual(moveTowards(1.0, target: 5.0, by: -2.0), -1.0)
+    assertEqual(moveTowards(5.0, target: 1.0, by: -2.0), 7.0)
+    assertEqual(moveTowards(5.0, target: 5.0, by: -2.0), 5.0)
+}
+
+@test
+fn lerpIsTheFloatsOwnMethod() {
+    assertEqual((10 as F16).lerp(to: 20, by: 0.25), 12.5)
+    assertEqual((10 as F32).lerp(to: 20, by: -0.5), 5)
+    assertEqual((10.0).lerp(to: 20.0, by: 1.0), 20.0)
+}

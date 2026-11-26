@@ -1,0 +1,273 @@
+module Sable.Math.Tensors
+
+/// A strided view of elements: a shape, and where in some storage each place
+/// is, by an offset and a stride a dimension. It copies nothing — slicing,
+/// transposing, permuting and broadcasting give another view of the same
+/// elements — and, as a slice does (docs/02), it shares its storage the way
+/// a second copy of the array would: it may be kept, and what is written to
+/// the tensor after it was made is not seen in it. `MutableTensorView` is the
+/// view that writes.
+///
+/// ```sable
+/// let numbers: Int[>..] = [1, 2, 3, 4, 5, 6]
+/// let m = TensorView<Int>(numbers, shape: [2, 3])
+/// assert(m.transposed()[2, 1] == 6)
+/// assert(m[.All, .At(0)].toArray() == [1, 4])
+/// ```
+public struct TensorView<T> {
+    let storage: T[:]
+    let offset: Int
+
+    /// The length of each dimension.
+    public let shape: Int[>..]
+
+    /// How far apart, in elements, two places one apart in each dimension
+    /// lie: zero for a dimension broadcast.
+    public let strides: Int[>..]
+
+    init(storage: T[:], offset: Int, shape: Int[>..], strides: Int[>..]) {
+        self.storage = storage
+        self.offset = offset
+        self.shape = shape
+        self.strides = strides
+    }
+
+    /// The elements, row-major, seen as a tensor of the shape: as many as it
+    /// has.
+    public init(_ elements: T[:], shape: Int[:]) {
+        checkShape(shape)
+        if elementCount(shape) != elements.count {
+            preconditionFailure("\(elements.count) elements for a tensor of shape \(shape)")
+        }
+        storage = elements
+        offset = 0
+        self.shape = shape.toArray()
+        strides = contiguousStrides(shape, .RowMajor)
+    }
+
+    /// How many dimensions it has.
+    public var rank: Int => shape.count
+
+    /// How many places it has.
+    public var count: Int => elementCount(shape)
+
+    /// The element of a view of rank 1.
+    public subscript(i: Int) -> T {
+        get => storage[offsetOf([i], shape, strides, offset)]
+    }
+
+    /// The element at the place of a view of rank 2.
+    public subscript(i: Int, j: Int) -> T {
+        get {
+            if shape.count != 2 || i < 0 || i >= shape[0] || j < 0 || j >= shape[1] {
+                return storage[offsetOf([i, j], shape, strides, offset)]
+            }
+            return storage[offset + i * strides[0] + j * strides[1]]
+        }
+    }
+
+    /// The element at the place of a view of rank 3.
+    public subscript(i: Int, j: Int, k: Int) -> T {
+        get => storage[offsetOf([i, j, k], shape, strides, offset)]
+    }
+
+    /// The element at an index of any rank.
+    public subscript(index index: Int[:]) -> T {
+        get => storage[offsetOf(index, shape, strides, offset)]
+    }
+
+    /// A part of it, by NumPy's basic indexing, as a view: nothing is copied.
+    /// Up to four indices are given so, any number by `sliced`; dimensions not
+    /// indexed are whole.
+    public subscript(_ first: TensorIndex) -> TensorView<T> {
+        get => self.sliced([first])
+    }
+
+    /// A part of it, by two indices.
+    public subscript(_ first: TensorIndex, _ second: TensorIndex) -> TensorView<T> {
+        get => self.sliced([first, second])
+    }
+
+    /// A part of it, by three indices.
+    public subscript(_ first: TensorIndex, _ second: TensorIndex, _ third: TensorIndex) -> TensorView<T> {
+        get => self.sliced([first, second, third])
+    }
+
+    /// A part of it, by four indices.
+    public subscript(_ first: TensorIndex, _ second: TensorIndex, _ third: TensorIndex, _ fourth: TensorIndex) -> TensorView<T> {
+        get => self.sliced([first, second, third, fourth])
+    }
+
+    /// A part of it, by NumPy's basic indexing, the indices given as an array.
+    public fn sliced(_ indices: TensorIndex[:]) -> TensorView<T> {
+        let part = indexed(indices, shape, strides, offset)
+        return TensorView<T>(storage: storage, offset: part.offset, shape: part.shape, strides: part.strides)
+    }
+
+    /// Its elements in row-major order, copied.
+    public fn toArray() -> T[>..] {
+        var result: T[>..] = []
+        result.reserveCapacity(count)
+        self.forEachOffset { (at: Int) in
+            result.append(storage[at])
+        }
+        return result
+    }
+
+    /// A tensor of its elements, copied.
+    public fn toTensor() -> Tensor<T> => Tensor<T>(self)
+
+    /// Calls the body with the offset of each place, in row-major order.
+    @inline(always)
+    fn forEachOffset(_ body: (Int) -> Void) {
+        if count == 0 {
+            return
+        }
+        if shape.count == 0 {
+            body(offset)
+            return
+        }
+        let last = shape.count - 1
+        let length = shape[last]
+        let step = strides[last]
+        var index = Int[>..](repeating: 0, count: shape.count)
+        var offsets: Int[>..] = [offset]
+        let all: Int[>..][>..] = [strides]
+        repeat {
+            var at = offsets[0]
+            var i = 0
+            while i < length {
+                body(at)
+                at += step
+                i += 1
+            }
+        } while advance(&index, shape, &offsets, all)
+    }
+
+    /// The axes in reverse order: a matrix's transpose.
+    public fn transposed() -> TensorView<T> {
+        var axes = Int[>..](repeating: 0, count: rank)
+        var i = 0
+        while i < rank {
+            axes[i] = rank - 1 - i
+            i += 1
+        }
+        return self.permuted(axes)
+    }
+
+    /// The axes in the order given: the new dimension i is the old axes[i].
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 3, 4], repeating: 0)
+    /// assert(t.view.permuted([2, 0, 1]).shape == [4, 2, 3])
+    /// ```
+    public fn permuted(_ axes: Int[:]) -> TensorView<T> {
+        if axes.count != rank {
+            preconditionFailure("\(axes.count) axes for a tensor of rank \(rank)")
+        }
+        var seen = Bool[>..](repeating: false, count: rank)
+        var newShape = Int[>..](repeating: 0, count: rank)
+        var newStrides = Int[>..](repeating: 0, count: rank)
+        var i = 0
+        while i < rank {
+            let axis = normalisedAxis(axes[i], rank: rank)
+            if seen[axis] {
+                preconditionFailure("axis \(axis) is given twice in \(axes)")
+            }
+            seen[axis] = true
+            newShape[i] = shape[axis]
+            newStrides[i] = strides[axis]
+            i += 1
+        }
+        return TensorView<T>(storage: storage, offset: offset, shape: newShape, strides: newStrides)
+    }
+
+    /// The view broadcast to a shape, by NumPy's rule: a dimension of length 1,
+    /// or one it lacks at the front, repeats.
+    ///
+    /// ```sable
+    /// let row = TensorView<Int>([1, 2, 3], shape: [3])
+    /// assert(row.broadcast(to: [2, 3]).toArray() == [1, 2, 3, 1, 2, 3])
+    /// ```
+    public fn broadcast(to target: Int[:]) -> TensorView<T> {
+        return TensorView<T>(storage: storage, offset: offset, shape: target.toArray(), strides: broadcastStrides(shape, strides, to: target))
+    }
+
+    /// The same places without the dimensions of length 1.
+    public fn squeezed() -> TensorView<T> {
+        var newShape: Int[>..] = []
+        var newStrides: Int[>..] = []
+        var i = 0
+        while i < rank {
+            if shape[i] != 1 {
+                newShape.append(shape[i])
+                newStrides.append(strides[i])
+            }
+            i += 1
+        }
+        return TensorView<T>(storage: storage, offset: offset, shape: newShape, strides: newStrides)
+    }
+
+    /// The same places without one dimension, which is of length 1.
+    public fn squeezed(axis: Int) -> TensorView<T> {
+        let at = normalisedAxis(axis, rank: rank)
+        if shape[at] != 1 {
+            preconditionFailure("axis \(axis) has length \(shape[at]), not 1")
+        }
+        let newShape = removing(shape, at: at)
+        let newStrides = removing(strides, at: at)
+        return TensorView<T>(storage: storage, offset: offset, shape: newShape, strides: newStrides)
+    }
+
+    /// The same places with a dimension of length 1 before the axis given:
+    /// NumPy's `expand_dims`. The axis may be the rank, for one at the end.
+    public fn unsqueezed(axis: Int) -> TensorView<T> {
+        let at = normalisedAxis(axis, rank: rank + 1)
+        let newShape = inserting(1, into: shape, at: at)
+        let newStrides = inserting(0, into: strides, at: at)
+        return TensorView<T>(storage: storage, offset: offset, shape: newShape, strides: newStrides)
+    }
+
+    /// Whether its places lie one after another, row-major, from its offset.
+    var isContiguous: Bool {
+        get {
+            var step = 1
+            var axis = rank - 1
+            while axis >= 0 {
+                if shape[axis] != 1 && strides[axis] != step {
+                    return false
+                }
+                step = step * shape[axis]
+                axis -= 1
+            }
+            return true
+        }
+    }
+}
+
+extension TensorView: Equatable where T: Equatable {
+    /// The same shape and the same elements at each place.
+    public operator == (lhs: TensorView<T>, rhs: TensorView<T>) -> Bool {
+        return lhs.shape == rhs.shape && lhs.toArray() == rhs.toArray()
+    }
+}
+
+extension Tensor {
+    /// The axes in reverse order, copied: a matrix's transpose.
+    public fn transposed() -> Tensor<T> => self.view.transposed().toTensor()
+
+    /// The axes in the order given, copied.
+    public fn permuted(_ axes: Int[:]) -> Tensor<T> => self.view.permuted(axes).toTensor()
+
+    /// The same elements without the dimensions of length 1.
+    public fn squeezed() -> Tensor<T> => Tensor<T>(storage: self.toArray(), shape: self.view.squeezed().shape, layout: .RowMajor)
+
+    /// The same elements without one dimension of length 1.
+    public fn squeezed(axis: Int) -> Tensor<T> => Tensor<T>(storage: self.toArray(), shape: self.view.squeezed(axis: axis).shape, layout: .RowMajor)
+
+    /// The same elements with a dimension of length 1 before the axis.
+    public fn unsqueezed(axis: Int) -> Tensor<T> => Tensor<T>(storage: self.toArray(), shape: self.view.unsqueezed(axis: axis).shape, layout: .RowMajor)
+
+    /// The tensor broadcast to a shape, copied.
+    public fn broadcast(to shape: Int[:]) -> Tensor<T> => self.view.broadcast(to: shape).toTensor()
+}

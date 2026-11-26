@@ -4238,8 +4238,18 @@ public sealed partial class Binder {
                 _ => null,
             };
 
-        if (OwnerOf(first) is not { } a || OwnerOf(second) is not { } b || ReferenceEquals(a, b)) {
+        if (OwnerOf(first) is not { } a || OwnerOf(second) is not { } b) {
             return null;
+        }
+
+        // Of two extensions of one type, the one that says what a type
+        // parameter is over one that only says what it conforms to:
+        // 'extension Tensor where T == F32' over 'where T: Numeric', as
+        // the one for F32 is the one written for it.
+        if (ReferenceEquals(a, b)) {
+            var aPins = first.ContainingSymbol is ExtensionSymbol { SameTypeRequirements.IsEmpty: false };
+            var bPins = second.ContainingSymbol is ExtensionSymbol { SameTypeRequirements.IsEmpty: false };
+            return aPins == bPins ? null : aPins ? first : second;
         }
 
         // Of two array extensions of the same kind, the one for an element
@@ -6463,6 +6473,19 @@ public sealed partial class Binder {
                 continue;
             }
 
+            // A tuple literal's elements, each as an argument of its own.
+            if (arguments[i] is BoundTuple { Elements: var elements } && wanted is TupleTypeSymbol { ElementTypes: var parts } && parts.Length == elements.Length) {
+                for (var k = 0; k < elements.Length; k++) {
+                    if (IsNumericLiteral(elements[k])) {
+                        literals.Add((parts[k], elements[k]));
+                    } else {
+                        TypeSubstitution.Unify(parts[k], Said(elements[k].Type, inferrable), inferrable, map);
+                    }
+                }
+
+                continue;
+            }
+
             TypeSubstitution.Unify(wanted, Said(AdaptForInference(wanted, arguments[i]), inferrable), inferrable, map);
         }
 
@@ -6839,6 +6862,35 @@ public sealed partial class Binder {
     }
 
     /// <summary>An integer or float literal: a value that could be several types.</summary>
+    /// <summary>
+    ///     A tuple literal's conversion to the tuple type a parameter wants,
+    ///     element by element, where a literal among them takes its element's
+    ///     type: <c>(0, 1)</c> for an <c>(F32, F32)</c>. Null where it is not
+    ///     such a tuple, or an element does not convert.
+    /// </summary>
+    ConversionKind? ClassifyTupleOfLiterals(BoundExpression argument, TypeSymbol wanted) {
+        if (argument is not BoundTuple { Syntax: TupleExpressionSyntax syntax } tuple
+            || Expand(wanted) is not TupleTypeSymbol target
+            || target.ElementTypes.Length != tuple.Elements.Length
+            || !syntax.Elements.Any(static e => IsLiteralOnly(e.Expression))) {
+            return null;
+        }
+
+        var kind = ConversionKind.Identity;
+        for (var k = 0; k < tuple.Elements.Length; k++) {
+            var element = tuple.Elements[k];
+            if (_conversions.Classify(element.Type, target.ElementTypes[k], IsLiteral(element) || IsLiteralOnly(element.Syntax)) is not { } each) {
+                return null;
+            }
+
+            if (each != ConversionKind.Identity) {
+                kind = ConversionKind.LiteralTyping;
+            }
+        }
+
+        return kind;
+    }
+
     bool IsNumericLiteral(BoundExpression expression) =>
         expression is BoundLiteral { Type: var type } && (type.Equals(Core.Int) || type.Equals(Core.F64));
 
@@ -7227,7 +7279,8 @@ public sealed partial class Binder {
 
             var conversion = KeepsItsElements(arguments[i], wanted)
                 ? null
-                : _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]) || IsLiteralOnly(arguments[i].Syntax));
+                : ClassifyTupleOfLiterals(arguments[i], wanted)
+                  ?? _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]) || IsLiteralOnly(arguments[i].Syntax));
 
             // An '@autoclosure' parameter passed on bare is the overload it
             // was meant for, and is told to call it (S3516).
@@ -7442,6 +7495,8 @@ public sealed partial class Binder {
             LiteralExpressionSyntax => false,
             ParenthesizedExpressionSyntax parenthesized => TakesParameterType(parenthesized.Expression),
             ArrayExpressionSyntax array => array.Elements.Any(TakesParameterType),
+            // '(0, 1)' for an '(F32, F32)': each literal takes its element's type.
+            TupleExpressionSyntax tuple => tuple.Elements.Any(static e => IsLiteralOnly(e.Expression) || TakesParameterType(e.Expression)),
             _ => IsLiteralOnly(syntax),
         };
 

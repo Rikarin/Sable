@@ -1,0 +1,131 @@
+module Sable.Math.Tensors
+
+/// A rectangular array of rows and columns, of any element: .NET's `T[,]`,
+/// for grids and boards rather than arithmetic (that is `Tensor`'s). Row by
+/// row in one array, a value copied on write.
+///
+/// ```sable
+/// var grid = Array2D<Int>(rows: 3, columns: 4, repeating: 0)
+/// grid[1, 2] = 7
+/// assert(grid[1, 2] == 7 && grid.row(1) == [0, 0, 7, 0])
+/// assert(grid.count == 12)
+/// ```
+public struct Array2D<T> {
+    var storage: T[>..]
+
+    /// How many rows it has.
+    public let rows: Int
+
+    /// How many columns it has.
+    public let columns: Int
+
+    /// A grid of the size with every element the value.
+    public init(rows: Int, columns: Int, repeating value: T) {
+        if rows < 0 || columns < 0 {
+            preconditionFailure("a grid of \(rows) by \(columns)")
+        }
+        self.rows = rows
+        self.columns = columns
+        storage = T[>..](repeating: value, count: rows * columns)
+    }
+
+    /// A grid of the size with the elements, row by row: as many as it has.
+    public init(rows: Int, columns: Int, elements: T[:]) {
+        if rows < 0 || columns < 0 || rows * columns != elements.count {
+            preconditionFailure("\(elements.count) elements for a grid of \(rows) by \(columns)")
+        }
+        self.rows = rows
+        self.columns = columns
+        storage = elements.toArray()
+    }
+
+    /// How many elements it has.
+    public var count: Int => storage.count
+
+    /// The element at a row and a column; either outside the grid traps.
+    public subscript(row: Int, column: Int) -> T {
+        get => storage[self.place(row, column)]
+        set { storage[self.place(row, column)] = newValue }
+    }
+
+    @inline(always)
+    fn place(_ row: Int, _ column: Int) -> Int {
+        if row < 0 || row >= rows || column < 0 || column >= columns {
+            preconditionFailure("(\(row), \(column)) is outside a grid of \(rows) by \(columns)")
+        }
+        return row * columns + column
+    }
+
+    /// The length of a dimension, 0 for the rows and 1 for the columns:
+    /// .NET's `GetLength`.
+    public fn length(of dimension: Int) -> Int {
+        if dimension == 0 {
+            return rows
+        }
+        if dimension == 1 {
+            return columns
+        }
+        preconditionFailure("a grid has dimensions 0 and 1, not \(dimension)")
+    }
+
+    /// A row's elements, as a slice of the grid's.
+    public fn row(_ row: Int) -> T[:] {
+        if row < 0 || row >= rows {
+            preconditionFailure("row \(row) is outside a grid of \(rows) rows")
+        }
+        return storage[row * columns..<(row + 1) * columns]
+    }
+
+    /// A column's elements, copied.
+    public fn column(_ column: Int) -> T[>..] {
+        if column < 0 || column >= columns {
+            preconditionFailure("column \(column) is outside a grid of \(columns) columns")
+        }
+        var result: T[>..] = []
+        var r = 0
+        while r < rows {
+            result.append(storage[r * columns + column])
+            r += 1
+        }
+        return result
+    }
+
+    /// Every element, row by row.
+    public var elements: T[:] => storage
+
+    /// Each element made into another, in a grid of the size.
+    public fn map<R>(_ transform: (T) -> R) -> Array2D<R> {
+        var made: R[>..] = []
+        made.reserveCapacity(storage.count)
+        for element in storage {
+            made.append(transform(element))
+        }
+        return Array2D<R>(rows: rows, columns: columns, elements: made)
+    }
+
+    /// The grid with its rows as columns.
+    public fn transposed() -> Array2D<T> {
+        var made: T[>..] = []
+        made.reserveCapacity(storage.count)
+        var c = 0
+        while c < columns {
+            var r = 0
+            while r < rows {
+                made.append(storage[r * columns + c])
+                r += 1
+            }
+            c += 1
+        }
+        return Array2D<T>(rows: columns, columns: rows, elements: made)
+    }
+
+    /// The grid as a tensor of shape [rows, columns].
+    public fn toTensor() -> Tensor<T> => Tensor<T>(shape: [rows, columns], elements: storage)
+}
+
+extension Array2D: Equatable where T: Equatable {
+    /// The same size and elements.
+    public operator == (lhs: Array2D<T>, rhs: Array2D<T>) -> Bool {
+        return lhs.rows == rhs.rows && lhs.columns == rhs.columns && lhs.storage == rhs.storage
+    }
+}

@@ -1,0 +1,157 @@
+module Sable.Math.Tensors
+
+// Tensors joined along an axis, split along one, and gathered by index: NumPy's
+// concatenate, stack, split and take.
+
+extension Tensor {
+    /// The tensors one after another along an axis they all have, the same in
+    /// every other dimension.
+    ///
+    /// ```sable
+    /// let a = Tensor<Int>(shape: [1, 2], elements: [1, 2])
+    /// let b = Tensor<Int>(shape: [2, 2], elements: [3, 4, 5, 6])
+    /// assert(Tensor.concatenate([a, b], axis: 0).shape == [3, 2])
+    /// assert(Tensor.concatenate([b, b], axis: 1).toArray() == [3, 4, 3, 4, 5, 6, 5, 6])
+    /// ```
+    public static fn concatenate(_ tensors: Tensor<T>[:], axis: Int = 0) -> Tensor<T> {
+        if tensors.count == 0 {
+            preconditionFailure("concatenating no tensors")
+        }
+        let first = tensors[0]
+        if first.rank == 0 {
+            preconditionFailure("a scalar cannot be concatenated")
+        }
+        let at = normalisedAxis(axis, rank: first.rank)
+        var shape = first.shape
+        shape[at] = 0
+        for tensor in tensors {
+            if tensor.rank != first.rank {
+                preconditionFailure("concatenating shapes \(first.shape) and \(tensor.shape), of other ranks")
+            }
+            var d = 0
+            while d < first.rank {
+                if d != at && tensor.shape[d] != first.shape[d] {
+                    preconditionFailure("concatenating shapes \(first.shape) and \(tensor.shape) along axis \(axis)")
+                }
+                d += 1
+            }
+            shape[at] += tensor.shape[at]
+        }
+        // Row-major, each tensor gives a run of its rows above the axis in turn.
+        var outer = 1
+        var d = 0
+        while d < at {
+            outer = outer * shape[d]
+            d += 1
+        }
+        var made: T[>..] = []
+        made.reserveCapacity(elementCount(shape))
+        var parts: T[>..][>..] = []
+        for tensor in tensors {
+            parts.append(tensor.toArray())
+        }
+        var o = 0
+        while o < outer {
+            var t = 0
+            while t < tensors.count {
+                let run = parts[t].count / (outer == 0 ? 1 : outer)
+                made.append(contentsOf: parts[t][o * run..<(o + 1) * run])
+                t += 1
+            }
+            o += 1
+        }
+        return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
+    }
+
+    /// The tensors, all of one shape, along a new axis.
+    ///
+    /// ```sable
+    /// let a = Tensor<Int>(shape: [2], elements: [1, 2])
+    /// let b = Tensor<Int>(shape: [2], elements: [3, 4])
+    /// assert(Tensor.stack([a, b], axis: 1).toArray() == [1, 3, 2, 4])
+    /// ```
+    public static fn stack(_ tensors: Tensor<T>[:], axis: Int = 0) -> Tensor<T> {
+        if tensors.count == 0 {
+            preconditionFailure("stacking no tensors")
+        }
+        let at = normalisedAxis(axis, rank: tensors[0].rank + 1)
+        var expanded: Tensor<T>[>..] = []
+        for tensor in tensors {
+            if tensor.shape != tensors[0].shape {
+                preconditionFailure("stacking shapes \(tensors[0].shape) and \(tensor.shape)")
+            }
+            expanded.append(tensor.unsqueezed(axis: at))
+        }
+        return Tensor<T>.concatenate(expanded, axis: at)
+    }
+
+    /// The tensor cut along an axis into parts of equal length.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [4], elements: [1, 2, 3, 4])
+    /// let halves = t.split(into: 2)
+    /// assert(halves[1].toArray() == [3, 4])
+    /// ```
+    public fn split(into parts: Int, axis: Int = 0) -> Tensor<T>[>..] {
+        let at = normalisedAxis(axis, rank: rank)
+        if parts <= 0 || shape[at] % parts != 0 {
+            preconditionFailure("a dimension of \(shape[at]) does not split into \(parts) equal parts")
+        }
+        var lengths: Int[>..] = []
+        for _ in 0..<parts {
+            lengths.append(shape[at] / parts)
+        }
+        return self.split(lengths: lengths, axis: axis)
+    }
+
+    /// The tensor cut along an axis into parts of the lengths, which add up to
+    /// the dimension's.
+    public fn split(lengths: Int[:], axis: Int = 0) -> Tensor<T>[>..] {
+        let at = normalisedAxis(axis, rank: rank)
+        var total = 0
+        for length in lengths {
+            if length < 0 {
+                preconditionFailure("a part of length \(length)")
+            }
+            total += length
+        }
+        if total != shape[at] {
+            preconditionFailure("parts of \(total) for a dimension of \(shape[at])")
+        }
+        var result: Tensor<T>[>..] = []
+        var start = 0
+        let view = self.view
+        for length in lengths {
+            var indices = TensorIndex[>..](repeating: .All, count: rank)
+            indices[at] = .Slice(start: start, end: start + length, step: 1)
+            result.append(view.sliced(indices).toTensor())
+            start += length
+        }
+        return result
+    }
+
+    /// The elements at the places along an axis, in their order, which may
+    /// repeat: NumPy's `take`. A negative place counts from the end.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [3, 2], elements: [1, 2, 3, 4, 5, 6])
+    /// assert(t.gathered([2, 0, 2], axis: 0).toArray() == [5, 6, 1, 2, 5, 6])
+    /// ```
+    public fn gathered(_ places: Int[:], axis: Int = 0) -> Tensor<T> {
+        let at = normalisedAxis(axis, rank: rank)
+        var parts: Tensor<T>[>..] = []
+        let view = self.view
+        for place in places {
+            var indices = TensorIndex[>..](repeating: .All, count: rank)
+            let checked = checkedPlace(place, shape[at], at)
+            indices[at] = .Slice(start: checked, end: checked + 1, step: 1)
+            parts.append(view.sliced(indices).toTensor())
+        }
+        if parts.count == 0 {
+            var shape = self.shape
+            shape[at] = 0
+            return Tensor<T>(storage: [], shape: shape, layout: .RowMajor)
+        }
+        return Tensor<T>.concatenate(parts, axis: at)
+    }
+}

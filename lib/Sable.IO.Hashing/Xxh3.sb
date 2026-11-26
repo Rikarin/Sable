@@ -1,0 +1,520 @@
+module Sable.IO.Hashing
+
+// XXH3, of which XxHash3 is the 64-bit hash and XxHash128 the 128-bit one: the
+// same accumulation of a long input, eight 64-bit lanes 64 bytes a stripe, a
+// vector at a time; short inputs each their own way, by the length. A secret of
+// 192 bytes keys it; a seed other than zero makes another of it for a long
+// input, and is mixed in as it is for a short one (xxHash's xxhash.h, v0.8).
+
+const xxh3StripeBytes = 64
+
+const xxh3SecretBytes = 192
+
+/// The secret's stripes a block: (192 - 64) / 8.
+const xxh3StripesPerBlock = 16
+
+/// What the stream keeps of the input: four stripes.
+const xxh3BufferBytes = 256
+
+const xxh3MidSizeMax = 240
+
+const xxh3PrimeMx1: U64 = 0x1656_6791_9E37_79F9
+
+const xxh3PrimeMx2: U64 = 0x9FB2_1C65_1E98_DF25
+
+/// xxHash's default secret, then the lanes' first values: 256 bytes.
+@immortal
+static let xxh3Constants: LazyTable = LazyTable { () -> Int in
+    constantTable([
+        0xBE4B_A423_396C_FEB8, 0x1CAD_21F7_2C81_017C, 0xDB97_9083_E96D_D4DE, 0x1F67_B3B7_A4A4_4072,
+        0x78E5_C0CC_4EE6_79CB, 0x2172_FFCC_7DD0_5A82, 0x8E24_43F7_7446_08B8, 0x4C26_3A81_E690_35E0,
+        0xCB00_C391_BB52_283C, 0xA32E_531B_8B65_D088, 0x4EF9_0DA2_9748_6471, 0xD8AC_DEA9_46EF_1938,
+        0x3F34_9CE3_3F76_FAA8, 0x1D4F_0BC7_C7BB_DCF9, 0x3159_B4CD_4BE0_518A, 0x6473_78D9_C97E_9FC8,
+        0xC3EB_D334_83AC_C5EA, 0xEB63_13FA_FFA0_81C5, 0x49DA_F0B7_51DD_0D17, 0x9E68_D429_2655_16D3,
+        0xFCA1_477D_58BE_162B, 0xCE31_D07A_D1B8_F88F, 0x2804_1695_8F3A_CB45, 0x7E40_4BBB_CAFB_D7AF,
+        0x0000_0000_C2B2_AE3D, 0x9E37_79B1_85EB_CA87, 0xC2B2_AE3D_27D4_EB4F, 0x1656_67B1_9E37_79F9,
+        0x85EB_CA77_C2B2_AE63, 0x0000_0000_85EB_CA77, 0x27D4_EB2F_1656_67C5, 0x0000_0000_9E37_79B1,
+    ])
+}
+
+/// The default secret's address.
+@inline(always)
+fn xxh3DefaultSecret() -> Int => xxh3Constants.get()
+
+/// The lanes' first values.
+@inline(always)
+unsafe fn xxh3InitialLanes() -> SIMD<U64, 8> {
+    return RawPtr<U8>(address: xxh3Constants.get() &+ xxh3SecretBytes).load(as: SIMD<U64, 8>.self)
+}
+
+/// The secret a seed makes of the default one: each pair of words, the first
+/// plus the seed and the second less it.
+fn xxh3Secret(seed: U64) -> U8[>..] {
+    var secret = U8[>..](repeating: 0, count: xxh3SecretBytes)
+    unsafe {
+        let base = xxh3DefaultSecret()
+        var i = 0
+        while i < xxh3SecretBytes {
+            secret.writeU64(load64(base &+ i) &+ seed, at: i, endian: .Little)
+            secret.writeU64(load64(base &+ i &+ 8) &- seed, at: i + 8, endian: .Little)
+            i += 16
+        }
+    }
+    return secret
+}
+
+@inline(always)
+fn xxh3Fold(_ a: U64, _ b: U64) -> U64 {
+    let (high, low) = a.multipliedFullWidth(by: b)
+    return high ^ low
+}
+
+@inline(always)
+fn xxh3Avalanche(_ value: U64) -> U64 {
+    var hash = value ^ (value >> 37)
+    hash = hash &* xxh3PrimeMx1
+    return hash ^ (hash >> 32)
+}
+
+@inline(always)
+fn xxh3Rrmxmx(_ value: U64, _ length: U64) -> U64 {
+    var hash = value ^ (value.rotatedLeft(by: 49) ^ value.rotatedLeft(by: 24))
+    hash = hash &* xxh3PrimeMx2
+    hash = hash ^ ((hash >> 35) &+ length)
+    hash = hash &* xxh3PrimeMx2
+    return hash ^ (hash >> 28)
+}
+
+@inline(always)
+unsafe fn xxh3Mix16(_ input: Int, _ secret: Int, _ seed: U64) -> U64 {
+    return xxh3Fold(load64(input) ^ (load64(secret) &+ seed), load64(input &+ 8) ^ (load64(secret &+ 8) &- seed))
+}
+
+// ---- 64 bits -------------------------------------------------------------------
+
+/// The 64-bit hash of at most 240 bytes, with the default secret.
+unsafe fn xxh3Short64(_ input: Int, _ length: Int, _ seed: U64) -> U64 {
+    let secret = xxh3DefaultSecret()
+    let n = length unchecked as U64
+    if length <= 16 {
+        if length > 8 {
+            let flipLow = (load64(secret &+ 24) ^ load64(secret &+ 32)) &+ seed
+            let flipHigh = (load64(secret &+ 40) ^ load64(secret &+ 48)) &- seed
+            let low = load64(input) ^ flipLow
+            let high = load64(input &+ length &- 8) ^ flipHigh
+            return xxh3Avalanche(n &+ low.byteSwapped &+ high &+ xxh3Fold(low, high))
+        }
+        if length >= 4 {
+            let mixed = seed ^ ((seed unchecked as U32).byteSwapped unchecked as U64) << 32
+            let flip = (load64(secret &+ 8) ^ load64(secret &+ 16)) &- mixed
+            let word = (load32(input &+ length &- 4) unchecked as U64) &+ ((load32(input) unchecked as U64) << 32)
+            return xxh3Rrmxmx(word ^ flip, n)
+        }
+        if length > 0 {
+            let combined = (load8(input) unchecked as U32) << 16 | (load8(input &+ (length >> 1)) unchecked as U32) << 24
+                | (load8(input &+ length &- 1) unchecked as U32) | (length unchecked as U32) << 8
+            let flip = ((load32(secret) ^ load32(secret &+ 4)) unchecked as U64) &+ seed
+            return xxh64Avalanche((combined unchecked as U64) ^ flip)
+        }
+        return xxh64Avalanche(seed ^ (load64(secret &+ 56) ^ load64(secret &+ 64)))
+    }
+    var acc = n &* xxPrime64a
+    if length <= 128 {
+        if length > 32 {
+            if length > 64 {
+                if length > 96 {
+                    acc = acc &+ xxh3Mix16(input &+ 48, secret &+ 96, seed)
+                    acc = acc &+ xxh3Mix16(input &+ length &- 64, secret &+ 112, seed)
+                }
+                acc = acc &+ xxh3Mix16(input &+ 32, secret &+ 64, seed)
+                acc = acc &+ xxh3Mix16(input &+ length &- 48, secret &+ 80, seed)
+            }
+            acc = acc &+ xxh3Mix16(input &+ 16, secret &+ 32, seed)
+            acc = acc &+ xxh3Mix16(input &+ length &- 32, secret &+ 48, seed)
+        }
+        acc = acc &+ xxh3Mix16(input, secret, seed)
+        acc = acc &+ xxh3Mix16(input &+ length &- 16, secret &+ 16, seed)
+        return xxh3Avalanche(acc)
+    }
+    var i = 0
+    while i < 8 {
+        acc = acc &+ xxh3Mix16(input &+ 16 &* i, secret &+ 16 &* i, seed)
+        i = i &+ 1
+    }
+    var end = xxh3Mix16(input &+ length &- 16, secret &+ 136 &- 17, seed)
+    acc = xxh3Avalanche(acc)
+    let rounds = length / 16
+    i = 8
+    while i < rounds {
+        end = end &+ xxh3Mix16(input &+ 16 &* i, secret &+ 16 &* (i &- 8) &+ 3, seed)
+        i = i &+ 1
+    }
+    return xxh3Avalanche(acc &+ end)
+}
+
+/// The lanes merged into 64 bits, from a start, by the secret from an address.
+unsafe fn xxh3Merge(_ lanes: SIMD<U64, 8>, _ secret: Int, _ start: U64) -> U64 {
+    var result = start
+    result = result &+ xxh3Fold(lanes[0] ^ load64(secret), lanes[1] ^ load64(secret &+ 8))
+    result = result &+ xxh3Fold(lanes[2] ^ load64(secret &+ 16), lanes[3] ^ load64(secret &+ 24))
+    result = result &+ xxh3Fold(lanes[4] ^ load64(secret &+ 32), lanes[5] ^ load64(secret &+ 40))
+    result = result &+ xxh3Fold(lanes[6] ^ load64(secret &+ 48), lanes[7] ^ load64(secret &+ 56))
+    return xxh3Avalanche(result)
+}
+
+@inline(always)
+unsafe fn xxh3Finish64(_ lanes: SIMD<U64, 8>, _ secret: Int, _ length: U64) -> U64 {
+    return xxh3Merge(lanes, secret &+ 11, length &* xxPrime64a)
+}
+
+// ---- 128 bits ------------------------------------------------------------------
+
+@inline(always)
+fn xxh3Wide(_ high: U64, _ low: U64) -> U128 => (high unchecked as U128) << 64 | (low unchecked as U128)
+
+/// The 128-bit hash of at most 240 bytes, with the default secret.
+unsafe fn xxh3Short128(_ input: Int, _ length: Int, _ seed: U64) -> U128 {
+    let secret = xxh3DefaultSecret()
+    let n = length unchecked as U64
+    if length <= 16 {
+        if length > 8 {
+            let flipLow = (load64(secret &+ 32) ^ load64(secret &+ 40)) &- seed
+            let flipHigh = (load64(secret &+ 48) ^ load64(secret &+ 56)) &+ seed
+            let inputLow = load64(input)
+            var inputHigh = load64(input &+ length &- 8)
+            var (mHigh, mLow) = (inputLow ^ inputHigh ^ flipLow).multipliedFullWidth(by: xxPrime64a)
+            mLow = mLow &+ ((n &- 1) << 54)
+            inputHigh = inputHigh ^ flipHigh
+            mHigh = mHigh &+ inputHigh &+ (inputHigh & 0xFFFF_FFFF) &* ((xxPrime32b unchecked as U64) &- 1)
+            mLow = mLow ^ mHigh.byteSwapped
+            var (hHigh, hLow) = mLow.multipliedFullWidth(by: xxPrime64b)
+            hHigh = hHigh &+ mHigh &* xxPrime64b
+            return xxh3Wide(xxh3Avalanche(hHigh), xxh3Avalanche(hLow))
+        }
+        if length >= 4 {
+            let mixed = seed ^ ((seed unchecked as U32).byteSwapped unchecked as U64) << 32
+            let word = (load32(input) unchecked as U64) &+ ((load32(input &+ length &- 4) unchecked as U64) << 32)
+            let flip = (load64(secret &+ 16) ^ load64(secret &+ 24)) &+ mixed
+            var (mHigh, mLow) = (word ^ flip).multipliedFullWidth(by: xxPrime64a &+ (n << 2))
+            mHigh = mHigh &+ (mLow << 1)
+            mLow = mLow ^ (mHigh >> 3)
+            mLow = mLow ^ (mLow >> 35)
+            mLow = mLow &* xxh3PrimeMx2
+            mLow = mLow ^ (mLow >> 28)
+            return xxh3Wide(xxh3Avalanche(mHigh), mLow)
+        }
+        if length > 0 {
+            let combinedLow = (load8(input) unchecked as U32) << 16 | (load8(input &+ (length >> 1)) unchecked as U32) << 24
+                | (load8(input &+ length &- 1) unchecked as U32) | (length unchecked as U32) << 8
+            let combinedHigh = combinedLow.byteSwapped.rotatedLeft(by: 13)
+            let flipLow = ((load32(secret) ^ load32(secret &+ 4)) unchecked as U64) &+ seed
+            let flipHigh = ((load32(secret &+ 8) ^ load32(secret &+ 12)) unchecked as U64) &- seed
+            return xxh3Wide(xxh64Avalanche((combinedHigh unchecked as U64) ^ flipHigh), xxh64Avalanche((combinedLow unchecked as U64) ^ flipLow))
+        }
+        let flipLow = load64(secret &+ 64) ^ load64(secret &+ 72)
+        let flipHigh = load64(secret &+ 80) ^ load64(secret &+ 88)
+        return xxh3Wide(xxh64Avalanche(seed ^ flipHigh), xxh64Avalanche(seed ^ flipLow))
+    }
+    var low = n &* xxPrime64a
+    var high: U64 = 0
+    if length <= 128 {
+        if length > 32 {
+            if length > 64 {
+                if length > 96 {
+                    xxh3Mix32(&low, &high, input &+ 48, input &+ length &- 64, secret &+ 96, seed)
+                }
+                xxh3Mix32(&low, &high, input &+ 32, input &+ length &- 48, secret &+ 64, seed)
+            }
+            xxh3Mix32(&low, &high, input &+ 16, input &+ length &- 32, secret &+ 32, seed)
+        }
+        xxh3Mix32(&low, &high, input, input &+ length &- 16, secret, seed)
+        return xxh3End128(low, high, n, seed)
+    }
+    var i = 32
+    while i < 160 {
+        xxh3Mix32(&low, &high, input &+ i &- 32, input &+ i &- 16, secret &+ i &- 32, seed)
+        i = i &+ 32
+    }
+    low = xxh3Avalanche(low)
+    high = xxh3Avalanche(high)
+    i = 160
+    while i <= length {
+        xxh3Mix32(&low, &high, input &+ i &- 32, input &+ i &- 16, secret &+ 3 &+ i &- 160, seed)
+        i = i &+ 32
+    }
+    xxh3Mix32(&low, &high, input &+ length &- 16, input &+ length &- 32, secret &+ 136 &- 17 &- 16, 0 &- seed)
+    return xxh3End128(low, high, n, seed)
+}
+
+@inline(always)
+unsafe fn xxh3Mix32(_ low: inout U64, _ high: inout U64, _ first: Int, _ second: Int, _ secret: Int, _ seed: U64) {
+    low = low &+ xxh3Mix16(first, secret, seed)
+    low = low ^ (load64(second) &+ load64(second &+ 8))
+    high = high &+ xxh3Mix16(second, secret &+ 16, seed)
+    high = high ^ (load64(first) &+ load64(first &+ 8))
+}
+
+@inline(always)
+fn xxh3End128(_ low: U64, _ high: U64, _ length: U64, _ seed: U64) -> U128 {
+    let hashLow = xxh3Avalanche(low &+ high)
+    let hashHigh = 0 &- xxh3Avalanche(low &* xxPrime64a &+ high &* xxPrime64d &+ (length &- seed) &* xxPrime64b)
+    return xxh3Wide(hashHigh, hashLow)
+}
+
+@inline(always)
+unsafe fn xxh3Finish128(_ lanes: SIMD<U64, 8>, _ secret: Int, _ length: U64) -> U128 {
+    let low = xxh3Merge(lanes, secret &+ 11, length &* xxPrime64a)
+    let high = xxh3Merge(lanes, secret &+ xxh3SecretBytes &- xxh3StripeBytes &- 11, ~(length &* xxPrime64b))
+    return xxh3Wide(high, low)
+}
+
+// ---- Long inputs ---------------------------------------------------------------
+
+/// One stripe into the lanes: each lane's word, keyed, its halves multiplied,
+/// and the word added to its neighbour.
+@inline(always)
+unsafe fn xxh3Stripe(_ lanes: SIMD<U64, 8>, _ input: Int, _ secret: Int) -> SIMD<U64, 8> {
+    let data = RawPtr<U8>(address: input).load(as: SIMD<U64, 8>.self)
+    let keyed = data ^ RawPtr<U8>(address: secret).load(as: SIMD<U64, 8>.self)
+    let product = (keyed & SIMD<U64, 8>(repeating: 0xFFFF_FFFF)) &* (keyed >> SIMD<U64, 8>(repeating: 32))
+    // Each pair of lanes swapped: one shuffle, which a swizzle by an array
+    // literal's indices is not yet.
+    let halves = SIMD<U64, 8>.unzip(data, data)
+    let swapped = SIMD<U64, 8>.zip(halves.odd, halves.even).low
+    return lanes &+ swapped &+ product
+}
+
+/// So many stripes from an address, the secret moving on 8 bytes a stripe.
+@inline(always)
+unsafe fn xxh3Stripes(_ lanes: SIMD<U64, 8>, _ input: Int, _ count: Int, _ secret: Int) -> SIMD<U64, 8> {
+    var result = lanes
+    var i = 0
+    while i < count {
+        result = xxh3Stripe(result, input &+ 64 &* i, secret &+ 8 &* i)
+        i = i &+ 1
+    }
+    return result
+}
+
+/// The lanes scrambled, at the end of a block.
+@inline(always)
+unsafe fn xxh3Scramble(_ lanes: SIMD<U64, 8>, _ secret: Int) -> SIMD<U64, 8> {
+    let key = RawPtr<U8>(address: secret).load(as: SIMD<U64, 8>.self)
+    let mixed = lanes ^ (lanes >> SIMD<U64, 8>(repeating: 47)) ^ key
+    return mixed &* SIMD<U64, 8>(repeating: xxPrime32a unchecked as U64)
+}
+
+/// The lanes after more than 240 bytes, by a secret of 192.
+unsafe fn xxh3Long(_ input: Int, _ length: Int, _ secret: Int) -> SIMD<U64, 8> {
+    var lanes = xxh3InitialLanes()
+    let blockBytes = xxh3StripesPerBlock &* xxh3StripeBytes
+    let blocks = (length &- 1) / blockBytes
+    var at = input
+    var n = 0
+    while n < blocks {
+        lanes = xxh3Stripes(lanes, at, xxh3StripesPerBlock, secret)
+        lanes = xxh3Scramble(lanes, secret &+ xxh3SecretBytes &- xxh3StripeBytes)
+        at = at &+ blockBytes
+        n = n &+ 1
+    }
+    let stripes = (length &- 1 &- blockBytes &* blocks) / xxh3StripeBytes
+    lanes = xxh3Stripes(lanes, at, stripes, secret)
+    return xxh3Stripe(lanes, input &+ length &- xxh3StripeBytes, secret &+ xxh3SecretBytes &- xxh3StripeBytes &- 7)
+}
+
+/// XXH3's lanes part way, and how many stripes of their block they have had.
+struct Xxh3Lanes {
+    var lanes: SIMD<U64, 8>
+    var stripesSoFar: Int
+
+    init() {
+        unsafe {
+            lanes = xxh3InitialLanes()
+        }
+        stripesSoFar = 0
+    }
+
+    /// Stripes from an address, scrambling at each block's end.
+    unsafe mutating fn consume(_ address: Int, _ count: Int, _ secret: Int) {
+        var input = address
+        var left = count
+        var lanes = self.lanes
+        var first = secret &+ stripesSoFar &* 8
+        if left >= xxh3StripesPerBlock &- stripesSoFar {
+            var these = xxh3StripesPerBlock &- stripesSoFar
+            repeat {
+                lanes = xxh3Stripes(lanes, input, these, first)
+                lanes = xxh3Scramble(lanes, secret &+ xxh3SecretBytes &- xxh3StripeBytes)
+                input = input &+ these &* xxh3StripeBytes
+                left = left &- these
+                these = xxh3StripesPerBlock
+                first = secret
+            } while left >= xxh3StripesPerBlock
+            stripesSoFar = 0
+        }
+        if left > 0 {
+            lanes = xxh3Stripes(lanes, input, left, first)
+            stripesSoFar = stripesSoFar &+ left
+        }
+        self.lanes = lanes
+    }
+}
+
+/// The secret's address, for as long as the body runs: the default one for a
+/// seed of zero, which makes none of its own.
+fn xxh3WithSecret<R>(_ seed: U64, _ secret: U8[:], _ body: (Int) -> R) -> R {
+    if seed == 0 {
+        return body(xxh3DefaultSecret())
+    }
+    return secret.withPointer { (start: RawPtr<U8>) -> R in body(start.address) }
+}
+
+/// XXH3 as it goes, as xxHash's stream keeps it: the lanes, and the last
+/// bytes given, kept until more come.
+struct Xxh3Stream {
+    var state: Xxh3Lanes
+    /// The bytes not yet in the lanes, at the start; and after a long update
+    /// the stripe before them, at the end, which the last stripe may need.
+    var buffer: U8[>..]
+    var buffered: Int
+    var total: U64
+    let seed: U64
+    /// The secret the seed makes: none for a seed of zero.
+    let secret: U8[>..]
+
+    init(seed: U64) {
+        self.seed = seed
+        state = Xxh3Lanes()
+        buffer = []
+        buffered = 0
+        total = 0
+        secret = seed == 0 ? [] : xxh3Secret(seed: seed)
+    }
+
+    mutating fn reset() {
+        state = Xxh3Lanes()
+        buffered = 0
+        total = 0
+    }
+
+    /// The bytes given, after those before.
+    mutating fn update(_ bytes: U8[:]) {
+        let count = bytes.count
+        total = total &+ (count unchecked as U64)
+        if buffer.count == 0 {
+            buffer = U8[>..](repeating: 0, count: xxh3BufferBytes)
+        }
+        if count <= xxh3BufferBytes - buffered {
+            copyInto(&buffer, at: buffered, from: bytes, 0, count)
+            buffered += count
+            return
+        }
+        var at = 0
+        var state = self.state
+        let secretBytes = secret
+        if buffered > 0 {
+            at = xxh3BufferBytes - buffered
+            copyInto(&buffer, at: buffered, from: bytes, 0, at)
+            xxh3WithSecret(seed, secretBytes) { (key: Int) in
+                buffer.withPointer { (room: RawPtr<U8>) in
+                    unsafe {
+                        state.consume(room.address, xxh3BufferBytes / xxh3StripeBytes, key)
+                    }
+                }
+            }
+            buffered = 0
+        }
+        if count - at > xxh3BufferBytes {
+            let stripes = (count - 1 - at) / xxh3StripeBytes
+            let from = at
+            xxh3WithSecret(seed, secretBytes) { (key: Int) in
+                bytes.withPointer { (start: RawPtr<U8>) in
+                    unsafe {
+                        state.consume(start.address &+ from, stripes, key)
+                    }
+                }
+            }
+            at += stripes * xxh3StripeBytes
+            copyInto(&buffer, at: xxh3BufferBytes - xxh3StripeBytes, from: bytes, at - xxh3StripeBytes, xxh3StripeBytes)
+        }
+        self.state = state
+        copyInto(&buffer, at: 0, from: bytes, at, count - at)
+        buffered = count - at
+    }
+
+    /// The lanes with the last stripes in them, for a total of more than 240.
+    fn finalLanes(_ secret: Int) -> SIMD<U64, 8> {
+        var state = self.state
+        let buffered = self.buffered
+        let last = secret &+ xxh3SecretBytes &- xxh3StripeBytes &- 7
+        if buffered >= xxh3StripeBytes {
+            return buffer.withPointer { (room: RawPtr<U8>) -> SIMD<U64, 8> in
+                unsafe {
+                    state.consume(room.address, (buffered - 1) / xxh3StripeBytes, secret)
+                    return xxh3Stripe(state.lanes, room.address &+ buffered &- xxh3StripeBytes, last)
+                }
+            }
+        }
+        // The stripe ends with what is buffered and begins with the end of the
+        // one before, kept at the buffer's end.
+        let catchUp = xxh3StripeBytes - buffered
+        var stripe = U8[>..](repeating: 0, count: xxh3StripeBytes)
+        copyInto(&stripe, at: 0, from: buffer, xxh3BufferBytes - catchUp, catchUp)
+        copyInto(&stripe, at: catchUp, from: buffer, 0, buffered)
+        return stripe.withPointer { (start: RawPtr<U8>) -> SIMD<U64, 8> in
+            unsafe {
+                return xxh3Stripe(state.lanes, start.address, last)
+            }
+        }
+    }
+
+    /// The 64-bit hash of every byte given so far.
+    fn digest64() -> U64 {
+        let total = self.total
+        if total > U64(xxh3MidSizeMax) {
+            return xxh3WithSecret(seed, secret) { (key: Int) -> U64 in
+                let lanes = self.finalLanes(key)
+                unsafe {
+                    return xxh3Finish64(lanes, key, total)
+                }
+            }
+        }
+        let count = buffered
+        let seed = self.seed
+        if count == 0 {
+            unsafe {
+                return xxh3Short64(0, 0, seed)
+            }
+        }
+        return buffer.withPointer { (room: RawPtr<U8>) -> U64 in
+            unsafe {
+                return xxh3Short64(room.address, count, seed)
+            }
+        }
+    }
+
+    /// The 128-bit hash of every byte given so far.
+    fn digest128() -> U128 {
+        let total = self.total
+        if total > U64(xxh3MidSizeMax) {
+            return xxh3WithSecret(seed, secret) { (key: Int) -> U128 in
+                let lanes = self.finalLanes(key)
+                unsafe {
+                    return xxh3Finish128(lanes, key, total)
+                }
+            }
+        }
+        let count = buffered
+        let seed = self.seed
+        if count == 0 {
+            unsafe {
+                return xxh3Short128(0, 0, seed)
+            }
+        }
+        return buffer.withPointer { (room: RawPtr<U8>) -> U128 in
+            unsafe {
+                return xxh3Short128(room.address, count, seed)
+            }
+        }
+    }
+}

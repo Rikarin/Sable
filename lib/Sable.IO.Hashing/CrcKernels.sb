@@ -1,0 +1,124 @@
+module Sable.IO.Hashing
+
+// The CRCs' work, the same for each: where the processor multiplies without
+// carries, the runtime's (runtime/checksums.c), sixty-four bytes a step by
+// folding and the rest by the CRC instructions or tables; elsewhere, and in
+// the interpreter, eight bytes a step by tables here. A kind is a polynomial
+// with its bits' order, as the runtime numbers them; a state is the CRC's
+// register, before it is complemented at the end.
+
+/// CRC-32 of IEEE 802.3, reflected.
+const crc32Kind = 0
+
+/// CRC-32C, Castagnoli's, reflected.
+const crc32cKind = 1
+
+/// CRC-64 of NVM Express, reflected.
+const crc64NvmeKind = 2
+
+/// CRC-64 of ECMA-182, not reflected.
+const crc64EcmaKind = 3
+
+/// Whether the runtime does them: not in the interpreter, nor where the
+/// processor cannot multiply without carries.
+@builtin("crc_available")
+fn crcRuntimeAvailable() -> Bool
+
+/// The state after the bytes at an address, by the runtime.
+@builtin("crc_update")
+unsafe fn crcRuntime(_ kind: Int, _ state: Int, _ address: Int, _ count: Int) -> Int
+
+/// The state after the bytes at an address, of a CRC of a kind.
+unsafe fn crcAdvance(_ kind: Int, _ state: U64, _ address: Int, _ count: Int) -> U64 {
+    if crcRuntimeAvailable() {
+        return crcRuntime(kind, state unchecked as Int, address, count) unchecked as U64
+    }
+    var crc = state
+    var at = address
+    let end = address &+ count
+    let table = crcTable(kind)
+    if kind == crc64EcmaKind {
+        while end &- at >= 8 {
+            crc = crc ^ load64(at).byteSwapped
+            crc = entry(table, 7, crc >> 56) ^ entry(table, 6, crc >> 48 & 0xFF) ^ entry(table, 5, crc >> 40 & 0xFF) ^ entry(table, 4, crc >> 32 & 0xFF)
+                ^ entry(table, 3, crc >> 24 & 0xFF) ^ entry(table, 2, crc >> 16 & 0xFF) ^ entry(table, 1, crc >> 8 & 0xFF) ^ entry(table, 0, crc & 0xFF)
+            at = at &+ 8
+        }
+        while at < end {
+            crc = crc << 8 ^ entry(table, 0, (crc >> 56) ^ (load8(at) unchecked as U64))
+            at = at &+ 1
+        }
+        return crc
+    }
+    while end &- at >= 8 {
+        crc = crc ^ load64(at)
+        crc = entry(table, 7, crc & 0xFF) ^ entry(table, 6, crc >> 8 & 0xFF) ^ entry(table, 5, crc >> 16 & 0xFF) ^ entry(table, 4, crc >> 24 & 0xFF)
+            ^ entry(table, 3, crc >> 32 & 0xFF) ^ entry(table, 2, crc >> 40 & 0xFF) ^ entry(table, 1, crc >> 48 & 0xFF) ^ entry(table, 0, crc >> 56)
+        at = at &+ 8
+    }
+    while at < end {
+        crc = crc >> 8 ^ entry(table, 0, (crc ^ (load8(at) unchecked as U64)) & 0xFF)
+        at = at &+ 1
+    }
+    return crc
+}
+
+/// What byte 'index' does to the CRC with 'after' bytes after it.
+@inline(always)
+unsafe fn entry(_ table: Int, _ after: Int, _ index: U64) -> U64 {
+    return load64(table &+ 2048 &* after &+ 8 &* (index unchecked as Int))
+}
+
+/// The tables of a kind: 8 of 256 U64s.
+fn crcTable(_ kind: Int) -> Int {
+    if kind == crc32Kind {
+        return crc32Table.get()
+    }
+    if kind == crc32cKind {
+        return crc32cTable.get()
+    }
+    if kind == crc64NvmeKind {
+        return crc64NvmeTable.get()
+    }
+    return crc64EcmaTable.get()
+}
+
+@immortal
+static let crc32Table: LazyTable = LazyTable { () -> Int in makeCrcTable(0xEDB8_8320, reflected: true) }
+
+@immortal
+static let crc32cTable: LazyTable = LazyTable { () -> Int in makeCrcTable(0x82F6_3B78, reflected: true) }
+
+@immortal
+static let crc64NvmeTable: LazyTable = LazyTable { () -> Int in makeCrcTable(0x9A6C_9329_AC4B_C9B5, reflected: true) }
+
+@immortal
+static let crc64EcmaTable: LazyTable = LazyTable { () -> Int in makeCrcTable(0x42F0_E1EB_A9EA_3693, reflected: false) }
+
+/// What each byte does to the CRC with none to seven after it, for a
+/// polynomial given as the CRC's register shifts it: reversed, for a reflected
+/// one.
+fn makeCrcTable(_ polynomial: U64, reflected: Bool) -> Int {
+    var table = U64[>..](repeating: 0, count: 2048)
+    var i = 0
+    while i < 256 {
+        var crc: U64 = reflected ? U64(i) : U64(i) << 56
+        var bit = 0
+        while bit < 8 {
+            if reflected {
+                crc = (crc & 1) != 0 ? crc >> 1 ^ polynomial : crc >> 1
+            } else {
+                crc = (crc >> 63) != 0 ? crc << 1 ^ polynomial : crc << 1
+            }
+            bit += 1
+        }
+        table[i] = crc
+        i += 1
+    }
+    while i < 2048 {
+        let before = table[i - 256]
+        table[i] = reflected ? before >> 8 ^ table[Int(before & 0xFF)] : before << 8 ^ table[Int(before >> 56)]
+        i += 1
+    }
+    return constantTable(table)
+}

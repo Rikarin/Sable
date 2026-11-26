@@ -1,0 +1,169 @@
+module Sable.Math.Tensors
+
+// Elementwise work, by NumPy's broadcasting: two shapes aligned at their last
+// dimensions, each pair equal or one of them 1, which repeats. What does not
+// broadcast traps, saying the two shapes.
+
+/// The closure of each pair of elements, the two broadcast together, into a
+/// new tensor, row-major.
+fn combined<A, B, R>(_ a: TensorView<A>, _ b: TensorView<B>, _ f: (A, B) -> R) -> Tensor<R> {
+    guard let shape = broadcastShape(a.shape, b.shape) else {
+        preconditionFailure("shapes \(a.shape) and \(b.shape) do not broadcast together")
+    }
+    let count = elementCount(shape)
+    var made: R[>..] = []
+    made.reserveCapacity(count)
+    if count == 0 {
+        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+    }
+    if a.shape == b.shape && a.isContiguous && b.isContiguous {
+        var i = 0
+        while i < count {
+            made.append(f(a.storage[a.offset + i], b.storage[b.offset + i]))
+            i += 1
+        }
+        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+    }
+    if shape.count == 0 {
+        made.append(f(a.storage[a.offset], b.storage[b.offset]))
+        return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+    }
+    let aStrides = broadcastStrides(a.shape, a.strides, to: shape)
+    let bStrides = broadcastStrides(b.shape, b.strides, to: shape)
+    let last = shape.count - 1
+    let length = shape[last]
+    let aStep = aStrides[last]
+    let bStep = bStrides[last]
+    var index = Int[>..](repeating: 0, count: shape.count)
+    var offsets: Int[>..] = [a.offset, b.offset]
+    let all: Int[>..][>..] = [aStrides, bStrides]
+    repeat {
+        var x = offsets[0]
+        var y = offsets[1]
+        var i = 0
+        while i < length {
+            made.append(f(a.storage[x], b.storage[y]))
+            x += aStep
+            y += bStep
+            i += 1
+        }
+    } while advance(&index, shape, &offsets, all)
+    return Tensor<R>(storage: made, shape: shape, layout: .RowMajor)
+}
+
+/// The closure of each element, into a new tensor, row-major.
+fn mapped<A, R>(_ a: TensorView<A>, _ f: (A) -> R) -> Tensor<R> {
+    var made: R[>..] = []
+    made.reserveCapacity(a.count)
+    if a.isContiguous {
+        var i = 0
+        let count = a.count
+        while i < count {
+            made.append(f(a.storage[a.offset + i]))
+            i += 1
+        }
+    } else {
+        a.forEachOffset { (at: Int) in
+            made.append(f(a.storage[at]))
+        }
+    }
+    return Tensor<R>(storage: made, shape: a.shape, layout: .RowMajor)
+}
+
+extension TensorView {
+    /// Each element made into another by the closure, in a tensor of the shape.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2], elements: [1, 2])
+    /// assert(t.view.map { $0 * 10 }.toArray() == [10, 20])
+    /// ```
+    public fn map<R>(_ transform: (T) -> R) -> Tensor<R> => mapped(self, transform)
+
+    /// The closure of each pair of this and the other's elements, the two
+    /// broadcast together.
+    public fn zip<U, R>(_ other: TensorView<U>, _ combine: (T, U) -> R) -> Tensor<R> => combined(self, other, combine)
+}
+
+extension Tensor {
+    /// Each element made into another by the closure, in a tensor of the shape.
+    public fn map<R>(_ transform: (T) -> R) -> Tensor<R> => mapped(self.view, transform)
+
+    /// The closure of each pair of this and the other's elements, the two
+    /// broadcast together.
+    ///
+    /// ```sable
+    /// let a = Tensor<Int>(shape: [2, 1], elements: [1, 2])
+    /// let b = Tensor<Int>(shape: [3], elements: [10, 20, 30])
+    /// assert(a.zip(b) { $0 * $1 }.toArray() == [10, 20, 30, 20, 40, 60])
+    /// ```
+    public fn zip<U, R>(_ other: Tensor<U>, _ combine: (T, U) -> R) -> Tensor<R> => combined(self.view, other.view, combine)
+}
+
+extension TensorView where T: Numeric {
+    public operator + (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 + $1 }
+    public operator - (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 - $1 }
+    public operator * (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 * $1 }
+    public operator + (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 + rhs }
+    public operator - (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 - rhs }
+    public operator * (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 * rhs }
+    public operator + (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs + $0 }
+    public operator - (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs - $0 }
+    public operator * (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs * $0 }
+}
+
+extension Tensor where T: Numeric {
+    /// The elementwise sum, the two broadcast together.
+    public operator + (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 + $1 }
+
+    /// The elementwise difference, the two broadcast together.
+    public operator - (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 - $1 }
+
+    /// The elementwise product (NumPy's `*`, not `matmul`), the two broadcast
+    /// together.
+    public operator * (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 * $1 }
+
+    public operator + (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 + rhs }
+    public operator - (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 - rhs }
+    public operator * (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 * rhs }
+    public operator + (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs + $0 }
+    public operator - (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs - $0 }
+    public operator * (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs * $0 }
+}
+
+extension TensorView where T: FloatingPoint {
+    public operator / (lhs: TensorView<T>, rhs: TensorView<T>) -> Tensor<T> => combined(lhs, rhs) { $0 / $1 }
+    public operator / (lhs: TensorView<T>, rhs: T) -> Tensor<T> => mapped(lhs) { $0 / rhs }
+    public operator / (lhs: T, rhs: TensorView<T>) -> Tensor<T> => mapped(rhs) { lhs / $0 }
+    public prefix operator - (operand: TensorView<T>) -> Tensor<T> => mapped(operand) { -$0 }
+}
+
+extension Tensor where T: FloatingPoint {
+    /// The elementwise quotient, the two broadcast together.
+    public operator / (lhs: Tensor<T>, rhs: Tensor<T>) -> Tensor<T> => combined(lhs.view, rhs.view) { $0 / $1 }
+    public operator / (lhs: Tensor<T>, rhs: T) -> Tensor<T> => mapped(lhs.view) { $0 / rhs }
+    public operator / (lhs: T, rhs: Tensor<T>) -> Tensor<T> => mapped(rhs.view) { lhs / $0 }
+
+    /// Each element negated.
+    public prefix operator - (operand: Tensor<T>) -> Tensor<T> => mapped(operand.view) { -$0 }
+}
+
+extension Tensor where T: Comparable {
+    /// Whether each element is less than the other's, the two broadcast
+    /// together.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [3], elements: [1, 5, 3])
+    /// assert(t.isLess(than: Tensor<Int>(shape: [1], elements: [3])).toArray() == [true, false, false])
+    /// ```
+    public fn isLess(than other: Tensor<T>) -> Tensor<Bool> => combined(self.view, other.view) { $0 < $1 }
+
+    /// Whether each element is greater than the other's, the two broadcast
+    /// together.
+    public fn isGreater(than other: Tensor<T>) -> Tensor<Bool> => combined(self.view, other.view) { $1 < $0 }
+
+    /// Whether each element equals the other's, the two broadcast together.
+    public fn isEqual(to other: Tensor<T>) -> Tensor<Bool> => combined(self.view, other.view) { $0 == $1 }
+
+    /// Each element held within the bounds.
+    public fn clamped(_ low: T, _ high: T) -> Tensor<T> => mapped(self.view) { $0 < low ? low : high < $0 ? high : $0 }
+}

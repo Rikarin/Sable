@@ -1,0 +1,39 @@
+module TensorMatmulBench
+
+// Tensor.matmul of two 512 x 512 F32 matrices, and broadcasting arithmetic and
+// a reduction over a 256 x 256 x 16 tensor. The check is the sum of a diagonal.
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+fn matrix(_ size: Int, _ seed: Int) -> Tensor<F32> {
+    return Tensor<F32>(shape: [size, size]) { F32(($0[0] * 7 + $0[1] * 3 + seed) % 11) / 8 - 0.5 }
+}
+
+fn diagonal(_ m: Tensor<F32>) -> F64 {
+    var total: F64 = 0
+    var i = 0
+    while i < m.shape[0] {
+        total += F64(m[i, i])
+        i += 1
+    }
+    return total
+}
+
+fn broadcastTensor() -> Tensor<F32> => Tensor<F32>(shape: [256, 256, 16]) { F32(($0[0] + $0[1] * 3 + $0[2] * 5) % 13) }
+
+@bench(arguments: ["matmul", "broadcast"])
+fn measure(_ b: Bencher, _ name: String) {
+    if name == "matmul" {
+        let x = matrix(512, 1)
+        let y = matrix(512, 2)
+        b.check(b.iterate { "\(diagonal(Tensor.matmul(x, y)))" })
+        return
+    }
+    let t = broadcastTensor()
+    let bias = Tensor<F32>(shape: [16]) { F32($0[0]) / 4 }
+    b.check(b.iterate {
+        let sums = ((t + bias) * 0.5).sum(axis: 2)
+        return "\(Int(sums[255, 255] * 4))"
+    })
+}

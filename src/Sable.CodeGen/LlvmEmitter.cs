@@ -674,7 +674,8 @@ public sealed partial class LlvmEmitter {
                                 declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F64(ptr, i64, ptr, i64, i64, ptr, i64)
-                                declare i64 @sable_crc32(i64, ptr, i64)
+                                declare i64 @sable_crc_update(i64, i64, ptr, i64)
+                                declare zeroext i1 @sable_crc_available()
                                 declare i64 @sable_codec_bytes(i64, ptr, i64, i64, ptr, i64)
                                 declare i64 @sable_codec_string(i64, ptr, i64, i64, ptr, i64)
                                 declare i64 @sable_utf8_to_utf16(ptr, i64, i64, ptr, i64)
@@ -5234,8 +5235,12 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_cipher(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, ptr null, i64 0, ptr {RawAddress(operands[3])}, ptr {RawAddress(operands[4])}, i64 {operands[5]})");
                     return;
 
-                case "crc32_raw":
-                    Line($"{Result()} = call i64 @sable_crc32(i64 {operands[0]}, ptr {RawAddress(operands[1])}, i64 {operands[2]})");
+                case "crc_update":
+                    Line($"{Result()} = call i64 @sable_crc_update(i64 {operands[0]}, i64 {operands[1]}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
+                    return;
+
+                case "crc_available":
+                    Line($"{Result()} = call zeroext i1 @sable_crc_available()");
                     return;
 
                 case "crypto_blocks_raw":

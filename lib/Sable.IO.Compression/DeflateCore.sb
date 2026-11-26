@@ -1,5 +1,7 @@
 module Sable.IO.Compression
 
+import Sable.IO.Hashing
+
 /// Raw deflate encoded: what is given gathered in a window, and compressed a
 /// part at a time, each of one block or more.
 final class DeflateCore {

@@ -1,0 +1,67 @@
+module Sable.IO.Hashing
+
+/// A hash of bytes that is quick, and not cryptographic: a checksum that
+/// finds accidental changes (the CRCs, Adler-32), or a hash that spreads keys
+/// and fingerprints content (the xxHashes). Anyone can make two inputs with
+/// the same one, so none of them is for what an adversary chooses; that is
+/// Sable.Crypto's.
+///
+/// Bytes are given whole to a type's own static `hash`, or a part at a time
+/// to `update`, where how they are cut into parts changes nothing. A hash is a
+/// value: a copy goes on from where the copy was made. Each type has its
+/// result as a number, `value`; `hashBytes` writes it as bytes in the order
+/// its format does, as .NET's `GetCurrentHash` does.
+///
+/// ```sable
+/// fn checksum<H: NonCryptographicHash>(_ parts: String[:], by function: H.Type) -> U8[>..] {
+///     var hash = H()
+///     for part in parts {
+///         hash.update(utf8: part)
+///     }
+///     return hash.hashBytes()
+/// }
+/// assert(checksum(["12345", "6789"], by: Crc32.self) == [0x26, 0x39, 0xF4, 0xCB])
+/// ```
+public protocol NonCryptographicHash {
+    /// How many bytes `hashBytes` gives.
+    static var hashByteCount: Int { get }
+
+    /// The hash with nothing given yet, in its default form: no seed, and a
+    /// CRC's usual polynomial.
+    init()
+
+    /// Hashes the bytes after those already given.
+    mutating fn update(_ bytes: U8[:])
+
+    /// Back to nothing given, with the same seed or polynomial.
+    mutating fn reset()
+
+    /// The hash of every byte given so far, as bytes. More can be given after.
+    fn hashBytes() -> U8[>..]
+}
+
+extension NonCryptographicHash {
+    /// Hashes the text's UTF-8 bytes after those already given.
+    ///
+    /// ```sable
+    /// var hash = XxHash64()
+    /// hash.update(utf8: "abc")
+    /// assert(hash.value == XxHash64.hash("abc".utf8Bytes()))
+    /// ```
+    public mutating fn update(utf8 text: String) {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        self.update(bytes)
+    }
+
+    /// The hash of the bytes, at once, as bytes.
+    ///
+    /// ```sable
+    /// assert(Adler32.hashBytes("Wikipedia".utf8Bytes()) == [0x11, 0xE6, 0x03, 0x98])
+    /// ```
+    public static fn hashBytes(_ bytes: U8[:]) -> U8[>..] {
+        var hash = Self()
+        hash.update(bytes)
+        return hash.hashBytes()
+    }
+}

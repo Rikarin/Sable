@@ -63,7 +63,8 @@ static void profile_write_one(const SableProfile *profile) {
         return;
     }
 
-    FILE *file = open_file(path, "w");
+    // Binary, as io.c writes: in text mode Windows would write each newline as CRLF.
+    FILE *file = open_file(path, "wb");
     if (file == NULL) {
         fprintf(stderr, "sable: cannot write the profile '%s'\n", path);
         return;

@@ -3822,6 +3822,16 @@ public sealed partial class SilGen {
                     }
                 }
 
+                // A 'some P' parameter's type is passed by its metadata alone,
+                // and the witness finds its table of P in the registry (#341).
+                foreach (var ownParameter in ownShape.Parameters) {
+                    if (ownParameter.OpaqueParameter is { } opaque && ownBound.Lookup(ownParameter) is { } given && !Mentions(given, [.._genericMetadata.Keys])) {
+                        foreach (var part in CompositionTypeSymbol.PartsOf(opaque.Constraint).OfType<NamedTypeSymbol>().Where(static p => p.TypeKind == TypeKind.Protocol && !IsMarker(p))) {
+                            generator.GenericTable(given, part.OriginalDefinition, call.Syntax, true, true);
+                        }
+                    }
+                }
+
                 if (GenericHiddenArguments(ownShape, ownBound, call.Syntax) is not { } hidden) {
                     EndAll(borrows);
                     return null;

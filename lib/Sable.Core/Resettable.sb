@@ -22,15 +22,3 @@ public protocol Resettable {
     mutating fn reset()
 }
 
-extension<Element> Element[>..]: Resettable {
-    /// Every element taken out, the room kept.
-    ///
-    /// ```sable
-    /// var scratch: Int[>..] = [1, 2, 3]
-    /// scratch.reset()
-    /// assert(scratch.isEmpty && scratch.capacity >= 3)
-    /// ```
-    public mutating fn reset() {
-        removeAll(keepingCapacity: true)
-    }
-}

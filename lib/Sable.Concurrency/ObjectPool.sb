@@ -33,13 +33,16 @@ module Sable.Concurrency
 /// cleared as it comes back, its buffer kept.
 ///
 /// ```sable
-/// let buffers = ObjectPool<Int[>..]>(capacity: 64, create: { [] })
+/// let buffers = ObjectPool<Int[>..]>(capacity: 64, create: { [] }, recycle: { scratch in
+///     scratch.removeAll(keepingCapacity: true)
+///     return true
+/// })
 /// let total = buffers.with { scratch in
 ///     scratch.append(contentsOf: [1, 2, 3])
 ///     return scratch.reduce(0) { $0 + $1 }
 /// }
 /// assert(total == 6)
-/// var lease = buffers.rent()      // the same array, reset, its room kept
+/// var lease = buffers.rent()      // the same array, emptied, its room kept
 /// assert(lease.value.isEmpty && lease.value.capacity >= 3)
 /// ```
 @immutable
@@ -267,9 +270,16 @@ extension ObjectPool where T: Resettable {
     /// as it comes back.
     ///
     /// ```sable
-    /// let pool = ObjectPool<String[>..]>(capacity: 4, create: { [] })
-    /// pool.with { $0.append("used") }
-    /// assert(pool.with { $0.isEmpty })
+    /// struct Lines: Resettable {
+    ///     var lines: String[>..]
+    ///
+    ///     mutating fn reset() {
+    ///         lines.removeAll(keepingCapacity: true)
+    ///     }
+    /// }
+    /// let pool = ObjectPool<Lines>(capacity: 4, create: { Lines { lines: [] } })
+    /// pool.with { $0.lines.append("used") }
+    /// assert(pool.with { $0.lines.isEmpty })
     /// ```
     public convenience init(capacity: Int = 2 * Thread.availableParallelism, create: @escaping @Sendable () -> T, tracksLeases: Bool = false) {
         self.init(capacity: capacity, create: create, recycle: { object in

@@ -41,7 +41,7 @@ public sealed class InlineClosures : ISilPass {
                     && module.Find(code.Function) is { Blocks.Count: > 0 } callee
                     && callee != function
                     && OnlyCalled(closure, new Uses(function)) is { } uses
-                    && (callee.Inline == SilInline.Always || OnceAndSmall(callee, uses))) {
+                    && (callee.Inline == SilInline.Always || !function.IsUnspecialised && OnceAndSmall(callee, uses))) {
                     Unclose(function, closure, code, callee, uses);
                     changed = true;
                 }

@@ -1,13 +1,56 @@
 using System.Numerics.Tensors;
 
-// Port of tensor-matmul.sb. System.Numerics.Tensors 9.0's Tensor<T> has no
-// matrix product, so the product is the one written over its TensorPrimitives:
-// each row of C the rows of B times A's elements, added in by MultiplyAdd. The
-// broadcast is the same loops a Tensor's Add and Multiply make.
+// Port of tensor-matmul.sb. System.Numerics.Tensors 11.0's Tensor<T> has no
+// matrix product (its Multiply is elementwise, its Dot of all the elements),
+// so the product is the one written over its TensorPrimitives: each row of C
+// the rows of B times A's elements, added in by MultiplyAdd. The broadcast is
+// the same loops a Tensor's Add and Multiply make, over spans; broadcast-tensor
+// is the Tensor<T> itself, its Add broadcasting and its Multiply in place.
 [Benchmark("library/tensor-matmul", "matmul")]
 [Benchmark("library/tensor-matmul", "broadcast")]
+[Benchmark("library/tensor-matmul", "broadcast-tensor")]
 static class LibraryTensorMatmul {
-    public static Func<string> Setup(string name) => name == "matmul" ? Product(512) : Broadcast();
+    public static Func<string> Setup(string name) =>
+        name switch {
+            "matmul" => Product(512),
+            "broadcast" => Broadcast(),
+            _ => BroadcastTensor(),
+        };
+
+    static Func<string> BroadcastTensor() {
+        var elements = new float[256 * 256 * 16];
+        for (var i = 0; i < 256; i++) {
+            for (var j = 0; j < 256; j++) {
+                for (var k = 0; k < 16; k++) {
+                    elements[(i * 256 + j) * 16 + k] = (i + j * 3 + k * 5) % 13;
+                }
+            }
+        }
+
+        var biases = new float[16];
+        for (var k = 0; k < 16; k++) {
+            biases[k] = k / 4f;
+        }
+
+        var t = Tensor.Create(elements, [256, 256, 16]);
+        var bias = Tensor.Create(biases, [16]);
+        return () => {
+            var scaled = Tensor.Add<float>(t, bias);
+            Tensor.Multiply<float>(scaled, 0.5f, scaled);
+            var flat = System.Runtime.InteropServices.MemoryMarshal.CreateReadOnlySpan(ref scaled.GetPinnableReference(), 256 * 256 * 16);
+            var sums = new float[256 * 256];
+            for (var r = 0; r < 256 * 256; r++) {
+                var total = 0f;
+                for (var k = 0; k < 16; k++) {
+                    total += flat[r * 16 + k];
+                }
+
+                sums[r] = total;
+            }
+
+            return $"{(long)(sums[256 * 256 - 1] * 4)}";
+        };
+    }
 
     static Func<string> Product(int size) {
         var x = Matrix(size, 1);

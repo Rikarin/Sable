@@ -1,0 +1,213 @@
+module Sable.Math.Tensors
+
+// DLPack (dmlc/dlpack's dlpack.h, 1.x): tensors handed to other libraries —
+// PyTorch, NumPy, JAX, a C program — and taken from them, with nothing
+// copied. The struct is DLManagedTensorVersioned, or the legacy
+// DLManagedTensor where 'versioned' is false; on the CPU, of one of
+// DLPackElement's types.
+//
+// Who owns what:
+//
+// - Handed out (`toDLPack`), the struct and its shape and strides are C's
+//   memory the runtime allocated (runtime/dlpack.c), and the elements stay
+//   the tensor's buffer, which the struct holds a reference to. The
+//   consumer owns the struct: it calls the struct's deleter once, when it
+//   is done, from any thread, and the reference goes then. The tensor is a
+//   value, so the consumer must not write the elements: the versioned
+//   struct says so (its read-only flag); a write by Sable code to the
+//   tensor afterwards is made to a copy, never seen through the struct.
+// - Taken in (`fromDLPack`), the struct is the producer's, and the tensor
+//   owns it from then on: its elements are a foreign array of the struct's
+//   memory (Sable.Core's Array+Foreign.sb), nothing copied, and the
+//   struct's deleter is called when the last reference to them goes — at
+//   once where they had to be copied (strides no layout has, or marked
+//   read-only and asked for as a Tensor, which writes). The producer must
+//   not free or write them meanwhile.
+
+/// Where a DLPack struct's DLTensor is, and its deleter and flags.
+struct DLPackFields {
+    let tensor: Int
+    let deleter: Int
+    let flags: U64
+}
+
+/// The fields of a struct at an address, of the kind 'versioned' says.
+unsafe fn dlpackFields(_ managed: RawPtr<Opaque>, versioned: Bool) -> DLPackFields {
+    let bytes = managed.cast(to: U8.self)
+    if managed.isNull {
+        preconditionFailure("a DLPack tensor at a null address")
+    }
+    if versioned {
+        let major = bytes.load(as: U32.self, byteOffset: 0)
+        if major != 1 {
+            preconditionFailure("a DLPack tensor of version \(major), not 1")
+        }
+        return DLPackFields(tensor: managed.address + 32, deleter: bytes.load(as: Int.self, byteOffset: 16), flags: bytes.load(as: U64.self, byteOffset: 24))
+    }
+    return DLPackFields(tensor: managed.address, deleter: bytes.load(as: Int.self, byteOffset: 56), flags: 0)
+}
+
+/// What a DLTensor says: its elements' first offset in the foreign array
+/// made of them, the shape and the strides.
+struct DLPackLayout {
+    let start: Int
+    let count: Int
+    let offset: Int
+    let shape: Int[>..]
+    let strides: Int[>..]
+}
+
+/// The layout of the DLTensor at an address, of elements of T, checked.
+unsafe fn dlpackLayout<T: DLPackElement>(_ at: Int, _ type: T.Type) -> DLPackLayout {
+    let tensor = RawPtr<U8>(address: at)
+    let data = tensor.load(as: Int.self, byteOffset: 0)
+    let device = tensor.load(as: I32.self, byteOffset: 8)
+    let rank = Int(tensor.load(as: I32.self, byteOffset: 16))
+    let code = tensor.load(as: U8.self, byteOffset: 20)
+    let bits = tensor.load(as: U8.self, byteOffset: 21)
+    let lanes = tensor.load(as: U16.self, byteOffset: 22)
+    let shapeAt = tensor.load(as: Int.self, byteOffset: 24)
+    let stridesAt = tensor.load(as: Int.self, byteOffset: 32)
+    let byteOffset = Int(tensor.load(as: U64.self, byteOffset: 40))
+    if device != 1 {
+        preconditionFailure("a DLPack tensor on device type \(device), not the CPU (1)")
+    }
+    if code != T.dlpackCode || bits != T.dlpackBits || lanes != 1 {
+        preconditionFailure("a DLPack tensor of type code \(code), \(bits) bits, \(lanes) lanes, not \(T.dlpackCode), \(T.dlpackBits), 1")
+    }
+    if rank < 0 {
+        preconditionFailure("a DLPack tensor of rank \(rank)")
+    }
+    var shape: Int[>..] = []
+    for axis in 0..<rank {
+        shape.append(RawPtr<Int>(address: shapeAt).load(at: axis))
+    }
+    checkShape(shape)
+    var strides: Int[>..] = []
+    if stridesAt == 0 {
+        strides = contiguousStrides(shape, .RowMajor)
+    } else {
+        for axis in 0..<rank {
+            strides.append(RawPtr<Int>(address: stridesAt).load(at: axis))
+        }
+    }
+    // The run of memory the places span, from the least offset to the
+    // greatest: a negative stride's places lie before the first's.
+    var least = 0
+    var greatest = 0
+    var empty = false
+    for axis in 0..<rank {
+        if shape[axis] == 0 {
+            empty = true
+        } else if strides[axis] < 0 {
+            least += strides[axis] * (shape[axis] - 1)
+        } else {
+            greatest += strides[axis] * (shape[axis] - 1)
+        }
+    }
+    let stride = MemoryLayout<T>.stride
+    let first = data + byteOffset
+    if first % MemoryLayout<T>.alignment != 0 {
+        preconditionFailure("a DLPack tensor's elements are not aligned for their type")
+    }
+    return DLPackLayout(start: first + least * stride, count: empty ? 0 : greatest - least + 1, offset: empty ? 0 : -least, shape: shape, strides: strides)
+}
+
+extension TensorView where T: DLPackElement {
+    /// A view of a DLPack struct's elements, whatever its strides (negative
+    /// ones too), nothing copied: the view owns the struct from now on, and
+    /// its deleter is called when the last reference to the elements goes.
+    /// Traps for a struct not on the CPU, or not of T's type.
+    public unsafe static fn fromDLPack(_ managed: RawPtr<Opaque>, versioned: Bool = true) -> TensorView<T> {
+        let fields = dlpackFields(managed, versioned: versioned)
+        let layout = dlpackLayout(fields.tensor, T.self)
+        let elements = T[>..](adopting: RawPtr<T>(address: layout.start), count: layout.count, release: RawPtr<Opaque>(address: fields.deleter), context: managed)
+        return TensorView<T>(storage: elements, offset: layout.offset, shape: layout.shape, strides: layout.strides)
+    }
+
+    /// The view handed to another library by DLPack, nothing copied: see
+    /// `Tensor.toDLPack`.
+    public fn toDLPack(versioned: Bool = true) -> RawPtr<Opaque> {
+        unsafe {
+            let start = count == 0 ? storage.withPointer { $0.address } : storage.withPointer { $0.address + offset * MemoryLayout<T>.stride }
+            let cell = RawPtr<T[:]>.allocate(count: 1)
+            cell.initialize(to: storage)
+            let lengths = shape
+            let steps = strides
+            let made = lengths.withPointer { (shapeAt: RawPtr<Int>) in
+                steps.withPointer { (stridesAt: RawPtr<Int>) in
+                    dlpackExport(cell.address, start, lengths.count, shapeAt.address, stridesAt.address, Int(T.dlpackCode), Int(T.dlpackBits), versioned)
+                }
+            }
+            cell.deallocate()
+            return RawPtr<Opaque>(address: made)
+        }
+    }
+}
+
+extension Tensor where T: DLPackElement {
+    /// The tensor handed to another library by DLPack, nothing copied: a
+    /// DLManagedTensorVersioned, read-only, or the legacy DLManagedTensor
+    /// where 'versioned' is false. The consumer owns the struct and calls
+    /// its deleter once, when it is done; the elements stay good till then,
+    /// whatever is done to the tensor.
+    ///
+    /// ```sable
+    /// let t = Tensor<F32>(shape: [2, 3], elements: [1, 2, 3, 4, 5, 6])
+    /// unsafe {
+    ///     let managed = t.toDLPack()
+    ///     let back = Tensor<F32>.fromDLPack(managed)
+    ///     assert(back == t && back.layout == .RowMajor)
+    /// }
+    /// ```
+    public fn toDLPack(versioned: Bool = true) -> RawPtr<Opaque> => self.view.toDLPack(versioned: versioned)
+
+    /// A tensor of a DLPack struct's elements: nothing copied where they lie
+    /// row-major or column-major and may be written; the tensor owns the
+    /// struct from then on and its deleter is called when the last
+    /// reference to the elements goes. Where they lie otherwise, or are
+    /// marked read-only, they are copied and the deleter called at once.
+    /// Traps for a struct not on the CPU, or not of T's type.
+    public unsafe static fn fromDLPack(_ managed: RawPtr<Opaque>, versioned: Bool = true) -> Tensor<T> {
+        let fields = dlpackFields(managed, versioned: versioned)
+        let layout = dlpackLayout(fields.tensor, T.self)
+        let readOnly = (fields.flags & 1) != 0
+        if !readOnly && layout.offset == 0 && layout.count == elementCount(layout.shape) {
+            for order in [TensorLayout.RowMajor, TensorLayout.ColumnMajor] {
+                if TensorView<T>(storage: [], offset: 0, shape: layout.shape, strides: layout.strides).isLaid(order) {
+                    let elements = T[>..](adopting: RawPtr<T>(address: layout.start), count: layout.count, release: RawPtr<Opaque>(address: fields.deleter), context: managed)
+                    return Tensor<T>(storage: elements, shape: layout.shape, layout: order)
+                }
+            }
+        }
+        let view = TensorView<T>.fromDLPack(managed, versioned: versioned)
+        return Tensor<T>(view, layout: view.isColumnMajor && !view.isContiguous ? .ColumnMajor : .RowMajor)
+    }
+}
+
+extension TensorView {
+    /// Whether its places lie one after another in the layout's order.
+    fn isLaid(_ layout: TensorLayout) -> Bool => layout == .RowMajor ? isContiguous : isColumnMajor
+}
+
+/// Gives a DLPack struct back by its deleter, as its consumer does when it
+/// is done with it: for a struct handed out and not taken, as the producer
+/// that made it may.
+///
+/// ```sable
+/// let t = Tensor<I32>(shape: [3], elements: [1, 2, 3])
+/// unsafe {
+///     deleteDLPack(t.toDLPack())
+///     deleteDLPack(t.toDLPack(versioned: false), versioned: false)
+/// }
+/// ```
+public unsafe fn deleteDLPack(_ managed: RawPtr<Opaque>, versioned: Bool = true) {
+    dlpackDelete(managed.address, versioned)
+}
+
+// The runtime's (runtime/dlpack.c).
+@extern("c", "sable_dlpack_export")
+fn dlpackExport(_ cell: Int, _ data: Int, _ rank: Int, _ shape: Int, _ strides: Int, _ code: Int, _ bits: Int, _ versioned: Bool) -> Int
+
+@extern("c", "sable_dlpack_delete")
+fn dlpackDelete(_ managed: Int, _ versioned: Bool)

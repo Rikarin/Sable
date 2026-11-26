@@ -217,6 +217,43 @@ jobs:
           src/Sable.Driver/bin/Release/net11.0/sable build examples/01-hello.sb --target wasm32-wasi -o "$RUNNER_TEMP/hello.wasm"
           wasmtime run "$RUNNER_TEMP/hello.wasm"
 
+  # Sable.Math.Tensors' expected values are NumPy's: what the committed
+  # tests/lib/Sable.Math.Tensors/NumpyTests.sb says must be what
+  # tools/conformance/tensors/numpy_cases.py makes with the NumPy it was
+  # written by (its header names it; the pin below is the same). No .NET:
+  # the job is a pip install and a script, well under a minute. It also
+  # times NumPy's matmul of the benchmark's matrices — the OpenBLAS its
+  # wheel brings — for the log; that fails nothing.
+  numpy:
+    name: NumPy conformance (Sable.Math.Tensors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install NumPy
+        run: python -m pip install --quiet --disable-pip-version-check "numpy==2.5.0"
+
+      - name: Expected values are NumPy's
+        run: |
+          python -I tools/conformance/tensors/numpy_cases.py > "$RUNNER_TEMP/NumpyTests.sb"
+          diff -u tests/lib/Sable.Math.Tensors/NumpyTests.sb "$RUNNER_TEMP/NumpyTests.sb"
+
+      - name: NumPy's matmul, for the log
+        run: |
+          python -I -c '
+          import timeit, numpy as np
+          a = np.fromfunction(lambda i, j: ((i * 7 + j * 3 + 1) % 11) / 8 - 0.5, (512, 512), dtype=np.float32)
+          b = np.fromfunction(lambda i, j: ((i * 7 + j * 3 + 2) % 11) / 8 - 0.5, (512, 512), dtype=np.float32)
+          runs = 50
+          print(f"numpy.matmul 512x512 F32: {min(timeit.repeat(lambda: a @ b, number=runs, repeat=5)) / runs * 1e3:.3f} ms (wall, one thread or more)")
+          np.show_config()
+          '
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-24.04

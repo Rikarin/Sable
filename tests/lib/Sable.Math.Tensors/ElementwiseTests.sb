@@ -173,3 +173,17 @@ fn negativeStepsAreNumpys() {
     expect(t[.range(2..<6, step: -2)].toArray() == [5, 3])
     expect(t[.reversed][.reversed].toArray() == t.toArray())
 }
+
+@test
+fn columnMajorMatricesGiveAColumnMajorProduct() {
+    let a = counting([5, 3])
+    let b = counting([3, 4])
+    let want = Tensor.matmul(a, b)
+    let product = Tensor.matmul(a.laidOut(.ColumnMajor), b.laidOut(.ColumnMajor))
+    expect(product.layout == .ColumnMajor && product == want)
+    let f = Tensor.matmul(narrowed(a).laidOut(.ColumnMajor), narrowed(b).laidOut(.ColumnMajor))
+    expect(f.layout == .ColumnMajor && f == narrowed(want))
+    let n = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4]).laidOut(.ColumnMajor)
+    expect(Tensor.matmul(n, n).toArray() == [7, 10, 15, 22])
+    expect(Tensor.matmul(a.transposed(), a).layout == .RowMajor)
+}

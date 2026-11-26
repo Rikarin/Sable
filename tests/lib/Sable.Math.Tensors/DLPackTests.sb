@@ -1,0 +1,128 @@
+module DLPackTests
+
+// DLPack (Tensor+DLPack.sb): tensors handed out and taken back with nothing
+// copied, either kind of struct; a struct made here as a producer in C
+// would make it, its deleter called once, when the tensor lets go.
+
+import Sable.Interop
+import Sable.Math.Tensors
+import Sable.Testing
+
+fn counted(_ managed: RawPtr<Opaque>) {
+    unsafe {
+        // The count is the Int after the struct's 64 bytes (see 'made').
+        let count = managed.cast(to: U8.self).advanced(by: 64).cast(to: Int.self)
+        count.store(count.load() + 1)
+    }
+}
+
+/// A legacy DLManagedTensor of F32s, as a C producer makes one: the struct,
+/// then the count its deleter adds to, then the shape and strides.
+unsafe fn made(_ data: RawPtr<F32>, shape: Int[:], strides: Int[:], byteOffset: Int = 0, code: U8 = 2) -> RawPtr<U8> {
+    let block = RawPtr<U8>.allocate(count: 72 + 16 * shape.count)
+    let lengths = block.advanced(by: 72).cast(to: Int.self)
+    let steps = lengths.advanced(by: shape.count)
+    for i in 0..<shape.count {
+        lengths.initialize(to: shape[i], at: i)
+        steps.initialize(to: strides[i], at: i)
+    }
+    block.storeBytes(of: data.address, byteOffset: 0)
+    block.storeBytes(of: I32(1), byteOffset: 8)
+    block.storeBytes(of: I32(0), byteOffset: 12)
+    block.storeBytes(of: I32(shape.count), byteOffset: 16)
+    block.storeBytes(of: code, byteOffset: 20)
+    block.storeBytes(of: U8(32), byteOffset: 21)
+    block.storeBytes(of: U16(1), byteOffset: 22)
+    block.storeBytes(of: lengths.address, byteOffset: 24)
+    block.storeBytes(of: steps.address, byteOffset: 32)
+    block.storeBytes(of: U64(byteOffset), byteOffset: 40)
+    block.storeBytes(of: 0, byteOffset: 48)
+    block.storeBytes(of: cFunction(counted).pointer.address, byteOffset: 56)
+    block.storeBytes(of: 0, byteOffset: 64)
+    return block
+}
+
+unsafe fn floats(_ count: Int) -> RawPtr<F32> {
+    let memory = RawPtr<F32>.allocate(count: count)
+    for i in 0..<count {
+        memory.initialize(to: F32(i), at: i)
+    }
+    return memory
+}
+
+@test
+fn aTensorComesBackAsItWent() {
+    let t = Tensor<F32>(shape: [2, 3, 4]) { F32($0[0] * 100 + $0[1] * 10 + $0[2]) }
+    unsafe {
+        for versioned in [true, false] {
+            let back = Tensor<F32>.fromDLPack(t.toDLPack(versioned: versioned), versioned: versioned)
+            expect(back == t && back.layout == .RowMajor)
+            let columns = t.laidOut(.ColumnMajor)
+            let backColumns = Tensor<F32>.fromDLPack(columns.toDLPack(versioned: versioned), versioned: versioned)
+            expect(backColumns == t && backColumns.layout == .ColumnMajor)
+        }
+        let view = t[.reversed, .step(2), .range(1..<4, step: -1)]
+        let backView = TensorView<F32>.fromDLPack(view.toDLPack())
+        expect(backView == view && backView.strides == view.strides)
+        let ints = Tensor<I64>(shape: [3], elements: [1, -2, 3])
+        expect(Tensor<I64>.fromDLPack(ints.toDLPack()) == ints)
+    }
+}
+
+@test
+fn whatIsHandedOutIsNotChangedByTheTensor() {
+    var t = Tensor<F64>(shape: [2, 2], elements: [1, 2, 3, 4])
+    unsafe {
+        let managed = t.toDLPack()
+        t[0, 0] = 100
+        let seen = TensorView<F64>.fromDLPack(managed)
+        expect(seen.toArray() == [1, 2, 3, 4] && t[0, 0] == 100)
+        // Read-only, so taken in as a tensor it is a copy.
+        let copied = Tensor<F64>.fromDLPack(t.toDLPack())
+        expect(copied == t)
+    }
+}
+
+@test
+fn aProducersStructIsDeletedOnceWhenTheTensorLetsGo() {
+    unsafe {
+        let data = floats(6)
+        let managed = made(data, shape: [2, 3], strides: [3, 1])
+        let count = managed.advanced(by: 64).cast(to: Int.self)
+        do {
+            var t = Tensor<F32>.fromDLPack(managed.cast(to: Opaque.self), versioned: false)
+            expect(t.toArray() == [0, 1, 2, 3, 4, 5] && count.load() == 0)
+            // Nothing copied: a write is to the producer's memory.
+            t[1, 2] = 50
+            expect(data.load(at: 5) == 50)
+        }
+        expect(count.load() == 1)
+        managed.deallocate()
+        data.deallocate()
+    }
+}
+
+@test
+fn stridesNoLayoutHasAreCopiedAndTheStructDeletedAtOnce() {
+    unsafe {
+        let data = floats(12)
+        let managed = made(data, shape: [3, 2], strides: [-4, 2], byteOffset: 8 * 4)
+        let count = managed.advanced(by: 64).cast(to: Int.self)
+        let t = Tensor<F32>.fromDLPack(managed.cast(to: Opaque.self), versioned: false)
+        expect(count.load() == 1)
+        expect(t.toArray() == [8, 10, 4, 6, 0, 2])
+        let again = made(data, shape: [3, 2], strides: [-4, 2], byteOffset: 8 * 4)
+        let view = TensorView<F32>.fromDLPack(again.cast(to: Opaque.self), versioned: false)
+        expect(view.toArray() == [8, 10, 4, 6, 0, 2])
+        managed.deallocate()
+        data.deallocate()
+    }
+}
+
+@test(traps: "a DLPack tensor of type code 0, 32 bits, 1 lanes, not 2, 32, 1")
+fn anotherTypeTraps() {
+    unsafe {
+        let data = floats(2)
+        _ = Tensor<F32>.fromDLPack(made(data, shape: [2], strides: [1], code: 0).cast(to: Opaque.self), versioned: false)
+    }
+}

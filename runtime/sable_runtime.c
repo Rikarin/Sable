@@ -39,6 +39,7 @@
 #include "hashing.c"
 #include "random.c"
 #include "arrays.c"
+#include "dlpack.c"
 #include "vectors.c"
 #include "crypto.c"
 #include "ciphers.c"

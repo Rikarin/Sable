@@ -1,0 +1,84 @@
+module Sable.Math.Tensors
+
+/// An element type DLPack names (dlpack.h's DLDataType): the integers, the
+/// floats and BF16, one lane each. A tensor of one is handed to another
+/// library, and taken from one, by DLPack (`Tensor.toDLPack`,
+/// `Tensor.fromDLPack`), whose struct says the type by a code and a width.
+///
+/// ```sable
+/// assert(F32.dlpackCode == 2 && F32.dlpackBits == 32)
+/// assert(U8.dlpackCode == 1 && Int.dlpackBits == 64)
+/// ```
+public protocol DLPackElement: PlainData {
+    /// DLPack's type code: 0 for a signed integer, 1 unsigned, 2 a float,
+    /// 4 a bfloat.
+    static var dlpackCode: U8 { get }
+
+    /// How many bits a value is.
+    static var dlpackBits: U8 { get }
+}
+
+extension I8: DLPackElement {
+    public static var dlpackCode: U8 => 0
+    public static var dlpackBits: U8 => 8
+}
+
+extension I16: DLPackElement {
+    public static var dlpackCode: U8 => 0
+    public static var dlpackBits: U8 => 16
+}
+
+extension I32: DLPackElement {
+    public static var dlpackCode: U8 => 0
+    public static var dlpackBits: U8 => 32
+}
+
+extension I64: DLPackElement {
+    public static var dlpackCode: U8 => 0
+    public static var dlpackBits: U8 => 64
+}
+
+extension Int: DLPackElement {
+    public static var dlpackCode: U8 => 0
+    public static var dlpackBits: U8 => 64
+}
+
+extension U8: DLPackElement {
+    public static var dlpackCode: U8 => 1
+    public static var dlpackBits: U8 => 8
+}
+
+extension U16: DLPackElement {
+    public static var dlpackCode: U8 => 1
+    public static var dlpackBits: U8 => 16
+}
+
+extension U32: DLPackElement {
+    public static var dlpackCode: U8 => 1
+    public static var dlpackBits: U8 => 32
+}
+
+extension U64: DLPackElement {
+    public static var dlpackCode: U8 => 1
+    public static var dlpackBits: U8 => 64
+}
+
+extension F16: DLPackElement {
+    public static var dlpackCode: U8 => 2
+    public static var dlpackBits: U8 => 16
+}
+
+extension F32: DLPackElement {
+    public static var dlpackCode: U8 => 2
+    public static var dlpackBits: U8 => 32
+}
+
+extension F64: DLPackElement {
+    public static var dlpackCode: U8 => 2
+    public static var dlpackBits: U8 => 64
+}
+
+extension BF16: DLPackElement {
+    public static var dlpackCode: U8 => 4
+    public static var dlpackBits: U8 => 16
+}

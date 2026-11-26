@@ -1,0 +1,106 @@
+module ArrayForeignTests
+
+// Arrays of memory C owns (Array+Foreign.sb): adopted, released once at the
+// last reference or as they grow; lent for a call, copied where kept.
+
+import Sable.Interop
+import Sable.Testing
+
+/// Counts its calls in the Int its context points at: a release C calls.
+fn counted(_ context: RawPtr<Opaque>) {
+    unsafe {
+        let count = context.cast(to: Int.self)
+        count.store(count.load() + 1)
+    }
+}
+
+/// Memory of so many F64s, each its place.
+unsafe fn places(_ count: Int) -> RawPtr<F64> {
+    let memory = RawPtr<F64>.allocate(count: count)
+    for i in 0..<count {
+        memory.initialize(to: F64(i), at: i)
+    }
+    return memory
+}
+
+@test
+fn anAdoptedArrayIsReleasedOnceWhenItsLastReferenceGoes() {
+    unsafe {
+        let calls = RawPtr<Int>.allocate(count: 1)
+        calls.initialize(to: 0)
+        let memory = places(4)
+        do {
+            var xs = F64[>..](adopting: memory, count: 4, release: cFunction(counted).pointer, context: calls.cast(to: Opaque.self))
+            let copy = xs
+            expect(xs == [0, 1, 2, 3] && copy.count == 4)
+            // Shared: the write is to a copy, C's memory as it was.
+            xs[0] = 9
+            expect(memory.load(at: 0) == 0 && copy[0] == 0)
+            expect(calls.load() == 0)
+        }
+        expect(calls.load() == 1)
+        memory.deallocate()
+        calls.deallocate()
+    }
+}
+
+@test
+fn anAdoptedArrayAloneIsWrittenInPlaceAndMovesOutToGrow() {
+    unsafe {
+        let calls = RawPtr<Int>.allocate(count: 1)
+        calls.initialize(to: 0)
+        let memory = places(3)
+        var xs = F64[>..](adopting: memory, count: 3, release: cFunction(counted).pointer, context: calls.cast(to: Opaque.self))
+        xs[1] = 7
+        expect(memory.load(at: 1) == 7)
+        xs.append(3)
+        // Grown, the elements are the runtime's and C's memory is let go of.
+        expect(calls.load() == 1 && xs == [0, 7, 2, 3])
+        xs[0] = 5
+        expect(memory.load(at: 0) == 0)
+        xs = []
+        expect(calls.load() == 1)
+        memory.deallocate()
+        calls.deallocate()
+    }
+}
+
+@test
+fn noElementsAreReleasedAtOnce() {
+    unsafe {
+        let calls = RawPtr<Int>.allocate(count: 1)
+        calls.initialize(to: 0)
+        let memory = places(1)
+        let xs = F64[>..](adopting: memory, count: 0, release: cFunction(counted).pointer, context: calls.cast(to: Opaque.self))
+        expect(xs.isEmpty && calls.load() == 1)
+        memory.deallocate()
+        calls.deallocate()
+    }
+}
+
+@test
+fn aLentArrayKeptPastItsCallIsACopy() {
+    unsafe {
+        let memory = places(3)
+        var kept: F64[>..] = []
+        let sum = withForeignArray(memory, count: 3) { (xs: inout F64[>..]) in
+            xs[2] = 10
+            kept = xs
+            return xs[0] + xs[1] + xs[2]
+        }
+        memory.store(-1, at: 0)
+        expect(sum == 11 && memory.load(at: 2) == 10)
+        expect(kept == [0, 1, 10])
+        let untouched = withForeignArray(memory, count: 3) { (xs: inout F64[>..]) in xs.count }
+        expect(untouched == 3)
+        memory.deallocate()
+    }
+}
+
+@test(traps: "a foreign array's elements are not aligned for their type")
+fn misalignedMemoryTraps() {
+    unsafe {
+        let memory = RawPtr<U8>.allocate(count: 16)
+        _ = F64[>..](adopting: memory.advanced(by: 1).cast(to: F64.self), count: 1, release: RawPtr<Opaque>.null, context: RawPtr<Opaque>.null)
+    }
+}

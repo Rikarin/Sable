@@ -5,6 +5,8 @@ module Sable.Math.Tensors
 // matrices, their leading dimensions broadcast together. F32 and F64 matrices
 // are multiplied by a kernel of vectors, a tile of 4 rows by a vector's width
 // of columns kept in registers; any other number type element by element.
+// Two column-major matrices give a column-major product, of their elements as
+// they lie: the product of the transposes the other way round.
 
 extension Tensor where T: Numeric {
     /// The matrix product, as NumPy's `matmul`.
@@ -85,6 +87,12 @@ fn matrixProduct<T>(_ a: TensorView<T>, _ b: TensorView<T>, _ kernel: (T[:], T[:
     var rightShape = batch
     rightShape.append(k)
     rightShape.append(n)
+    // Two column-major matrices: C's transpose is B's times A's, and the
+    // transposes are the two as they lie, row-major; so C is made
+    // column-major, nothing copied.
+    if batch.count == 0 && a.rank == 2 && b.rank == 2 && laidByColumns(left, m * k) && laidByColumns(right, k * n) {
+        return Tensor<T>(storage: kernel(right.storage, left.storage, n, k, m), shape: [m, n], layout: .ColumnMajor)
+    }
     let lefts = left.broadcast(to: leftShape)
     let rights = right.broadcast(to: rightShape)
     var made: T[>..] = []
@@ -129,6 +137,11 @@ fn matrixProduct<T>(_ a: TensorView<T>, _ b: TensorView<T>, _ kernel: (T[:], T[:
     }
     return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
 }
+
+/// Whether a view is the whole of its storage, column-major and not also
+/// row-major.
+fn laidByColumns<T>(_ view: TensorView<T>, _ count: Int) -> Bool =>
+    view.offset == 0 && view.storage.count == count && view.isColumnMajor && !view.isContiguous
 
 /// The product of an m x k and a k x n matrix, row-major, element by element.
 fn multiplied<T: Numeric>(_ a: T[:], _ b: T[:], _ m: Int, _ k: Int, _ n: Int) -> T[>..] {

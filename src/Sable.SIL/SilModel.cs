@@ -202,6 +202,50 @@ public abstract class SilType : IEquatable<SilType> {
             _ => false,
         };
     public static bool operator !=(SilType? a, SilType? b) => !(a == b);
+
+    /// <summary>
+    ///     True for a type whose values are held in memory rather than as SSA
+    ///     values natively: an inline array (<see cref="FixedArrayType" />),
+    ///     or a struct, a tuple or an enum holding one by value. A value of
+    ///     one is the address of storage of its size, as an opaque value is.
+    /// </summary>
+    public static bool IsInMemory(SilType type) => HoldsFixedArray(type, null);
+
+    /// <summary>
+    ///     True for a type whose values are copied by copying their bits and
+    ///     destroyed by doing nothing: a trivial one, an inline array of such,
+    ///     or a struct, tuple or enum that holds only such.
+    /// </summary>
+    public static bool IsBitwise(SilType type) =>
+        type.IsTrivial
+        || type switch {
+            FixedArrayType array => IsBitwise(array.Element),
+            StructType { IsInline: false, IsNoncopyable: false, Deinit: null } structType => structType.Fields.TrueForAll(static f => IsBitwise(f.Type)),
+            TupleType tuple => tuple.Elements.All(IsBitwise),
+            EnumType { IsNoncopyable: false } enumType => enumType.Cases.TrueForAll(static c => c.Payload is null || IsBitwise(c.Payload)),
+            _ => false,
+        };
+
+    static bool HoldsFixedArray(SilType type, HashSet<SilType>? seen) {
+        switch (type) {
+            case FixedArrayType:
+                return true;
+            case StructType { IsInline: false } or TupleType or EnumType:
+                seen ??= [];
+                if (!seen.Add(type)) {
+                    return false;
+                }
+
+                return type switch {
+                    StructType structType => structType.Fields.Exists(f => HoldsFixedArray(f.Type, seen)),
+                    TupleType tuple => tuple.Elements.Any(e => HoldsFixedArray(e, seen)),
+                    EnumType enumType => enumType.Cases.Exists(c => c.Payload is { } payload && HoldsFixedArray(payload, seen)),
+                    _ => false,
+                };
+            default:
+                return false;
+        }
+    }
 }
 
 /// <summary>
@@ -247,8 +291,47 @@ public sealed class ArrayType(SilType element) : SilType {
         type switch {
             ArrayType array => array.Element,
             SliceType slice => slice.Element,
+            FixedArrayType fixedArray => fixedArray.Element,
             _ => null,
         };
+}
+
+/// <summary>
+///     <c>@fixed_array(T, k)</c>, <c>T[k]</c>, and <c>@bounded_array(T, k)</c>,
+///     <c>T[..k]</c> (docs/02 §2.5, "The array family"): the elements held by
+///     value where the array is — in a local, a field, a payload — with no
+///     buffer to share. A fixed one is laid out as <c>[k x T]</c>; a bounded
+///     one as its count and then room for <c>k</c>, of which the first count
+///     are elements. Copying one copies its elements, destroying it destroys
+///     them.
+/// </summary>
+/// <remarks>
+///     Its values are held in memory: natively, a value of it (or of a struct,
+///     tuple or enum holding one by value, <see cref="SilType.IsInMemory" />)
+///     is the address of storage the frame holds, as an opaque value is, and
+///     a parameter of it is its caller's storage, borrowed. Its members are
+///     the array builtins, given the value or its address; viewed as a slice
+///     it lends itself (<c>slice_of</c>, <c>fixed_lend</c>, docs/02).
+/// </remarks>
+public sealed class FixedArrayType(SilType element, int count, bool bounded) : SilType {
+    public SilType Element { get; } = element;
+
+    /// <summary>How many elements a fixed one has, or a bounded one has room for.</summary>
+    public int Count { get; } = count;
+
+    /// <summary><c>T[..k]</c>: a count of its own, up to <see cref="Count" />.</summary>
+    public bool IsBounded { get; } = bounded;
+
+    /// <remarks>
+    ///     Never trivial, whatever its elements: a value of it is storage, and
+    ///     its ownership is tracked so that a read of it borrows that storage
+    ///     (<c>load_borrow</c>) rather than copying every element. One of
+    ///     trivial elements copies as bits and destroys as nothing
+    ///     (<see cref="SilType.IsBitwise" />).
+    /// </remarks>
+    public override bool IsTrivial => false;
+
+    public override string ToString() => $"@{(IsBounded ? "bounded" : "fixed")}_array({Element}, {Count})";
 }
 
 /// <summary>
@@ -2078,7 +2161,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "array_shares", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "array_shares", "region_alloc", "fixed_repeating", "fixed_lend", "fixed_lend_slice", "fixed_lend_mut", "fixed_lend_mut_copy", "fixed_restore"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2110,16 +2193,62 @@ public static class SilBuiltins {
             return SimdBuiltins.Resolve(name, operands, result);
         }
 
+        // The empty array, slice or bounded inline array ('T[..k]' holding none).
         if (name == "array_empty") {
-            return operands.Count == 0 && result is ArrayType or SliceType ? new([], result) : null;
+            return operands.Count == 0 && result is ArrayType or SliceType or FixedArrayType { IsBounded: true } ? new([], result) : null;
         }
 
         // '[0, 7, 14]': an array of its elements, each a literal of the
         // element type — natively a constant, never counted, which copy on
-        // write copies before it is changed (#265).
+        // write copies before it is changed (#265). An inline one holds them
+        // where it is: a fixed one exactly its count, a bounded one up to it.
         if (name is "array_literal" or "array_literal_stack") {
-            return result is ArrayType literal && operands.Count > 0 && operands.All(o => o == literal.Element)
-                ? new([..operands], result) { Consumed = [..Enumerable.Range(0, operands.Count)] }
+            return result switch {
+                ArrayType literal when operands.Count > 0 && operands.All(o => o == literal.Element)
+                    => new([..operands], result) { Consumed = [..Enumerable.Range(0, operands.Count)] },
+                FixedArrayType inline when name == "array_literal" && (inline.IsBounded ? operands.Count <= inline.Count : operands.Count == inline.Count)
+                                            && operands.All(o => o == inline.Element)
+                    => new([..operands], result) { Consumed = [..Enumerable.Range(0, operands.Count)] },
+                _ => null,
+            };
+        }
+
+        // 'T[k](repeating: v)': k copies of the element, borrowed.
+        if (name == "fixed_repeating") {
+            return result is FixedArrayType { IsBounded: false } repeated && operands is [var element] && element == repeated.Element ? new([element], result) : null;
+        }
+
+        // An inline array lent whole as a slice for as long as the slice is
+        // used — the slice a view of its storage, nothing copied — where
+        // nothing can keep the slice longer: what 'slice_of' and
+        // 'array_slice' of one become where LendInlineArrays proves it
+        // (docs/02 §2.5). 'fixed_lend' views a value, borrowed for the
+        // slice's life; 'fixed_lend_slice' the range [from, to) of one.
+        if (name == "fixed_lend") {
+            return operands is [FixedArrayType lent] ? new([lent], new SliceType(lent.Element)) : null;
+        }
+
+        if (name == "fixed_lend_slice") {
+            return operands is [FixedArrayType lentRange, _, _] && operands[1] == SilType.Int && operands[2] == SilType.Int
+                ? new([lentRange, SilType.Int, SilType.Int], new SliceType(lentRange.Element))
+                : null;
+        }
+
+        // The array at an address lent whole for a mutating member of
+        // 'Element[:]' to change in place (docs/02's "lends itself whole"),
+        // and the slice given back after the call: 'fixed_restore' stores
+        // its elements over the array's when the callee replaced the view —
+        // a slice of the same count, or a trap — and is nothing when it did
+        // not. 'fixed_lend_mut' views the storage itself where
+        // LendInlineArrays proves the slice goes nowhere; otherwise
+        // ('fixed_lend_mut_copy', the default) its elements are copied out.
+        if (name is "fixed_lend_mut" or "fixed_lend_mut_copy") {
+            return operands is [AddressType { Pointee: FixedArrayType lentPlace }] ? new([operands[0]], new SliceType(lentPlace.Element)) : null;
+        }
+
+        if (name == "fixed_restore") {
+            return operands is [AddressType { Pointee: FixedArrayType restored }, SliceType back] && back.Element == restored.Element
+                ? new([operands[0], back], SilType.Unit) { Consumed = [1] }
                 : null;
         }
 
@@ -2304,6 +2433,17 @@ public static class SilBuiltins {
             return arrayOnly ? (type as ArrayType)?.Element : ArrayType.ElementOf(type);
         }
 
+        // An array that grows within room of its own: a growable one, or
+        // a bounded inline one ('T[..k]'), whose bound is checked first.
+        SilType? Growing(bool address) {
+            if (operands.Count == 0) {
+                return null;
+            }
+
+            var type = address ? (operands[0] as AddressType)?.Pointee : operands[0];
+            return (type as ArrayType)?.Element ?? (type is FixedArrayType { IsBounded: true } bounded ? bounded.Element : null);
+        }
+
         switch (name) {
             case "array_count" when Element(0, false) is not null:
                 return new([operands[0]], SilType.Int);
@@ -2313,7 +2453,7 @@ public static class SilBuiltins {
             case "array_get" or "array_get_borrowed" when Element(0, false) is { } element:
                 return new([operands[0], SilType.Int], element);
 
-            case "array_append" when Element(0, true, arrayOnly: true) is { } element:
+            case "array_append" when Growing(true) is { } element:
                 return new([operands[0], element], SilType.Unit) { Consumed = [1] };
 
             // In place, on an array already made the only reference to its buffer.
@@ -2330,15 +2470,15 @@ public static class SilBuiltins {
             case "array_element_addr" or "array_element_addr_unique" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int], SilType.Address(element));
 
-            case "array_remove_last" when Element(0, true, arrayOnly: true) is { } element:
+            case "array_remove_last" when Growing(true) is { } element:
                 return new([operands[0]], element);
 
-            case "array_clear" when Element(0, true, arrayOnly: true) is not null:
+            case "array_clear" when Growing(true) is not null:
                 return new([operands[0]], SilType.Unit);
 
             // How many elements the buffer has room for, before an append
-            // must grow it.
-            case "array_capacity" when Element(0, false, arrayOnly: true) is not null:
+            // must grow it; an inline array's bound.
+            case "array_capacity" when Growing(false) is not null || operands is [FixedArrayType]:
                 return new([operands[0]], SilType.Int);
 
             // Room for at least so many elements in all, the array made the
@@ -2348,7 +2488,7 @@ public static class SilBuiltins {
 
             // The first so many elements kept and the rest destroyed, the
             // buffer and its room kept: the array made the only reference to it.
-            case "array_truncate" when Element(0, true, arrayOnly: true) is not null:
+            case "array_truncate" when Growing(true) is not null:
                 return new([operands[0], SilType.Int], SilType.Unit);
 
             // So many copies of the element, borrowed, added at the end at
@@ -2408,7 +2548,10 @@ public static class SilBuiltins {
             // The whole of an array, as a slice: 'sum(xs)' of a 'sum(_: Int[:])'.
             // 'slice_of_borrowed' is the same, borrowed from the array rather
             // than holding its buffer.
-            case "slice_of" or "slice_of_borrowed" when Element(0, false, arrayOnly: true) is { } element:
+            // Of an inline array, the default is its elements copied out
+            // into a buffer the slice is the whole of; where nothing keeps
+            // the slice, LendInlineArrays makes it a lend instead.
+            case "slice_of" or "slice_of_borrowed" when (Element(0, false, arrayOnly: true) ?? (operands.Count > 0 ? (operands[0] as FixedArrayType)?.Element : null)) is { } element:
                 return new([operands[0]], new SliceType(element));
 
             // A slice as an array again: its buffer, when the slice is the
@@ -2922,9 +3065,11 @@ public static class SilBuiltins {
         // at an address, or 0; and the block freed.
         Add("trust_load", SilType.Int);
         Add("trust_free", SilType.Unit, SilType.Int);
-        // A CRC-32's state after the bytes at an address: how many of them were
-        // done in the high half (none, where there are no instructions for it).
-        Add("crc32_raw", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // Sable.IO.Hashing's CRCs by carry-less multiplication and the CRC
+        // instructions, where the processor has them: whether it has, and of a
+        // kind, from a state, the state after the bytes at an address.
+        Add("crc_available", SilType.Bool);
+        Add("crc_update", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has
         // more than the target's baseline: whether it has, a reduction of one
         // slice or two by its number (the sum, dot product or cosine), and an

@@ -1,0 +1,24 @@
+module Sable.Net
+
+/// TCP's counters since the system started (`NetworkStatistics.tcp`):
+/// .NET's `TcpStatistics`. Each is none where the system does not count it,
+/// or will not say (macOS keeps them from programs without an entitlement,
+/// and gives zeros).
+public struct TcpStatistics {
+    /// Connections this machine began.
+    public let connectionsInitiated: Int?
+    /// Connections it accepted.
+    public let connectionsAccepted: Int?
+    /// Connections that failed as they began.
+    public let failedConnectionAttempts: Int?
+    /// Connections open now.
+    public let currentConnections: Int?
+    /// Segments received.
+    public let segmentsReceived: Int?
+    /// Segments sent.
+    public let segmentsSent: Int?
+    /// Segments sent again.
+    public let segmentsResent: Int?
+    /// Resets sent.
+    public let resetsSent: Int?
+}

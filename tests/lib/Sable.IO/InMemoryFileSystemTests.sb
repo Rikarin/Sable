@@ -1,0 +1,103 @@
+module InMemoryFileSystemTests
+
+// FileSystem, InMemoryFileSystem and DiskFileSystem (Sable.IO): the two
+// answer alike. Run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.IO
+import Sable.Testing
+import Sable.Time
+
+// What a file system does with a few files, said the same of either.
+fn exercise(_ files: any FileSystem, _ root: String) -> String[>..] {
+    var said: String[>..] = []
+    try! files.createDirectory("\(root)/a/b", recursive: true)
+    try! files.write("\(root)/a/b/one.txt", "one")
+    try! files.append("\(root)/a/b/one.txt", "+")
+    try! files.writeBytes("\(root)/a/two.bin", [1, 2, 3])
+    said.append(try! files.read("\(root)/a/b/one.txt"))
+    said.append("\(try! files.readBytes("\(root)/a/two.bin"))")
+    said.append("\(try! files.list("\(root)/a"))")
+    said.append("\((try! files.metadata("\(root)/a/two.bin")).size) \(files.exists("\(root)/a/two.bin")) \(files.directoryExists("\(root)/a"))")
+    try! files.copy(from: "\(root)/a/two.bin", to: "\(root)/a/three.bin")
+    try! files.rename(from: "\(root)/a/b", to: "\(root)/a/c")
+    said.append("\(try! files.list("\(root)/a")) \(try! files.read("\(root)/a/c/one.txt"))")
+    try! files.removeFile("\(root)/a/two.bin")
+    said.append("\(files.exists("\(root)/a/two.bin"))")
+    expectThrows(IoError.self) { try files.removeDirectory("\(root)/a") }
+    try! files.removeDirectory("\(root)/a", recursive: true)
+    said.append("\(files.directoryExists("\(root)/a"))")
+    return said
+}
+
+@test
+fn theDiskAndMemoryAnswerAlike() {
+    let temp = try! Temp.directory()
+    let root = temp.path.string!
+    let memory = exercise(InMemoryFileSystem(), "/x")
+    expect(memory == exercise(DiskFileSystem(), root))
+    expect(memory == ["one+", "[1, 2, 3]", "[\"b\", \"two.bin\"]", "3 true true", "[\"c\", \"three.bin\", \"two.bin\"] one+", "false", "false"])
+}
+
+@test
+fn filesGivenAreMadeWithTheirDirectories() {
+    let files = InMemoryFileSystem(["config/app.toml": "port = 80", "/b.txt": "b"])
+    expect(files.paths == ["/b.txt", "/config", "/config/app.toml"])
+    expect(try! files.read("./config/../config/app.toml") == "port = 80")
+    expect(try! files.list("/") == ["b.txt", "config"])
+}
+
+// Fails unless the body throws the error, as Debug writes it.
+fn refuses(_ expected: String, file: String = #file, line: Int = #line, _ body: () throws -> Void) {
+    if let error = expectThrows(IoError.self, file: file, line: line, body) {
+        expect("\(error:?)".hasSuffix(expected), "\(error:?)", file: file, line: line)
+    }
+}
+
+@test
+fn whatTheDiskWouldRefuseIsRefused() {
+    let files = InMemoryFileSystem(["a/b.txt": "b"])
+    refuses("NotFound(path: \"/nope\")") { _ = try files.readBytes("nope") }
+    refuses("IsDirectory(path: \"/a\")") { _ = try files.readBytes("a") }
+    refuses("NotFound(path: \"/x\")") { try files.write("x/y.txt", "y") }
+    refuses("NotADirectory(path: \"/a/b.txt\")") { try files.write("a/b.txt/c", "c") }
+    refuses("IsDirectory(path: \"/a\")") { try files.write("a", "c") }
+    refuses("AlreadyExists(path: \"/a\")") { try files.createDirectory("a") }
+    refuses("NotADirectory(path: \"/a/b.txt\")") { try files.createDirectory("a/b.txt/c", recursive: true) }
+    refuses("NotADirectory(path: \"/a/b.txt\")") { _ = try files.list("a/b.txt") }
+    refuses("NotFound(path: \"/q\")") { _ = try files.list("q") }
+    refuses("IsDirectory(path: \"/a\")") { try files.removeFile("a") }
+    refuses("NotFound(path: \"/q\")") { try files.removeFile("q") }
+    refuses("NotADirectory(path: \"/a/b.txt\")") { try files.removeDirectory("a/b.txt") }
+    refuses("DirectoryNotEmpty(path: \"/a\")") { try files.removeDirectory("a") }
+    refuses("InvalidInput(path: \"/\")") { try files.removeDirectory("/", recursive: true) }
+    refuses("InvalidInput(path: \"/a/b.txt\")") { try files.copy(from: "a/b.txt", to: "a/b.txt", overwrite: false) }
+    try! files.write("a/c.txt", "c")
+    refuses("AlreadyExists(path: \"/a/c.txt\")") { try files.copy(from: "a/b.txt", to: "a/c.txt", overwrite: false) }
+    refuses("AlreadyExists(path: \"/a/c.txt\")") { try files.rename(from: "a/b.txt", to: "a/c.txt", overwrite: false) }
+    refuses("IsDirectory(path: \"/a\")") { try files.copy(from: "a", to: "z") }
+    refuses("InvalidInput(path: \"/a/in\")") { try files.rename(from: "a", to: "a/in") }
+    refuses("NotFound(path: \"/q\")") { _ = try files.metadata("q") }
+    try! files.rename(from: "a/b.txt", to: "a/b.txt")
+    expect(try! files.read("a/b.txt") == "b")
+}
+
+@test
+fn aFileIsWrittenWhenTheClockSays() {
+    let files = InMemoryFileSystem(now: { UtcDateTime.fromUnix(1_000) })
+    try! files.write("a.txt", "a")
+    expect((try! files.metadata("a.txt")).modified == UtcDateTime.fromUnix(1_000))
+    expect((try! files.metadata("/")).isDirectory)
+}
+
+@test
+async fn itIsUsedFromAnyTask() {
+    let files = InMemoryFileSystem()
+    let tasks = (0..<8).map({ i in
+        Task.spawn { try! files.write("f\(i).txt", "\(i)") }
+    }).toArray()
+    for task in tasks {
+        await task.value
+    }
+    expect(files.paths.count == 8)
+}

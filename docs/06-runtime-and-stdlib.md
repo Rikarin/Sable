@@ -1031,7 +1031,11 @@ Sable.Globalization Locale (BCP 47; current, invariant), numbers, money,
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; Complex<T> with
                     them all (Kahan's branch cuts, signed zeros, one point
-                    at infinity); integer math; the
+                    at infinity); integer math; interpolation
+                    (saturate, inverseLerp, remap, smoothStep,
+                    smootherStep; lerp is the floats' method), wrap,
+                    pingPong, wrapAngle, deltaAngle, moveTowards, and
+                    alignUp, alignDown, roundToMultiple; the
                     vector kernels over F32[:] and F64[:] (sum, dot,
                     cosineSimilarity, softmax, …: TensorPrimitives');
                     Decimal (.NET's layout and rounding, below);
@@ -1047,6 +1051,12 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     exponential, Bernoulli, weighted index): here rather
                     than beside the generators, as the core has no
                     functions of them
+Sable.Math.Tensors  Tensor<T> (n-dimensional, row- or column-major), TensorView
+                    and MutableTensorView (strided, no copy), NumPy's
+                    broadcasting and basic indexing, reductions along an axis,
+                    matmul, softmax, reshape, transpose, permute, squeeze,
+                    concatenate, stack, split, gather; Array2D, Array3D
+                    (below)
 Sable.Math.Geometry Vector2, Vector3, Vector4, Matrix3x2, Matrix3x3, Matrix4x4,
                     Quaternion, Plane and Transform of F32s, Int2 to Int4,
                     Vector3D (F64); Ray, BoundingBox, BoundingSphere,
@@ -1060,7 +1070,8 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     permissions and times), Directory (create, list, lazy
                     entries, walk, glob, copy, remove, recursively too),
                     Glob, Temp (files and directories removed as they are
-                    let go), FileWatcher (below), PathLike (a String or a
+                    let go), FileSystem (DiskFileSystem, InMemoryFileSystem
+                    for tests), FileWatcher (below), PathLike (a String or a
                     FilePath), FilePath (platform bytes, POSIX and Windows rules:
                     drives, UNC, verbatim; components, lexical
                     normalization, relative paths, canonical) and Path
@@ -1073,14 +1084,29 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     not it is UTF-8), Environment (variables and arguments
                     as text and as OsString, set and removed under
                     'unsafe', home, temporary and known folders by XDG,
-                    Apple and Windows rules), Console (whether a stream is
-                    a terminal, size, Style TerminalColor ColorSupport,
-                    cursor, clear, alternate screen, withRawMode, readKey
-                    KeyEvent Key KeyModifiers; below)
+                    Apple and Windows rules), OsPipe (OsPipeReader
+                    OsPipeWriter, and PipeEnd for a child's stream:
+                    Stdio.Pipe), Fifo (mkfifo; below), Console (whether a
+                    stream is a terminal, size, Style TerminalColor
+                    ColorSupport, cursor, clear, alternate screen,
+                    withRawMode, readKey KeyEvent Key KeyModifiers; below)
+Sable.IO.Ipc        LocalListener LocalStream (a Unix domain socket, or a
+                    Windows named pipe, by name; LocalAccess, peer
+                    credentials, Windows' messages), SharedMemory
+                    (shm_open, a paging file's mapping), NamedSemaphore,
+                    NamedMutex NamedMutexGuard (below)
+Sable.IO.Ports      SerialPort (termios, a COM port's DCB: rate, frames,
+                    flow control, control lines, break, queues, the ports
+                    there are), SerialOptions Parity StopBits FlowControl
+                    SerialLines
 Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they come
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
                     decompressed
+Sable.IO.Hashing    the non-cryptographic hashes, System.IO.Hashing's: Crc32
+                    (IEEE 802.3 and Castagnoli), Crc64 (ECMA-182 and NVMe),
+                    Adler32, XxHash32, XxHash64, XxHash3 and XxHash128, at
+                    once and as they come (NonCryptographicHash; below)
 Sable.IO.Archives   ZipArchive (random access by the central directory,
                     Zip64) ZipWriter (to anything, with descriptors) Zip
                     (create, extract, update), TarReader TarWriter (old,
@@ -1097,8 +1123,13 @@ Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     IpAddress (strict parsing, RFC 5952, scopes, IANA's
                     special-purpose registries), SocketAddress, IpNetwork;
                     TcpListener TcpStream, UdpSocket (multicast),
-                    UnixListener UnixStream UnixDatagramSocket; Dns,
-                    HappyEyeballs (RFC 8305), NetworkInterface (below).
+                    UnixListener UnixStream UnixDatagramSocket
+                    (PeerCredentials); Dns, HappyEyeballs (RFC 8305),
+                    NetworkInterface (below); Ping (PingOptions PingReply
+                    PingStatus), RawSocket (IpProtocol), IcmpMessage
+                    Ipv4Header Ipv6Header InternetChecksum, NetworkChange
+                    (NetworkChangeEvent), NetworkStatistics (TcpConnection
+                    TcpState TcpStatistics UdpStatistics); below.
                     Not yet: Tls Http1 Http2
 Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     the primitives, UUID, optionals, arrays, Set, String-keyed
@@ -1217,7 +1248,10 @@ Sable.Diagnostics   Logger (structured, with the current span's ids),
                     buckets) Gauge and observable ones, MetricReader
                     MetricExporter MetricData; ConsoleExporter (below)
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
-                    require, which show their expression's parts; expectThrows;
+                    require, which show their expression's parts; requireAll;
+                    expectEquivalent (deep, by path), expectAll,
+                    expect(_:containsInOrder:), expectClose,
+                    expect(within:); expectThrows; @mockable and its matchers;
                     expectPanic and expectExit (death tests); assertSnapshot;
                     forAll, Arbitrary and Gen (property tests); Fixture and
                     FixtureLifetime, TestContext, skip; Bencher,
@@ -1280,9 +1314,48 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
 
   That is a parameter's doing whose default is `#expression` (SYNTAX.md §18):
   the argument is worked out once, as it would be, and may throw and await.
+  Where the sides are made of parts, the parts that differ are said by their
+  paths too (`[0].price: left 10, right 12`). A message is an `@autoclosure`,
+  worked out only where the expectation is not met. There is one way to say
+  each thing: the condition is ordinary code (`==`, `<`, `contains`,
+  `isEmpty`, a regex's `isMatch`), so there are no matchers beside it — no
+  `toEqual`, `toBeGreaterThan` — and what follows says more than a
+  condition's parts could:
+  - `expectEquivalent(got, expected) { $0.exclude(\.id); $0.ignoresOrder = true }`
+    compares two `Debug` values part by part, by their debug descriptions read
+    back (a case and its payload, a struct's fields, arrays, dictionaries by
+    key, a set's elements in no order), and says each part that differs by its
+    path: `orders[2].lines[0].price: got 12, expected 10`. A path to leave out
+    is a key path or text, `lines[*].id` or `**.id`; one that names no part is
+    itself a failure. Text that no source would write is compared whole.
+  - `expectAll(values) { predicate }` says which elements it does not hold of;
+    `expect(values, containsInOrder: [...])` which is missing after which;
+    `expectClose(a, b, within:)` how far apart they are.
+  - `expect(within: duration, clock:) { … }` fails when the body takes longer,
+    by the clock given (a `TestClock` makes it no matter of the machine).
+  - `requireAll("name") { … }` is soft assertions: every expectation in the body
+    is looked at, and then the test ends if any was not met.
 - `expectThrows(E.self) { … }` gives the error thrown, `expectThrows(error)`
   wants that very one, `expectThrows(saying: "text")` one that says that,
   `expectThrows { … }` any, `expectNoThrow` none; each has an async form.
+- `@mockable` on a protocol writes `Mock<Name>`, a final class that conforms
+  to it (and to those it refines): Moq's and mockall's, made by a source
+  generator (docs/08) as Sable has no run-time proxies. Its `on` names the
+  calls of a member that `Matcher`s match — `.any` (the default), `.equal(x)`,
+  `.matching { … }`, `.equivalent(to:)`, `.not(m)`; or values alone, where
+  every parameter is Equatable — to stub them, `.returns(v)`, `.throwing(e)`,
+  `.does { arguments in … }` (which may wait), answered in turn, the last
+  again; and to verify them, `.verify(.once)` with `Times`, `.arguments`,
+  `verifyInOrder([...])` across mocks and `verifyNoOtherCalls(mock)`. A
+  property is `on.name` and `on.setName(_:)`. A loose mock (the default)
+  answers what no stub does with the empty value of its type, where it has
+  one; `.Strict` fails the test. A mock is `@immutable`, so Sendable, and may
+  be called from any task. A protocol that needs a mock but not in the code
+  it is declared in can be refined in the tests: `@mockable protocol
+  TestGateway: Gateway { }` makes a `MockTestGateway` that is a `Gateway`.
+  What cannot be mocked — a static or generic member, an `inout` or
+  variadic parameter, a closure that does not escape, an associated type —
+  is an error at the attribute.
 - A `Fixture` is what tests are run with: `setUp` and `tearDown`, which may wait
   and throw, and how long one lives — `.PerTest`, unless it says `.PerSuite`,
   `.PerCollection` or `.PerPackage`. A `@suite`'s initialiser asks for the
@@ -1306,6 +1379,15 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   `attach`. What a test prints is kept apart from any other's, and shown when it
   fails. (Nothing overrides the locale or the clock for a test: what depends on
   one takes a `Locale` or a `Clock`, and is given `Locale("tr")` or a `TestClock`.)
+- Fakes, for what the code under test is given: `TestClock` (Sable.Concurrency);
+  `InMemoryFileSystem` (Sable.IO), a `FileSystem` in memory where code takes
+  one in place of `DiskFileSystem`, with the disk's errors; `FakeLogger`, a
+  `Logger` that keeps its lines and reads them back as `LogRecord`s (level,
+  name, message, fields; what `logger.with(...)` makes keeps none, and every
+  line is written to standard error as well); `FakeRandom`, a
+  `RandomNumberGenerator` of the run's seed (`--seed` makes it again), another,
+  or a script, that keeps what it drew. There is no fake HTTP handler: the
+  library has no HttpClient yet.
 - `expectPanic("text") { … }` and `expectExit(status) { … }` run their body in
   a process of its own, the test run again as far as there, and give how it
   ended. Where none can be started — `--in-process`, the interpreter, WASI —
@@ -1340,8 +1422,11 @@ through its `Sequence` conformance like any other type's. There is one hashed
 map; `Sable.Collections.HashMap` is gone, and `Set` (a value, with union,
 intersection and the subset tests, which use the hashes it keeps) is a
 dictionary to nothing underneath.
-`InlineArray<T, N>` is the built-in `T[N]` by that name, and `SmallVec<T, N>`
-keeps `N` elements inline in a `T[..N]` before it moves to the heap.
+`InlineArray<T, N>` is the built-in `T[N]` by that name, `ArrayVec<T, N>` holds
+up to `N` in a `T[..N]` and no more, and `SmallVec<T, N>` keeps `N` elements
+inline in a `T[..N]` before it moves to the heap. Inline arrays' elements are
+where the value is (docs/02 §2.5), so none of the three allocates within its
+room (`benchmarks/library/small-vec`).
 
 - **Layout.** An array of entries (key, value, the key's full hash) in the
   order keys were added, none where one was removed, and beside it an index:
@@ -1592,6 +1677,47 @@ busy machine, Sable's over .NET's; "before" is the same without these):
 | utf16 | 2.76 | 1.32 |
 | utf8-validate (as it was) | — | 0.30 |
 
+### Hashing
+
+`Sable.IO.Hashing` is .NET's System.IO.Hashing: hashes that find accidental
+changes and spread keys, none of them for what an adversary chooses (that is
+Sable.Crypto). Each is a struct that is a `NonCryptographicHash` — `init()`,
+`update(_:)`, `reset()`, `hashBytes()` in its format's byte order, as .NET's
+`GetCurrentHash` writes it — with its result as a number, `value`, and a static
+`hash(_:)` of bytes at once; a copy goes on from where it was made.
+
+| | | bytes |
+|:--|:--|:--|
+| `Crc32` | `.Ieee` (gzip, zip, PNG; the default) or `.Castagnoli` (CRC-32C) | little-endian |
+| `Crc64` | `.Ecma182` (.NET's `Crc64`; the default) or `.Nvme` | big-endian |
+| `Adler32` | zlib's | big-endian |
+| `XxHash32`, `XxHash64` | a seed | big-endian |
+| `XxHash3`, `XxHash128` | XXH3, a seed (no secret of one's own, as in .NET) | big-endian |
+
+- **CRCs.** Where the processor multiplies without carries (x86-64's
+  PCLMULQDQ with SSE4.2, AArch64's PMULL with CRC32) `runtime/checksums.c`
+  does them: sixty-four bytes a step folded into four lanes, by constants
+  for each polynomial, reflected or not (one kernel); the sixteen bytes that
+  stand for the folded ones, and what is short of sixty-four, by the CRC
+  instructions where the polynomial has them (AArch64's CRC-32 and CRC-32C,
+  SSE4.2's CRC-32C) and by tables eight bytes a step where not.
+  Elsewhere, under `SABLE_PORTABLE=1` and in the interpreter, the same tables
+  in Sable. `tools/conformance/hashing/` holds every CRC, and Adler-32, to one
+  computed a bit at a time from the catalogue's parameters at each length to
+  4160, and the xxHashes to xxHash's sanity vectors (`README`).
+- **Adler-32** keeps 32 lanes of sums a vector at a time, and reduces them
+  modulo 65521 every 5536 bytes.
+- **XXH3** accumulates eight 64-bit lanes as one `SIMD<U64, 8>`, 64 bytes a
+  stripe: on NEON, four `umlal`s and an `ext` a stripe. A seed other than zero
+  makes a secret of 192 bytes for an input past 240 (allocated, where .NET
+  keeps it on the stack).
+
+Against .NET 11's System.IO.Hashing 11.0 (`benchmarks/library/hashing`, Apple
+M1 Max): a megabyte is hashed in 0.50 (Adler-32) to 1.0 (XXH32, XXH64) of
+.NET's time, and the CRCs and XXH3 in 0.75 to 0.85; 256 bytes in 0.95 to 1.16.
+Sixteen bytes take 1.2 to 3 times as long: what a call costs around the work,
+the slice's pointer taken in a closure among it, is most of it there.
+
 ### Compression
 
 `Sable.IO.Compression` is written in Sable, not bound to zlib. A codec works
@@ -1636,8 +1762,8 @@ runs the codecs in `CompressionTests`.
 - A decoder says how much it consumed, exactly, so what follows a stream can
   be read; a gzip decoder reads every member. `DecompressionLimits` bound
   the length and the ratio.
-- CRC-32 is the processor's where it has the instructions
-  (`runtime/checksums.c`: ARM's, or PCLMULQDQ), eight bytes by tables else.
+- Their checksums, CRC-32, Adler-32 and XXH64, are Sable.IO.Hashing's (below),
+  given the codecs' memory by address (`update(at:count:)`, `package`).
 
 Against .NET 11's, which are zlib-ng, zstd 1.5.7 and brotli, all C, on an
 Apple M1 Max that was busy (the best of three runs; MB/s, and the ratio):
@@ -1759,6 +1885,44 @@ default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
   `benchmarks/library/{matrix-multiply,matrix-invert,transform-points,quaternion-blend,frustum-cull,vector-particles}`.
 - **Others' conformances.** Serializable is in Sable.Serialize and Arbitrary in
   Sable.Testing, so that a program of vectors has neither module.
+
+### Tensors
+
+`Sable.Math.Tensors` is .NET's `Tensor<T>` and NumPy's `ndarray`: a shape, and
+elements in one array laid out by strides, row-major unless made column-major.
+A `Tensor` owns its elements and is a value, copied on write.
+
+- **Views.** `t[.All, .range(1..<3), .step(2)]` (up to four indices, or any
+  number by `sliced`) is a `TensorView`: an offset and strides over the same
+  elements, nothing copied. As a slice does (docs/02 §2.5), a view shares its
+  storage the way a second copy of the array would: it may be kept, and the
+  tensor's later writes are not in it. Writing in place is lending: a
+  `MutableTensorView` is had only as an `inout` parameter, of
+  `t.withMutableView([...]) { ... }` or an array's
+  `withTensorView(shape:) { ... }`, which give the view the elements and
+  take them back, so nothing else reaches them while it writes (§2.3's
+  exclusivity) and nothing is copied.
+- **NumPy's rules.** Broadcasting (shapes aligned at their last dimensions,
+  each pair equal or one of them 1), basic indexing (`.At` drops the
+  dimension, a negative place counts from the end, a slice's bounds are
+  held to the dimension, `.NewAxis`), reductions along an axis with or
+  without `keepingDimension`, `argmax` the first greatest, and `matmul`'s
+  vectors and stacks. `tools/conformance/tensors/numpy_cases.py` writes
+  `tests/lib/Sable.Math.Tensors/NumpyTests.sb` from what NumPy makes of each
+  case; its output must be the file in the repository.
+- **matmul.** F32 and F64 matrices go by a kernel of vectors: a tile of four
+  rows by sixteen F32s (eight F64s) kept in registers, each element of A
+  times a row of B added in by a fused multiply-add. 512 x 512 of F32 takes
+  3.4 ms against 12.9 ms for .NET 11 with System.Numerics.Tensors 9.0
+  (whose Tensor has no matrix product, so the port is TensorPrimitives'
+  MultiplyAdd, a row at a time; `benchmarks/library/tensor-matmul`, Apple M1
+  Max). OpenBLAS is not on the machine and was not measured. Other number
+  types multiply element by element.
+- **Elementwise work** is a closure an element, generic over the numeric
+  protocols, not yet vectors: `(t + bias) * 0.5` summed along an axis of a
+  256 x 256 x 16 F32 tensor takes 4.6 times .NET's TensorPrimitives loop.
+- `Array2D<T>` and `Array3D<T>` are rectangular arrays of any element, for
+  grids rather than arithmetic, .NET's `T[,]` and `T[,,]`.
 
 ### Decimal
 
@@ -2021,6 +2185,59 @@ counters #244's).
   they are collected, to `maxSize` buckets and `maxScale`.
 - **Collection** is cumulative, from the first reader on; a reader exports
   when asked or every so often.
+### Pipes, local streams, shared memory and serial ports
+
+The operating system's own channels between processes (#239), over
+`runtime/ipc.c` and `platform_ipc_posix.c` / `platform_ipc_win32.c`, which
+the library calls by `@extern` rather than as builtins; under WASI each
+throws `Unsupported`.
+
+- **OsPipe.** Each end this program has is an I/O source as a child's stream
+  is (§6.7): nonblocking on POSIX, an overlapped named pipe of its own name on
+  Windows. An end for a child (`PipeEnd`) blocks and is inherited by no one:
+  `Stdio.Pipe` gives the child a copy (`STDIO_HANDLE`), and this program
+  closes its own, or the other end never reads to its end. `betweenChildren`
+  is an anonymous pipe, as a shell's `|`.
+- **Fifo.** A writer waits for a reader by looking again (an open for writing
+  fails with ENXIO until there is one). A reader is opened at once; reading
+  nothing before any writer has come is no end, which macOS's poll cannot
+  tell apart from the end, so the reader looks again until it has seen a
+  writer (a byte, or a would-block). Windows has none.
+- **LocalListener, LocalStream.** One name everywhere: on POSIX a Unix domain
+  socket `<name>.socket` in a directory of the user's own
+  (`$XDG_RUNTIME_DIR`, else `/tmp/sable-<uid>`, made 0700 and refused if it
+  is anyone else's), or `/tmp`, writable by all, for `.AnyUser`; a socket
+  left by a server that ended is taken over (connecting to it is refused),
+  and the listener removes its file. A server for this user alone lets go of
+  a peer of another uid; a client asking so connects only to a server of its
+  own uid (SO_PEERCRED, getpeereid). On Windows a named pipe
+  `\\.\pipe\<name>`: duplex and overlapped, its first instance made with
+  FILE_FLAG_FIRST_PIPE_INSTANCE (AddressInUse otherwise), a DACL of the user's
+  SID alone for `.CurrentUserOnly`, the next instance made as one is
+  accepted; the client checks the pipe's owner, and a connected pipe is two
+  sources over duplicated handles, one to read and one to write. Messages
+  are Windows' alone; a named pipe has no half-close.
+- **SharedMemory, NamedSemaphore.** `shm_open` and `sem_open` with "/name"
+  (macOS takes 31 bytes), mode 0600; on Windows `Local\name`, a paging file's
+  mapping and a semaphore. The mapping is a U8 array as MappedFile's is
+  (FILE_MAP_SHARED), written through `write(_:at:)`. The maker removes the
+  name as it closes (POSIX); on Windows a name lives while any handle does.
+  A wait polls `sem_trywait` / `WaitForSingleObject(0)`, from 50 µs to 10 ms
+  apart, so that a task never blocks its thread and a cancel or a timeout is
+  heard; no system tells a waiter of another process's release.
+- **NamedMutex.** A file of the user's held by `flock` (POSIX) or opened to be
+  shared with no one (Windows): a holder that ends lets it go, as .NET's
+  abandoned mutex, and a thread-affine Windows mutex is no use to tasks that
+  move between threads. Waiting polls as a semaphore's does.
+- **SerialPort.** POSIX opens the device O_NOCTTY and nonblocking, takes it
+  with TIOCEXCL, and sets it raw (cfmakeraw, VMIN 1) with the frame, CRTSCTS
+  or IXON/IXOFF; Linux takes termios's named rates, macOS any by IOSSIOSPEED.
+  Windows opens `\\.\COMn` overlapped, sets its DCB, and has a read return as
+  soon as a byte has come (ReadIntervalTimeout and the multiplier MAXDWORD);
+  like a pipe, a source reads and another writes. A read's limit is
+  `withTimeout`. The ports are /dev's tty and cu devices on macOS, the ttys
+  of Linux that have a device, and the registry's SERIALCOMM on Windows.
+  Tests use a pseudo-terminal, which has no control lines.
 
 ### Dependency injection
 
@@ -2364,6 +2581,32 @@ other libraries, differ:
 - *SIGPIPE* is never raised and every descriptor is closed on exec.
 
 `IoError` says why, in cases the systems' codes are sorted into.
+
+**Ping, raw sockets, changes and statistics** (#226):
+
+- *Ping* sends an ICMP echo by the socket of ICMP datagrams that macOS gives
+  anyone and Linux gives the groups `net.ipv4.ping_group_range` names, and
+  by a raw socket (root) where there is none; on Windows by IcmpSendEcho2 on
+  the blocking pool. What comes is read by `PingStatus.of`: a reply of its
+  identifier and sequence (Linux's ping sockets put their own identifier in
+  an echo, so there the sequence alone is matched), or an error (time
+  exceeded, unreachable, too big) about it, by the echo the error carries.
+  Linux keeps a ping socket's errors in its error queue (IP_RECVERR), which
+  is read. The wait is `Task.limited`: `.TimedOut` is a reply, not a throw.
+- *RawSocket* is SOCK_RAW (or the ICMP datagram socket): what an IPv4 one
+  receives begins with the IP header, an IPv6 one's never; IP_HDRINCL sends
+  one's own, its length and offset turned to the host's order on macOS.
+  IcmpMessage, Ipv4Header, Ipv6Header and InternetChecksum (RFC 1071, and
+  ICMPv6's pseudo-header) build and read what goes over it.
+- *NetworkChange* is told that something changed by a routing socket (macOS),
+  netlink's link and address groups (Linux), or NotifyIpInterfaceChange and
+  NotifyUnicastIpAddressChange (Windows), and lists the interfaces again to
+  say what (`differences`): what the systems' messages carry is not read.
+- *NetworkStatistics* reads /proc/net (Linux), the pcblist_n sysctl (macOS,
+  whose records' layout is the kernel's, not the SDK's; without an
+  entitlement it lists only this process's sockets, and TCP's counters read
+  as zeros) and GetExtendedTcpTable, GetExtendedUdpTable, GetTcpStatisticsEx
+  (Windows, IPv4's and IPv6's added).
 
 ### X.509
 

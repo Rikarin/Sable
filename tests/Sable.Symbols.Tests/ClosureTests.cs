@@ -363,6 +363,12 @@ public sealed class ClosureTests {
         Assert.Equal(expected, TypeOfLast(body, Labelled));
 
     [Fact]
+    public void ATrailingClosureIsNotAnAutoclosuresArgument() =>
+        Assert.Equal("Int", TypeOfLast("let v = check(3) { $0 + 1 }", """
+            fn check(_ r: Int, _ message: @autoclosure () -> String = "", _ f: (Int) -> Int) -> Int { return f(r) }
+            """));
+
+    [Fact]
     public void AnArgumentInParenthesesStillNeedsItsLabel() =>
         Assert.Contains(ErrorsIn("let v = replacing(3, { $0 + 1 })", Labelled), static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
 
@@ -390,4 +396,12 @@ public sealed class ClosureTests {
             .ToList();
         Assert.Equal(["Mode", "() -> Mode", "() -> Mode"], chosen);
     }
+
+    [Fact]
+    public void AnImplicitMemberIsOfTheOverloadWhoseTypeHasIt() =>
+        Assert.Equal("String", TypeOfLast("let v = pick(.anything)", """
+            struct Matcher { static var anything: Matcher => Matcher() }
+            fn pick(_ m: Int) -> Int { return m }
+            fn pick(_ m: Matcher) -> String { return "matcher" }
+            """));
 }

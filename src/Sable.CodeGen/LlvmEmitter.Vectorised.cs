@@ -21,7 +21,9 @@ public sealed partial class LlvmEmitter {
     internal const string WideAttributes = $"noinline \"target-features\"=\"{WideFeatures}\"";
 
     void Function(SilFunction function, StringBuilder output) {
-        if (!function.Vectorised || !_target.Triple.StartsWith("x86_64", StringComparison.Ordinal) || PassesVectors(function)) {
+        // One that passes a value held in memory keeps its own signature: it is written once.
+        if (!function.Vectorised || !_target.Triple.StartsWith("x86_64", StringComparison.Ordinal) || PassesVectors(function)
+            || ReturnsInMemory(function.Type) || ThrowsInMemory(function.Type) || function.Type.Parameters.Any(SilType.IsInMemory)) {
             output.Append(new FunctionEmitter(this, function).Emit()).Append('\n');
             return;
         }

@@ -52,12 +52,14 @@ public final class DirectoryEntries: Sequence {
             return none
         }
         let path = directory.inside(entry[1...])
-        var kind = FileKind.of(Int(entry[0]))
+        var kind = FileKind.Other
         if entry[0] == 255 {
             // The directory does not say: the system is asked. Gone
             // already, it is nothing that is known.
             let parts = Runtime.pathMetadata(path.systemString, false)
             kind = parts.isEmpty ? .Other : FileKind.of(parts[1])
+        } else {
+            kind = FileKind.of(Int(entry[0]))
         }
         return DirEntry { path: path, kind: kind, depth: depth }
     }

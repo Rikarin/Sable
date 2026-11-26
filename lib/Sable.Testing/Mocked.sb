@@ -1,0 +1,20 @@
+module Sable.Testing
+
+/// What `@mockable` makes: a mock, with its recorder.
+public protocol Mocked {
+    var recorder: MockRecorder { get }
+}
+
+/// Fails the test unless every call of the mock has been counted by a
+/// `verify`. The test goes on.
+///
+/// ```sable ignore
+/// gateway.on.charge(amount: 100).verify(.once)
+/// verifyNoOtherCalls(gateway)
+/// ```
+public fn verifyNoOtherCalls(_ mock: some Mocked, file: String = #file, line: Int = #line) {
+    let others = mock.recorder.sorted(verified: false)
+    if !others.isEmpty {
+        recordFailure("the mock had calls no verification counted\n\(others.map({ "    \($0)" }).joined(separator: "\n"))", file: file, line: line)
+    }
+}

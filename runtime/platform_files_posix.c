@@ -239,7 +239,7 @@ static void file_map_advise(void *base, int64_t length, int advice) {
 
 static void *file_map(PlatformFile file, int64_t length, int mode, FileError *error) {
     int protection = mode == FILE_MAP_READ_ONLY ? PROT_READ : PROT_READ | PROT_WRITE;
-    int sharing = mode == FILE_MAP_READ_WRITE ? MAP_SHARED : MAP_PRIVATE;
+    int sharing = mode == FILE_MAP_READ_WRITE || mode == FILE_MAP_SHARED ? MAP_SHARED : MAP_PRIVATE;
     void *mapped = mmap(NULL, (size_t)length, protection, sharing, (int)file, 0);
     if (mapped == MAP_FAILED) {
         file_failed(error);

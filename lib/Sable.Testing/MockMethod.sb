@@ -1,0 +1,186 @@
+module Sable.Testing
+
+import Sable.Concurrency
+
+/// One member of a mock that `@mockable` writes: the calls made of it, and
+/// the stubs that answer them. `A` is its arguments (a tuple of several,
+/// `Void` of none), `R` what it returns and `E` what it throws (`Never`
+/// for a member that does not). Generated code calls it; a test reaches it
+/// through the mock's `on`. Calls may be made from any thread.
+@immutable
+public final class MockMethod<A, R, E: Error>: MockMember {
+    let recorder: MockRecorder
+    let describe: (A) -> String
+    // What a loose mock answers with, where 'hasFallback' says there is one.
+    let fallback: () -> R
+    let hasFallback: Bool
+    let state: Mutex<MockState<A, R, E>>
+
+    /// A member whose type has no value to answer with, unless a stub gives one.
+    public init(_ recorder: MockRecorder, describe: @escaping (A) -> String) {
+        self.recorder = recorder
+        self.describe = describe
+        fallback = { endFailedTest() }
+        hasFallback = false
+        state = Mutex(MockState<A, R, E>())
+        recorder.add(self)
+    }
+
+    /// A member that a loose mock answers with the value given, where no
+    /// stub answers.
+    public init(_ recorder: MockRecorder, describe: @escaping (A) -> String, otherwise: @escaping () -> R) {
+        self.recorder = recorder
+        self.describe = describe
+        fallback = otherwise
+        hasFallback = true
+        state = Mutex(MockState<A, R, E>())
+        recorder.add(self)
+    }
+
+    // The call kept, and how it is to be answered: none where nothing says.
+    fn record(_ arguments: A) -> MockAnswer<A, R, E>? {
+        let number = MockRecorder.counter.add(1) + 1
+        return state.withLock { state in
+            state.made.append(MockInvocation(number: number, arguments: arguments, verified: false))
+            var i = state.stubs.count - 1
+            while i >= 0 {
+                if state.stubs[i].matches(arguments) {
+                    return state.stubs[i].next()
+                }
+                i -= 1
+            }
+            return none
+        }
+    }
+
+    /// A call of the member, as a stub answers it.
+    public fn invoke(_ arguments: A) throws(E) -> R {
+        guard let answer = record(arguments) else {
+            return unanswered(arguments)
+        }
+        match answer {
+            case .Value(let value)   => { return value }
+            case .Failure(let error) => { throw error }
+            case .Run(let body)      => { return try body(arguments) }
+            case .Wait(_) => {
+                say("\(describe(arguments)) was answered by a body that waits, and does not wait itself")
+                endFailedTest()
+            }
+        }
+    }
+
+    /// A call of a member that waits, as a stub answers it.
+    public async fn invokeAsync(_ arguments: A) throws(E) -> R {
+        guard let answer = record(arguments) else {
+            return unanswered(arguments)
+        }
+        match answer {
+            case .Value(let value)   => { return value }
+            case .Failure(let error) => { throw error }
+            case .Run(let body)      => { return try body(arguments) }
+            case .Wait(let body)     => { return try await body(arguments) }
+        }
+    }
+
+    fn unanswered(_ arguments: A) -> R {
+        if hasFallback && recorder.behavior == .Loose {
+            return fallback()
+        }
+        let why = recorder.behavior == .Strict ? "the mock is strict" : "what it returns has no value to give unless a stub says one"
+        say("\(describe(arguments)) was called, and no stub answers it: \(why)")
+        endFailedTest()
+    }
+
+    fn add(_ stub: MockStub<A, R, E>) {
+        state.withLock { $0.stubs.append(stub) }
+    }
+
+    fn answer(_ stub: MockStub<A, R, E>, _ answer: MockAnswer<A, R, E>) {
+        state.withLock { _ in stub.answers.append(answer) }
+    }
+
+    public fn calls(verified: Bool) -> (Int, String)[>..] {
+        let made = state.withLock { $0.made }
+        var all: (Int, String)[>..] = []
+        for call in made {
+            if verified || !call.verified {
+                all.append((call.number, describe(call.arguments)))
+            }
+        }
+        return all
+    }
+
+    // The calls the predicate matches, counted by a verification if it is one.
+    fn matching(_ matches: (A) -> Bool, verifying: Bool) -> MockInvocation<A>[>..] {
+        let made = state.withLock { $0.made }
+        var found: MockInvocation<A>[>..] = []
+        var counted: Int[>..] = []
+        for call in made {
+            if matches(call.arguments) {
+                found.append(call)
+                counted.append(call.number)
+            }
+        }
+        if verifying && !counted.isEmpty {
+            state.withLock { state in
+                for i in 0..<state.made.count {
+                    if counted.contains(state.made[i].number) {
+                        state.made[i].verified = true
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    // What its calls were, a line each, for a failure.
+    fn listed() -> String {
+        let all = calls(verified: true)
+        if all.isEmpty {
+            return "\n    it was never called"
+        }
+        return "\n    its calls:" + all.map({ "\n        \($0.1)" }).joined(separator: "")
+    }
+}
+
+// What a member's lock guards: its stubs, and the calls made of it.
+struct MockState<A, R, E: Error> {
+    var stubs: MockStub<A, R, E>[>..] = []
+    var made: MockInvocation<A>[>..] = []
+
+    init() { }
+}
+
+struct MockInvocation<A> {
+    let number: Int
+    let arguments: A
+    var verified: Bool
+}
+
+// What a stub answers a call with.
+union MockAnswer<A, R, E: Error> {
+    Value(R)
+    Failure(E)
+    Run((A) throws(E) -> R)
+    Wait(async (A) throws(E) -> R)
+}
+
+// A stub: the calls it answers, and its answers, one after another, the
+// last again and again. Changed under its member's lock.
+final class MockStub<A, R, E: Error> {
+    let matches: (A) -> Bool
+    var answers: MockAnswer<A, R, E>[>..]
+    var at: Int
+
+    init(_ matches: @escaping (A) -> Bool) {
+        self.matches = matches
+        answers = []
+        at = 0
+    }
+
+    fn next() -> MockAnswer<A, R, E> {
+        let answer = answers[at < answers.count ? at : answers.count - 1]
+        at += 1
+        return answer
+    }
+}

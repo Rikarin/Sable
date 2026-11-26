@@ -2468,12 +2468,27 @@ public sealed partial class SilGen {
                 return SilType.Tuple(elements.ToImmutable());
             }
 
-            // The growable kinds and the fixed one share a counted buffer.
-            // So does a bounded array outside an @inline_layout struct —
-            // 'T[..k]' as a local, a parameter or a field of a plain struct —
-            // with its bound checked where it grows; inside one it is bytes in
-            // the block (InlineField). A slice is a view of a run of such a
-            // buffer's elements, sharing it ('[T:]').
+            // 'T[k]' and 'T[..k]' hold their elements where they are, by value
+            // (#304): in a local, a field, a payload. Inside an @inline_layout
+            // struct a bounded one is bytes in the block instead (InlineField).
+            // One too large to hold on a stack is refused (S7004).
+            case ArrayTypeSymbol { ArrayKind: ArrayKind.Fixed or ArrayKind.Inline, Capacity: { } inlineCount } inlineArray: {
+                if (Lower(inlineArray.ElementType) is not { } inlineElement || IsMoveOnly(inlineElement) || SilType.MentionsOpaque(inlineElement)) {
+                    return null;
+                }
+
+                var bounded = inlineArray.ArrayKind == ArrayKind.Inline;
+                if (TypeLayout.InlineBytes(inlineElement, inlineCount, bounded) > TypeLayout.MaximumInlineBytes) {
+                    _tooLargeArray ??= (inlineArray, TypeLayout.InlineBytes(inlineElement, inlineCount, bounded));
+                    return null;
+                }
+
+                return new FixedArrayType(inlineElement, inlineCount, bounded);
+            }
+
+            // The growable kinds and 'T[]' share a counted buffer. A slice is
+            // a view of a run of such a buffer's elements, sharing it ('[T:]'),
+            // or of an inline array's, lent for a call.
             // An array copies its elements on write, so a move-only element has no array yet.
             case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice or ArrayKind.Inline } array:
                 return Lower(array.ElementType) is { } elementType && elementType is not NominalType { IsNoncopyable: true }
@@ -5392,6 +5407,30 @@ public sealed partial class SilGen {
             }
 
             Destroy(Unhold(value));
+
+            // A slice of an inline array, which it may be lent: the array's
+            // borrow ends after it (LendInlineArrays).
+            if (_lentFrom.Remove(value, out var source)) {
+                End(source);
+            }
+        }
+
+        /// <summary>
+        ///     The slices of inline arrays made to be borrowed for a use — an
+        ///     argument, a receiver — each with the array it views, held until
+        ///     the slice is gone, so that the array may lend itself
+        ///     (LendInlineArrays) rather than copy its elements out.
+        /// </summary>
+        readonly Dictionary<SilValue, SilValue> _lentFrom = [];
+
+        /// <summary>
+        ///     An inline array, borrowed, viewed as a slice to borrow: the
+        ///     array held until the slice is <see cref="End" />ed.
+        /// </summary>
+        SilValue InlineView(SilValue array) {
+            var slice = Hold(Emit(new BuiltinInst("slice_of", new SliceType(((FixedArrayType)array.Type).Element), array)));
+            _lentFrom[slice] = array;
+            return slice;
         }
 
         /// <summary>Destroys, on the path being emitted, the temporaries above a depth, without forgetting them.</summary>
@@ -5492,6 +5531,35 @@ public sealed partial class SilGen {
 
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion when !IsArrayView(conversion):
                     return Borrow(conversion.Operand);
+
+                // A global 'let' or 'const' held in memory — a table of numbers,
+                // 'const powers: F64[16]' — borrowed where it is: nothing writes
+                // it once it is made, and a copy would be every element.
+                case BoundFieldAccess { Field: { IsMutable: false } global } when SilGen.IsGlobal(global) && generator.ConstantRead(global) is null
+                                                                                 && generator.GlobalOf(global) is var (globalName, globalType) && SilType.IsInMemory(globalType):
+                    return Hold(Emit(new LoadBorrowInst(Emit(new GlobalAddrInst(globalName, globalType)))));
+
+                // A range of an inline array, for a use: lent where it is, when it can be.
+                case BoundIndexAccess inlineRange when SlicingRange(inlineRange) is { } rangeOfInline && !IsInlineArray(inlineRange.Receiver)
+                                                      && LowerType(inlineRange.Receiver.Type) is FixedArrayType: {
+                    if (Borrow(inlineRange.Receiver) is not { Type: FixedArrayType viewedType } viewedArray) {
+                        return null;
+                    }
+
+                    if (RangeBounds(rangeOfInline, () => Emit(new BuiltinInst("array_count", SilType.Int, viewedArray))) is not var (rangeFrom, rangeTo)) {
+                        End(viewedArray);
+                        return null;
+                    }
+
+                    var ranged = Hold(Emit(new BuiltinInst("array_slice", new SliceType(viewedType.Element), viewedArray, rangeFrom, rangeTo)));
+                    _lentFrom[ranged] = viewedArray;
+                    return ranged;
+                }
+
+                // An inline array viewed as a slice, for a use: lent where it is, when it can be.
+                case BoundConversion { ConversionKind: ConversionKind.Identity } inlineView when IsArrayView(inlineView) && !IsInlineArray(inlineView.Operand)
+                                                                                                && LowerType(inlineView.Operand.Type) is FixedArrayType:
+                    return Borrow(inlineView.Operand) is { } viewed ? InlineView(viewed) : null;
 
                 case BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: TypeParameterSymbol openedType } } when _genericMetadata.TryGetValue(openedType, out var openedMetadata):
                     return openedMetadata;
@@ -6640,8 +6708,11 @@ public sealed partial class SilGen {
             // The loop's copy goes as the loop ends: kept until the slot was
             // next written, a loop run again later held the last run's array
             // — all of its buffer — alive through everything in between.
+            // An inline array's copy holds no buffer, and goes with its slot.
             _current = after;
-            Emit(new StoreInst(Emit(new BuiltinInst("array_empty", sequenceType)), array, StoreKind.Assign));
+            if (sequenceType is not FixedArrayType) {
+                Emit(new StoreInst(Emit(new BuiltinInst("array_empty", sequenceType)), array, StoreKind.Assign));
+            }
         }
 
         /// <summary>True when the code moves the parameter's value out: 'move p'.</summary>
@@ -9892,6 +9963,24 @@ public sealed partial class SilGen {
                     : null;
             }
 
+            // 'T[k]' and 'T[..k]': the elements held where the array is.
+            if (LowerType(type) is FixedArrayType inline) {
+                if (array.Elements.IsEmpty && inline.IsBounded) {
+                    return Emit(new BuiltinInst("array_empty", inline));
+                }
+
+                if (Evaluate(array.Elements) is not { } held) {
+                    return null;
+                }
+
+                if (SilBuiltins.Resolve("array_literal", [..held.Select(static v => v.Type)], inline) is null) {
+                    held.ForEach(Destroy);
+                    return Missing(array, $"{held.Count} elements for '{type.ToDisplayString()}'");
+                }
+
+                return Emit(new BuiltinInst("array_literal", inline, [..held.Select(Owned)]));
+            }
+
             if (LowerType(type) is not ArrayType arrayType) {
                 return Missing(array, $"an array of type '{type.ToDisplayString()}'");
             }
@@ -11776,6 +11865,9 @@ public sealed partial class SilGen {
             var error = errorBlock.AddArgument(type.Thrown);
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Unhold(borrows[i]);
+                if (_lentFrom.TryGetValue(borrows[i], out var lentSource)) {
+                    Unhold(lentSource);
+                }
             }
 
             Jump(new TryApplyInst(reference, type.Result, [..arguments], normal, errorBlock));
@@ -11807,6 +11899,11 @@ public sealed partial class SilGen {
                         break;
                     default:
                         Destroy(borrow);
+                        // An inline array's slice: the array it views, after.
+                        if (_lentFrom.TryGetValue(borrow, out var source)) {
+                            Release(source, failed);
+                        }
+
                         break;
                 }
             }
@@ -11841,6 +11938,7 @@ public sealed partial class SilGen {
 
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Release(borrows[i]);
+                _lentFrom.Remove(borrows[i]);
             }
 
             return result ?? (SilValue)UnitValue.Instance;

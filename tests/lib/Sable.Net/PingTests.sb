@@ -1,0 +1,175 @@
+module PingTests
+
+// Ping, PingOptions, PingReply and PingStatus (Sable.Net): run with
+//     tools/stdlib-coverage.sh Sable.Net
+//
+// Over the loopback interface alone. An unprivileged ping needs the system
+// to allow it (Linux's net.ipv4.ping_group_range): where it does not, and
+// the test is not root, the tests that send one are skipped.
+
+import NetSupport
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+import Sable.Time
+
+/// The reply, or none where this user may not ping.
+fn ping(_ address: IpAddress, timeout: Duration = Duration.seconds(10), options: PingOptions = PingOptions()) async throws -> PingReply? {
+    do {
+        return try await Ping.send(to: address, timeout: timeout, options: options)
+    } catch .PermissionDenied(_) {
+        return none
+    }
+}
+
+@test
+fn theLoopbackAddressAnswers() async throws {
+    let reply = try await ping(IpAddress.v4Loopback)
+    try skip(if: reply == none, "this user may not ping")
+    assertEqual(reply!.status, PingStatus.Success)
+    assertEqual(reply!.address, IpAddress.v4Loopback)
+    assertEqual(reply!.payloadSize, 32)
+    expect(reply!.roundTrip < Duration.seconds(10))
+}
+
+@test
+fn theIpv6LoopbackAddressAnswersWithThePayloadAskedFor() async throws {
+    let loopback = (try NetworkInterface.all()).first(where: { $0.isLoopback })
+    try skip(if: loopback == none || !loopback.addresses.contains(where: { $0.address == IpAddress.v6Loopback }), "there is no ::1")
+    let reply = try await ping(IpAddress.v6Loopback, options: PingOptions { ttl: 5, dontFragment: true, payloadSize: 200 })
+    try skip(if: reply == none, "this user may not ping")
+    assertEqual(reply!.status, PingStatus.Success)
+    assertEqual(reply!.payloadSize, 200)
+}
+
+@test
+fn manyPingsAtOnceEachHaveTheirOwnAnswer() async throws {
+    try skip(if: (try await ping(IpAddress.v4Loopback)) == none, "this user may not ping")
+    var pings: Task<PingStatus>[>..] = []
+    for i in 0..<16 {
+        pings.append(Task.spawn { () -> PingStatus in
+            return try! await Ping.send(to: IpAddress.v4Loopback, options: PingOptions { payloadSize: i }).status
+        })
+    }
+    for one in pings {
+        assertEqual(await one.value, PingStatus.Success)
+    }
+}
+
+@test
+fn anAddressThatDoesNotAnswerTimesOut() async throws {
+    // 127.0.0.2 is no address of macOS's; Linux and Windows answer for all
+    // of 127/8, and the loopback interface has nothing that does not answer.
+    #if os(macos)
+    let reply = try await ping(ip("127.0.0.2"), timeout: Duration.milliseconds(50))
+    try skip(if: reply == none, "this user may not ping")
+    assertEqual(reply!.status, PingStatus.TimedOut)
+    assertEqual(reply!.address, ip("127.0.0.2"))
+    expect(reply!.roundTrip >= Duration.milliseconds(50))
+    #else
+    try skip("every address of 127/8 answers here")
+    #endif
+}
+
+@test
+fn optionsOutOfRangeAreRefused() async {
+    await expectThrows(saying: IoError.InvalidInput(path: "a ping's options").description()) {
+        _ = try await Ping.send(to: IpAddress.v4Loopback, options: PingOptions { ttl: 0 })
+    }
+    await expectThrows(saying: IoError.InvalidInput(path: "a ping's options").description()) {
+        _ = try await Ping.send(to: IpAddress.v4Loopback, options: PingOptions { payloadSize: -1 })
+    }
+    await expectThrows(saying: IoError.InvalidInput(path: "a ping's options").description()) {
+        _ = try await Ping.send(to: IpAddress.v4Loopback, timeout: Duration.zero)
+    }
+}
+
+// ---- What comes back, as it is read -------------------------------------------------
+
+// An IPv4 datagram from the address, carrying the ICMP message.
+fn datagram(from source: IpAddress, _ message: IcmpMessage) -> U8[>..] {
+    let bytes = message.bytes()
+    var all = Ipv4Header(ipProtocol: .icmp, source: source, destination: IpAddress.v4Loopback, payloadLength: bytes.count).bytes()
+    all.append(contentsOf: bytes)
+    return all
+}
+
+// The echo request an error is about, as the error carries it: its IP
+// header, then its first eight bytes.
+fn aboutEcho(_ family: IpFamily, identifier: Int, sequence: Int) -> U8[>..] {
+    let echo = IcmpMessage.echoRequest(family, identifier: identifier, sequence: sequence, payload: [1, 2, 3, 4]).bytes()
+    var all = family == .V4 ? Ipv4Header(ipProtocol: .icmp, source: IpAddress.v4Loopback, destination: ip("192.0.2.9"), payloadLength: echo.count).bytes()
+        : Ipv6Header(nextHeader: .icmpV6, source: IpAddress.v6Loopback, destination: ip("2001:db8::9"), payloadLength: echo.count).bytes()
+    all.append(contentsOf: echo[0..<8])
+    return all
+}
+
+@test
+fn anEchoReplyIsSuccessForItsOwnEchoAlone() {
+    let router = ip("192.0.2.1")
+    let reply = datagram(from: router, IcmpMessage(type: 0, code: 0, rest: 0x0007_0003, body: [9]))
+    assertEqual(PingStatus.of(reply, family: .V4, from: router, identifier: 7, sequence: 3), PingStatus.Success)
+    // Without its IP header, as an ICMP socket on Linux gives it.
+    assertEqual(PingStatus.of(reply[20...], family: .V4, from: router, identifier: none, sequence: 3), PingStatus.Success)
+    expect(PingStatus.of(reply, family: .V4, from: router, identifier: 8, sequence: 3) == none)
+    expect(PingStatus.of(reply, family: .V4, from: router, identifier: 7, sequence: 4) == none)
+    // An echo request (of another program's ping) is no answer.
+    let request = datagram(from: router, IcmpMessage.echoRequest(.V4, identifier: 7, sequence: 3, payload: []))
+    expect(PingStatus.of(request, family: .V4, from: router, identifier: 7, sequence: 3) == none)
+    expect(PingStatus.of([1, 2, 3], family: .V4, from: router, identifier: 7, sequence: 3) == none)
+}
+
+@test
+fn aRouterSaysTheEchoRanOutOfHopsOrCouldNotBeDelivered() {
+    let router = ip("192.0.2.1")
+    let about = aboutEcho(.V4, identifier: 5, sequence: 6)
+    let expired = datagram(from: router, IcmpMessage(type: 11, code: 0, rest: 0, body: about))
+    assertEqual(PingStatus.of(expired, family: .V4, from: router, identifier: 5, sequence: 6), PingStatus.TtlExpired(from: router))
+    expect(PingStatus.of(expired, family: .V4, from: router, identifier: 5, sequence: 7) == none)
+    let host = datagram(from: router, IcmpMessage(type: 3, code: 1, rest: 0, body: about))
+    assertEqual(PingStatus.of(host, family: .V4, from: router, identifier: 5, sequence: 6), PingStatus.Unreachable(code: 1, from: router))
+    let tooBig = datagram(from: router, IcmpMessage(type: 3, code: 4, rest: 1500, body: about))
+    assertEqual(PingStatus.of(tooBig, family: .V4, from: router, identifier: none, sequence: 6), PingStatus.PacketTooBig(from: router))
+    // A redirect is not about delivery; a cut-short error, about nothing.
+    expect(PingStatus.of(datagram(from: router, IcmpMessage(type: 5, code: 0, rest: 0, body: about)), family: .V4, from: router, identifier: 5, sequence: 6) == none)
+    expect(PingStatus.of(datagram(from: router, IcmpMessage(type: 11, code: 0, rest: 0, body: about[0..<20].toArray())), family: .V4, from: router, identifier: 5,
+        sequence: 6) == none)
+}
+
+@test
+fn icmpv6SaysTheSameByItsOwnNumbers() {
+    let router = ip("2001:db8::1")
+    let about = aboutEcho(.V6, identifier: 1, sequence: 2)
+    let check = { (type: Int, code: Int) -> PingStatus? in
+        PingStatus.of(IcmpMessage(type: type, code: code, rest: 0, body: about).bytes(), family: .V6, from: router, identifier: 1, sequence: 2)
+    }
+    assertEqual(check(3, 0), PingStatus.TtlExpired(from: router))
+    assertEqual(check(1, 4), PingStatus.Unreachable(code: 4, from: router))
+    assertEqual(check(2, 0), PingStatus.PacketTooBig(from: router))
+    expect(check(4, 0) == none)
+    let reply = IcmpMessage(type: 129, code: 0, rest: 0x0001_0002, body: []).bytes()
+    assertEqual(PingStatus.of(reply, family: .V6, from: router, identifier: 1, sequence: 2), PingStatus.Success)
+}
+
+@test
+fn windowsStatusesAreReadAsTheSame() {
+    let router = ip("192.0.2.1")
+    assertEqual(PingStatus.ofIpStatus(0, six: false, from: router), PingStatus.Success)
+    assertEqual(PingStatus.ofIpStatus(11010, six: false, from: router), PingStatus.TimedOut)
+    assertEqual(PingStatus.ofIpStatus(11013, six: false, from: router), PingStatus.TtlExpired(from: router))
+    assertEqual(PingStatus.ofIpStatus(11003, six: false, from: router), PingStatus.Unreachable(code: 1, from: router))
+    assertEqual(PingStatus.ofIpStatus(11003, six: true, from: router), PingStatus.Unreachable(code: 3, from: router))
+    assertEqual(PingStatus.ofIpStatus(11009, six: false, from: router), PingStatus.PacketTooBig(from: router))
+    assertEqual(PingStatus.ofIpStatus(11050, six: false, from: router), PingStatus.Failed(code: 11050))
+}
+
+@test
+fn eachStatusSaysWhatHappened() {
+    let router = ip("192.0.2.1")
+    assertEqual(PingStatus.Success.description(), "it answered")
+    assertEqual(PingStatus.TimedOut.description(), "nothing answered in time")
+    assertEqual(PingStatus.TtlExpired(from: router).description(), "it ran out of hops at 192.0.2.1")
+    assertEqual(PingStatus.Unreachable(code: 3, from: router).description(), "192.0.2.1 said it is unreachable (3)")
+    assertEqual(PingStatus.PacketTooBig(from: router).description(), "192.0.2.1 said it is too long")
+    assertEqual(PingStatus.Failed(code: 1).description(), "the system said 1")
+}

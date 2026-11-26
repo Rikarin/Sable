@@ -29,6 +29,12 @@ public enum MetadataKind {
 
     /// <summary>What the runtime holds without describing: a closure's context, a region, a view of inline bytes.</summary>
     Opaque = 15,
+
+    /// <summary>
+    ///     <c>T[k]</c> or <c>T[..k]</c>: elements held where the value is
+    ///     (#304). Its argument is its element; its size says how many fit.
+    /// </summary>
+    InlineArray = 16,
 }
 
 /// <summary>What a type's metadata says of its values: the runtime's <c>SABLE_TYPE_*</c> flags.</summary>
@@ -157,7 +163,7 @@ public sealed class TypeMetadata {
         var kind = KindOf(type);
         var noncopyable = type is NominalType { IsNoncopyable: true };
         var deinit = type is StructType { Deinit: not null } || type is ClassType classType && Deinits(classType);
-        var flags = (type.IsTrivial && !noncopyable ? MetadataFlags.Trivial : MetadataFlags.None)
+        var flags = (SilType.IsBitwise(type) && !noncopyable ? MetadataFlags.Trivial : MetadataFlags.None)
                     | (noncopyable ? MetadataFlags.Noncopyable : MetadataFlags.None)
                     | (deinit ? MetadataFlags.HasDeinit : MetadataFlags.None)
                     | (IsStructuralUnion(type) ? MetadataFlags.StructuralUnion : MetadataFlags.None)
@@ -214,6 +220,7 @@ public sealed class TypeMetadata {
             FunctionType or ThickFunctionType => MetadataKind.Function,
             ArrayType => MetadataKind.Array,
             SliceType => MetadataKind.Slice,
+            FixedArrayType => MetadataKind.InlineArray,
             WeakStorageType or UnownedStorageType => MetadataKind.Reference,
             _ => MetadataKind.Opaque,
         };
@@ -225,7 +232,7 @@ public sealed class TypeMetadata {
     ///     the type's own.
     /// </summary>
     public static WitnessKind WitnessesOf(SilType type) =>
-        type.IsTrivial && type is not NominalType { IsNoncopyable: true } ? WitnessKind.Bits
+        SilType.IsBitwise(type) && type is not NominalType { IsNoncopyable: true } ? WitnessKind.Bits
         : type is ScalarType or ClassType or ArrayType or StructType { IsInline: true } || type is EnumType nullable && TypeLayout.IsNullable(nullable)
             ? WitnessKind.Reference
             : WitnessKind.Emitted;
@@ -276,6 +283,7 @@ public sealed class TypeMetadata {
             EnumType union when IsStructuralUnion(union) => [..union.Cases.Select(static c => c.Payload!)],
             ArrayType array => [array.Element],
             SliceType slice => [slice.Element],
+            FixedArrayType fixedArray => [fixedArray.Element],
             TupleType tuple => tuple.Elements,
             FunctionType function => [..function.Parameters, function.Result],
             ThickFunctionType thick => [..thick.Signature.Parameters, thick.Signature.Result],
@@ -300,6 +308,8 @@ public sealed class TypeMetadata {
         type switch {
             ArrayType array => $"[{DisplayName(array.Element)}]",
             SliceType slice => $"[{DisplayName(slice.Element)}:]",
+            FixedArrayType { IsBounded: true } bounded => $"{DisplayName(bounded.Element)}[..{bounded.Count}]",
+            FixedArrayType fixedArray => $"{DisplayName(fixedArray.Element)}[{fixedArray.Count}]",
             EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",
             StructType { DisplayName: { } existential, Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => existential,
             StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..].Replace("$and$", " & ", StringComparison.Ordinal),

@@ -113,7 +113,7 @@ public sealed partial class LlvmEmitter {
     /// <summary>Whether LLVM has a type for values of this one to measure; else TypeLayout's numbers are written.</summary>
     static bool Measurable(SilType type) =>
         type != SilType.Unit && type is ScalarType or ClassType or ArrayType or SliceType or AddressType or FunctionType or ThickFunctionType or TupleType
-            or WeakStorageType or UnownedStorageType or StructType or EnumType or VectorType;
+            or WeakStorageType or UnownedStorageType or StructType or EnumType or VectorType or FixedArrayType;
 
     static string LlvmSize(SilType type, TypeMetadata metadata) => Measurable(type) ? SizeOf(Type(type)) : metadata.Size.ToString(CultureInfo.InvariantCulture);
 
@@ -163,18 +163,36 @@ public sealed partial class LlvmEmitter {
         var destroy = $"@\"sable.vw.destroy.{Mangled(type)}\"";
         var visit = $"@\"sable.vw.visit.{Mangled(type)}\"";
         var body = new StringBuilder();
-        if (!noncopyable) {
+        if (SilType.IsInMemory(type)) {
+            // Held in memory: its bits copied, then what they refer to, where they are.
+            if (!noncopyable) {
+                body.Append($"define internal void {copy}(ptr %d, ptr %s, ptr %t) {{\nentry:\n")
+                    .Append($"  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 {SizeOf(llvmType)}, i1 false)\n");
+                Ownership(body, "  ", true, type, "%d");
+                body.Append("  ret void\n}\n\n");
+            }
+
+            body.Append($"define internal void {destroy}(ptr %e, ptr %t) {{\nentry:\n");
+            Ownership(body, "  ", false, type, "%e");
+            body.Append("  ret void\n}\n\n");
+            body.Append($"define internal void {visit}(ptr %e, ptr %t) {{\nentry:\n");
+            Ownership(body, "  ", Witnessing.Visit, type, "%e");
+            body.Append("  ret void\n}\n\n");
+        } else if (!noncopyable) {
             body.Append($"define internal void {copy}(ptr %d, ptr %s, ptr %t) {{\nentry:\n  %v = load {llvmType}, ptr %s{StorageAlign(type)}\n");
             Ownership(body, "  ", true, type, "%v");
             body.Append($"  store {llvmType} %v, ptr %d{StorageAlign(type)}\n  ret void\n}}\n\n");
         }
 
-        body.Append($"define internal void {destroy}(ptr %e, ptr %t) {{\nentry:\n  %v = load {llvmType}, ptr %e{StorageAlign(type)}\n");
-        Ownership(body, "  ", false, type, "%v");
-        body.Append("  ret void\n}\n\n");
-        body.Append($"define internal void {visit}(ptr %e, ptr %t) {{\nentry:\n  %v = load {llvmType}, ptr %e{StorageAlign(type)}\n");
-        Ownership(body, "  ", Witnessing.Visit, type, "%v");
-        body.Append("  ret void\n}\n\n");
+        if (!SilType.IsInMemory(type)) {
+            body.Append($"define internal void {destroy}(ptr %e, ptr %t) {{\nentry:\n  %v = load {llvmType}, ptr %e{StorageAlign(type)}\n");
+            Ownership(body, "  ", false, type, "%v");
+            body.Append("  ret void\n}\n\n");
+            body.Append($"define internal void {visit}(ptr %e, ptr %t) {{\nentry:\n  %v = load {llvmType}, ptr %e{StorageAlign(type)}\n");
+            Ownership(body, "  ", Witnessing.Visit, type, "%v");
+            body.Append("  ret void\n}\n\n");
+        }
+
         _helpers.Append(body);
 
         var copies = noncopyable ? "ptr null, ptr @sable_vw_take, ptr null" : $"ptr {copy}, ptr @sable_vw_take, ptr @sable_vw_assign_with_copy";

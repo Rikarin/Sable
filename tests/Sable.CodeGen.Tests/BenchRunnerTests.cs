@@ -374,7 +374,15 @@ public sealed class BenchRunnerTests {
         Start(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host ? host : "dotnet", directory, [typeof(Command).Assembly.Location, ..arguments]);
 
     static (int ExitCode, string Output, string Errors) Start(string program, string directory, string[] arguments) {
-        var start = new System.Diagnostics.ProcessStartInfo(program, arguments) { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        // As UTF-8, which the harness writes: Windows would read it in the
+        // console's code page, and '±' and '×' would not be themselves.
+        var start = new System.Diagnostics.ProcessStartInfo(program, arguments) {
+            WorkingDirectory = directory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
         using var process = System.Diagnostics.Process.Start(start)!;
         var errors = process.StandardError.ReadToEndAsync();
         var output = process.StandardOutput.ReadToEnd();

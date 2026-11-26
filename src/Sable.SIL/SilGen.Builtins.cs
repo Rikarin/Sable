@@ -465,7 +465,7 @@ public sealed partial class SilGen {
             }
 
             // 'T[..k]' grows within its bound, and no further.
-            if (name == "array_append" && Sub(operands[0].Type) is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity }) {
+            if (name == "array_append" && Sub(operands[0].Type) is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity } && address.Type is not AddressType { Pointee: FixedArrayType }) {
                 var bounded = Emit(new LoadBorrowInst(address));
                 var count = Emit(new BuiltinInst("array_count", SilType.Int, bounded));
                 Emit(new EndBorrowInst(bounded));

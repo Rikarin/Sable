@@ -1,0 +1,137 @@
+module TensorViewTests
+
+// TensorView and MutableTensorView (Sable.Math.Tensors), tested with '@test':
+// run with
+//     tools/stdlib-coverage.sh Sable.Math.Tensors
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+@test
+fn aViewSeesAnArrayAsATensor() {
+    let numbers: Int[>..] = [1, 2, 3, 4, 5, 6]
+    let m = TensorView<Int>(numbers, shape: [2, 3])
+    expect(m.rank == 2 && m.count == 6)
+    expect(m[1, 2] == 6 && m[index: [0, 1]] == 2)
+    expect(m.transposed()[2, 1] == 6)
+    expect(m[.All, .At(0)].toArray() == [1, 4])
+    expect(m[.At(1)][2] == 6)
+    expect(TensorView<Int>(numbers, shape: [1, 2, 3])[0, 1, 2] == 6)
+}
+
+@test
+fn aViewKeepsWhatItSawWhenTheTensorChanges() {
+    var t = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4])
+    let view = t[.At(0)]
+    t[0, 0] = 9
+    expect(view.toArray() == [1, 2])
+    expect(t[.At(0)].toArray() == [9, 2])
+}
+
+@test
+fn broadcastingAViewRepeatsIt() {
+    let row = TensorView<Int>([1, 2, 3], shape: [3])
+    let grid = row.broadcast(to: [2, 3])
+    expect(grid.strides == [0, 1])
+    expect(grid.toArray() == [1, 2, 3, 1, 2, 3])
+    expect(grid.toTensor() == Tensor<Int>(shape: [2, 3], elements: [1, 2, 3, 1, 2, 3]))
+}
+
+@test(traps: "a tensor of shape [3] cannot be broadcast to [2, 4]")
+fn aShapeThatDoesNotBroadcastTraps() {
+    _ = TensorView<Int>([1, 2, 3], shape: [3]).broadcast(to: [2, 4])
+}
+
+@test
+fn squeezingAndUnsqueezing() {
+    let v = TensorView<Int>([1, 2], shape: [1, 2, 1])
+    expect(v.squeezed().shape == [2])
+    expect(v.squeezed(axis: -1).shape == [1, 2])
+    expect(v.unsqueezed(axis: 0).shape == [1, 1, 2, 1])
+    expect(v.unsqueezed(axis: 3).shape == [1, 2, 1, 1])
+    expect(v == TensorView<Int>([1, 2], shape: [1, 2, 1]))
+}
+
+@test(traps: "axis 1 has length 2, not 1")
+fn squeezingALongerAxisTraps() {
+    _ = TensorView<Int>([1, 2], shape: [1, 2]).squeezed(axis: 1)
+}
+
+@test(traps: "axis 0 is given twice in [0, 0]")
+fn permutingAnAxisTwiceTraps() {
+    _ = TensorView<Int>([1, 2], shape: [1, 2]).permuted([0, 0])
+}
+
+@test(traps: "a slice's step is positive, not 0")
+fn aStepOfZeroTraps() {
+    _ = TensorView<Int>([1, 2], shape: [2])[.Slice(start: 0, end: 2, step: 0)]
+}
+
+@test(traps: "3 indices for a tensor of rank 2")
+fn tooManyIndicesTrap() {
+    _ = TensorView<Int>([1, 2], shape: [1, 2]).sliced([.All, .All, .All])
+}
+
+@test
+fn indicesCountFromTheEndAndAreHeldToTheDimension() {
+    let v = TensorView<Int>([0, 1, 2, 3, 4, 5], shape: [6])
+    expect(v[.At(-1)].toArray() == [5])
+    expect(v[.from(4)].toArray() == [4, 5])
+    expect(v[.range(1..<100, step: 2)].toArray() == [1, 3, 5])
+    expect(v[.Slice(start: -2, end: Int.max, step: 1)].toArray() == [4, 5])
+    expect(v[.Slice(start: 4, end: 2, step: 1)].count == 0)
+    expect(v[.NewAxis].shape == [1, 6])
+}
+
+@test
+fn aMutableViewWritesTheTensorInPlace() {
+    var t = Tensor<Int>(shape: [3, 3], repeating: 0)
+    let before = t
+    t.withMutableView([.range(1..<3), .range(1..<3)]) { (corner: inout MutableTensorView<Int>) in
+        expect(corner.shape == [2, 2] && corner.rank == 2 && corner.count == 4)
+        corner[0, 1] = 5
+        expect(corner[0, 1] == 5 && corner.view[0, 1] == 5)
+        corner.assign(TensorView<Int>([1, 2], shape: [2]))
+    }
+    expect(t.toArray() == [0, 0, 0, 0, 1, 2, 0, 1, 2])
+    expect(before.toArray() == [0, 0, 0, 0, 0, 0, 0, 0, 0])
+    let doubled = t.withMutableView([.All]) { (all: inout MutableTensorView<Int>) -> Int in
+        all.update { $0 * 2 }
+        all[index: [2, 2]] = 7
+        return all[index: [1, 1]]
+    }
+    expect(doubled == 2)
+    expect(t.toArray() == [0, 0, 0, 0, 2, 4, 0, 2, 7])
+}
+
+@test
+fn aMutableViewOfAColumn() {
+    var t = Tensor<Int>(shape: [2, 3], repeating: 0)
+    t.withMutableView([.All, .At(1)]) { (column: inout MutableTensorView<Int>) in
+        column.fill(7)
+        column[1] = 8
+        expect(column[0] == 7)
+    }
+    expect(t.toArray() == [0, 7, 0, 0, 8, 0])
+    t.withMutableView([.NewAxis, .At(0), .All]) { (row: inout MutableTensorView<Int>) in
+        row[0, 2] = 1
+        expect(row.shape == [1, 3])
+    }
+    expect(t[0, 2] == 1)
+}
+
+@test
+fn anArrayIsLentAsATensor() {
+    var pixels: F32[>..] = [0, 0, 0, 0, 0, 0]
+    pixels.withTensorView(shape: [2, 3]) { (image: inout MutableTensorView<F32>) in
+        image[1, 2] = 1
+        image[0, 0] = 2
+    }
+    expect(pixels == [2, 0, 0, 0, 0, 1])
+}
+
+@test(traps: "6 elements for a tensor of shape [4]")
+fn lendingAnArrayOfAnotherSizeTraps() {
+    var pixels: F32[>..] = [0, 0, 0, 0, 0, 0]
+    pixels.withTensorView(shape: [4]) { (_: inout MutableTensorView<F32>) in }
+}

@@ -1,0 +1,34 @@
+module Sable.IO.Ipc
+
+/// A `NamedMutex` held: until `unlock()`, or until the guard goes.
+///
+/// ```sable
+/// let mutex = try! NamedMutex(name: "sable-guard-example")
+/// let held = try! mutex.tryLock()!
+/// assert(held.isHeld)
+/// held.unlock()
+/// assert(!held.isHeld)
+/// ```
+@immutable
+public final class NamedMutexGuard: Sendable {
+    let handle: Atomic<Int>
+
+    init(handle: Int) {
+        self.handle = Atomic<Int>(handle)
+    }
+
+    deinit {
+        unlock()
+    }
+
+    /// Whether it still holds the mutex.
+    public var isHeld: Bool => handle.load() >= 0
+
+    /// The mutex let go, for another to hold. Once is enough.
+    public fn unlock() {
+        let at = handle.exchange(-1)
+        if at >= 0 {
+            closeHandle(at)
+        }
+    }
+}

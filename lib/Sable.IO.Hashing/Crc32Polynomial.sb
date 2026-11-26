@@ -1,0 +1,13 @@
+module Sable.IO.Hashing
+
+/// Which CRC-32 a `Crc32` is: each reflected, from a state of all ones and
+/// complemented at the end, as .NET's `Crc32ParameterSet`s are.
+@derive(Equatable, Hashable, Debug)
+public enum Crc32Polynomial {
+    /// IEEE 802.3's, 0x04C11DB7: Ethernet's, and gzip's, zip's and PNG's
+    /// (CRC-32/ISO-HDLC). Of "123456789", 0xCBF43926.
+    Ieee
+    /// Castagnoli's, 0x1EDC6F41: iSCSI's, SCTP's, ext4's and Btrfs's
+    /// (CRC-32C). Of "123456789", 0xE3069283.
+    Castagnoli
+}

@@ -1,0 +1,63 @@
+module Crc32Tests
+
+// Crc32 (Sable.IO.Hashing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO.Hashing
+
+import HashingSupport
+import Sable.IO.Hashing
+import Sable.Testing
+
+@test
+fn theCatalogueCheckValues() {
+    let digits = "123456789".utf8Bytes()
+    expect(Crc32.hash(digits) == 0xCBF43926)
+    expect(Crc32.hash(digits, polynomial: .Ieee) == 0xCBF43926)
+    expect(Crc32.hash(digits, polynomial: .Castagnoli) == 0xE3069283)
+    expect(Crc32.hash([]) == 0)
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthOfTheSanityBuffer(_ index: Int) {
+    let bytes = sanityBuffer(vectorLengths[index])
+    expect("\(Crc32.hash(bytes):x)" == vectors["crc32"]![index])
+    expect("\(Crc32.hash(bytes, polynomial: .Castagnoli):x)" == vectors["crc32c"]![index])
+}
+
+@test
+fn piecesOfAnySizeGiveTheSame() {
+    let bytes = sanityBuffer(4160)
+    for sizes in pieceSizes {
+        expect(inPieces(Crc32(), bytes, sizes) { "\($0.value:x)" } == vectors["crc32"]![17])
+        expect(inPieces(Crc32(.Castagnoli), bytes, sizes) { "\($0.value:x)" } == vectors["crc32c"]![17])
+    }
+}
+
+@test
+fn theBytesAreTheLeastSignificantFirst() {
+    var crc = Crc32()
+    crc.update("123456789".utf8Bytes())
+    expect(crc.hashBytes() == [0x26, 0x39, 0xF4, 0xCB])
+    expect(Crc32.hashBytes("123456789".utf8Bytes()) == [0x26, 0x39, 0xF4, 0xCB])
+    expect(Crc32.hashByteCount == 4)
+}
+
+@test
+fn aCopyGoesOnFromWhereItWasMade() {
+    var crc = Crc32(.Castagnoli)
+    crc.update("1234".utf8Bytes())
+    var copy = crc
+    crc.update("56789".utf8Bytes())
+    copy.update("5678".utf8Bytes())
+    expect(crc.value == 0xE3069283)
+    expect(copy.value == Crc32.hash("12345678".utf8Bytes(), polynomial: .Castagnoli))
+    expect(copy.polynomial == .Castagnoli)
+}
+
+@test
+fn resetForgetsWhatWasGivenAndKeepsThePolynomial() {
+    var crc = Crc32(.Castagnoli)
+    crc.update("noise".utf8Bytes())
+    crc.reset()
+    crc.update("123456789".utf8Bytes())
+    expect(crc.value == 0xE3069283)
+}

@@ -56,6 +56,9 @@ static class ShareStores {
             or "array_set_unique" or "array_element_addr_unique" or "simd_store_unique"
         || name.StartsWith("bytes_store_unique_", StringComparison.Ordinal) || name.StartsWith("bytes_store_array_unique_", StringComparison.Ordinal);
 
+    /// <summary>Whether an array builtin works on the place of an inline array, whose elements are where it is.</summary>
+    static bool InInlineArray(BuiltinInst builtin) => builtin.Operands is [{ Type: AddressType { Pointee: FixedArrayType } }, ..];
+
     /// <summary>Whether a value of the type may hold an address, or a closure that does: a closure's context, the closure.</summary>
     static bool MayHold(SilType type) => MayHold(type, []);
 
@@ -84,6 +87,8 @@ static class ShareStores {
             foreach (var instruction in function.Blocks.ToList().SelectMany(static b => b.Instructions)) {
                 var root = instruction switch {
                     RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } type } field => new Root(field, field.Reference, type.LetFields.Contains(field.Field)),
+                    // An inline array's element is part of where the array is, which is followed as that.
+                    BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } element when InInlineArray(element) => null,
                     BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" or "box_project_unique" } element => new Root(element, element.Operands[0], false),
                     GlobalAddrInst global => new Root(global, null, false),
                     _ => null,
@@ -162,7 +167,15 @@ static class ShareStores {
                         // A weak reference shares its object as it is made (sable_weak_entry).
                         case StoreWeakInst when direct:
                         case DestroyAddrInst or DestroyValueInst or EndBorrowInst or DeallocStackInst or ReturnInst or ThrowInst or ClassMethodInst:
-                        case BuiltinInst { Name: var name } when StoresNothing(name):
+                        case BuiltinInst { Name: var name } inPlace when StoresNothing(name) && !InInlineArray(inPlace):
+                            break;
+
+                        // An inline array's element (#304): a part of it, where it is.
+                        case BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } element when direct && InInlineArray(element):
+                            if (element.Type is not AddressType { Pointee.IsTrivial: true } && seen.Add(element)) {
+                                pending.Push((element, true));
+                            }
+
                             break;
 
                         case StoreInst store when ReferenceEquals(store.Value, value):

@@ -1,0 +1,3 @@
+expectation failed: the values are not equivalent: as ordered (<file>:117)
+    lines[1].sku: got "c", expected "c("
+expectation failed: no part of the values is at 'nothing', which was to be left out: as ordered (<file>:117)

@@ -77,8 +77,8 @@ fn anArrayVecIsAValueAndACollection() {
 
 @test
 fn anArrayVecAllocatesItsRoomOnceAtMost() {
-    // One allocation at most, its room's buffer, however much is done to
-    // it: none per element. None at all once T[..N] is laid out inline (#304).
+    // None, however much is done to it: its room is inline, Element[..N]
+    // (#304), and its members over slices borrow it where it is.
     let made = allocations(during: () => {
         var v = ArrayVec<Int, 8>()
         var i = 0
@@ -97,11 +97,11 @@ fn anArrayVecAllocatesItsRoomOnceAtMost() {
         v[0] = total
         _ = v.contains(5)
         v.truncate(to: 2)
-        // A copy shares the room, as an array's copy shares its buffer.
+        // A copy is its elements, copied where it is.
         let copy = v
         _ = copy == v
     })
-    expect(made <= 1, "\(made) allocations")
+    expect(made == 0, "\(made) allocations")
 }
 
 @test(traps: "ArrayVec.append: full, at 2")

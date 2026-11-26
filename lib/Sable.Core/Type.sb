@@ -62,7 +62,7 @@ extension Type: Hashable, Formattable, Debug {
         get {
             let kinds: TypeKind[] = [
                 .Class, .Struct, .Enum, .Union, .Optional, .Tuple, .Function, .Array, .Slice, .Existential, .Metatype, .Scalar, .String,
-                .Reference, .Opaque,
+                .Reference, .Opaque, .InlineArray,
             ]
             return kinds[kindCode - 1]
         }

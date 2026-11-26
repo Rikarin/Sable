@@ -1,0 +1,101 @@
+module FifoTests
+
+// Fifo (Sable.IO): run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Testing
+import Sable.Time
+
+/// A path no other test has, removed afterwards.
+final class FifoPath: Fixture {
+    let path: String
+
+    init() {
+        path = "\(Environment.temporaryDirectory.appending("sable-fifo-\(Int.random(in: 0..<1 << 40))"))"
+    }
+
+    async fn tearDown() throws {
+        try? File.remove(path)
+    }
+}
+
+#if os(windows)
+
+@test
+fn windowsHasNoFifos(fifo: FifoPath) {
+    expectThrows(saying: IoError.Unsupported(what: fifo.path).description()) {
+        try Fifo.create(fifo.path)
+    }
+}
+
+#else
+
+@test
+fn aReaderAndAWriterMeetAtThePath(fifo: FifoPath) async throws {
+    try Fifo.create(fifo.path)
+    assertEqual((try File.metadata(fifo.path)).kind, FileKind.Fifo)
+    assertEqual((try File.metadata(fifo.path)).permissions.mode, 0o600)
+    let reader = try Fifo.openReader(fifo.path)
+    let writer = try await Fifo.openWriter(fifo.path)
+    try await writer.write("through")
+    writer.close()
+    assertEqual(String.fromUtf8Lossy(try await reader.readAll()), "through")
+}
+
+@test
+fn aReaderWaitsForItsFirstWriter(fifo: FifoPath) async throws {
+    try Fifo.create(fifo.path)
+    let reader = try Fifo.openReader(fifo.path)
+    let reading = Task.spawn { () -> U8[>..] in try! await reader.readAll() }
+    try? await Task.sleep(for: Duration.milliseconds(30))
+    let writer = try await Fifo.openWriter(fifo.path)
+    try await writer.write([5, 6])
+    writer.close()
+    assertEqual(await reading.value, [5, 6])
+}
+
+@test
+fn aWriterWaitsForAReaderAsLongAsItIsGiven(fifo: FifoPath) async throws {
+    try Fifo.create(fifo.path)
+    await expectThrows(saying: IoError.TimedOut.description()) {
+        _ = try await Fifo.openWriter(fifo.path, timeout: Duration.milliseconds(20))
+    }
+    let path = fifo.path
+    let waiting = Task.spawn { () -> String in
+        do {
+            _ = try await Fifo.openWriter(path)
+            return "opened"
+        } catch {
+            return error.description()
+        }
+    }
+    try? await Task.sleep(for: Duration.milliseconds(10))
+    waiting.cancel()
+    assertEqual(await waiting.value, IoError.Cancelled.description())
+}
+
+@test
+fn aFifoIsMadeOnce(fifo: FifoPath) throws {
+    try Fifo.create(fifo.path)
+    expectThrows(saying: IoError.AlreadyExists(path: fifo.path).description()) {
+        try Fifo.create(fifo.path)
+    }
+}
+
+@test
+fn whatIsNoFifoIsNotOpenedAsOne(fifo: FifoPath) async throws {
+    expectThrows(saying: IoError.NotFound(path: fifo.path).description()) {
+        _ = try Fifo.openReader(fifo.path)
+    }
+    try File.write(fifo.path, "plain")
+    expectThrows(saying: IoError.InvalidInput(path: fifo.path).description()) {
+        _ = try Fifo.openReader(fifo.path)
+    }
+    expectThrows(saying: IoError.InvalidInput(path: "a\u{0}b").description()) {
+        try Fifo.create("a\u{0}b")
+    }
+}
+
+#endif

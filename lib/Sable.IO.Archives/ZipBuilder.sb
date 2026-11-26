@@ -2,6 +2,7 @@ module Sable.IO.Archives
 
 import Sable.IO
 import Sable.IO.Compression
+import Sable.IO.Hashing
 import Sable.Time
 
 /// What a zip archive's writers write, made in memory a part at a time: every

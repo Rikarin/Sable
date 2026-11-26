@@ -1,0 +1,246 @@
+module MockTests
+
+// Mocks that '@mockable' writes, and what they say when a test's
+// verification fails (Sable.Testing): each case of 'fails' is run in a
+// process of its own, and what it writes is compared with its snapshot.
+// Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+@derive(Debug, Equatable)
+struct Receipt {
+    var id: Int
+}
+
+@derive(Debug, Equatable)
+union PaymentError: Error {
+    Declined
+    Limit(Int)
+}
+
+protocol Store {
+    fn open()
+    var name: String { get }
+}
+
+@mockable
+protocol PaymentGateway: Store {
+    fn charge(amount: Int, to card: String) throws(PaymentError) -> Receipt
+    async fn refund(_ id: Int) throws
+    fn balance() -> Int
+    fn lookup(_ id: Int) -> Receipt?
+    fn note(_ message: @autoclosure () -> String)
+    var currency: String { get set }
+}
+
+@mockable
+public protocol Ticker: Sendable {
+    fn tick() -> Int
+}
+
+fn checkout(_ gateway: any PaymentGateway) -> Int {
+    gateway.open()
+    do {
+        return (try gateway.charge(amount: 100, to: "4242")).id
+    } catch {
+        return -1
+    }
+}
+
+@test
+fn aStubAnswersTheCallsItMatchesInTurn() {
+    let gateway = MockPaymentGateway()
+    gateway.on.charge().returns(Receipt(id: 1)).returns(Receipt(id: 2)).throwing(.Declined)
+    expect(checkout(gateway) == 1)
+    expect(checkout(gateway) == 2)
+    expect(checkout(gateway) == -1)
+    expect(checkout(gateway) == -1)
+}
+
+@test
+fn theLaterStubThatMatchesAnswers() {
+    let gateway = MockPaymentGateway()
+    gateway.on.charge().returns(Receipt(id: 1))
+    gateway.on.charge(amount: .matching("large") { $0 > 1000 }).throwing(.Limit(1000))
+    gateway.on.charge(amount: 7, to: "x").returns(Receipt(id: 7))
+    expect(expectNoThrow { try gateway.charge(amount: 5, to: "a") } == Receipt(id: 1))
+    expectThrows(PaymentError.Limit(1000)) { _ = try gateway.charge(amount: 5000, to: "a") }
+    expect(expectNoThrow { try gateway.charge(amount: 7, to: "x") } == Receipt(id: 7))
+    expect(expectNoThrow { try gateway.charge(amount: 7, to: "y") } == Receipt(id: 1))
+}
+
+@test
+fn aBodyAnswersWithTheArguments() {
+    let gateway = MockPaymentGateway()
+    gateway.on.charge().does { arguments in
+        if arguments.1.isEmpty {
+            throw PaymentError.Declined
+        }
+        return Receipt(id: arguments.0)
+    }
+    expect(expectNoThrow { try gateway.charge(amount: 9, to: "a") } == Receipt(id: 9))
+    expectThrows(PaymentError.Declined) { _ = try gateway.charge(amount: 9, to: "") }
+}
+
+@test
+async fn aMemberThatWaitsIsAnsweredByABodyThatWaits() {
+    let gateway = MockPaymentGateway()
+    gateway.on.refund(.any).does { id in
+        await Task.yield()
+        if id > 3 {
+            throw PaymentError.Declined
+        }
+    }
+    await expectNoThrow { try await gateway.refund(1) }
+    await expectThrows(PaymentError.Declined) { try await gateway.refund(4) }
+    expect(gateway.on.refund(.any).arguments == [1, 4])
+}
+
+@test
+fn aLooseMockAnswersWithTheEmptyValue() {
+    let gateway = MockPaymentGateway()
+    expect(gateway.balance() == 0)
+    expect(gateway.lookup(3) == none)
+    expect(gateway.currency == "")
+    expect(gateway.name == "")
+    gateway.open()
+    gateway.on.balance().returns(5)
+    expect(gateway.balance() == 5)
+}
+
+@test
+fn propertiesAreReadAndWritten() {
+    let gateway = MockPaymentGateway()
+    gateway.on.currency.returns("EUR")
+    gateway.currency = "USD"
+    gateway.currency = "CHF"
+    expect(gateway.currency == "EUR")
+    gateway.on.setCurrency(.equal("USD")).verify(.once)
+    gateway.on.setCurrency().verify(.exactly(2))
+    gateway.on.currency.verify(.once)
+}
+
+// A closure a member is given is kept, and may be called by a stub: in
+// MockableTests.cs, as compiling generic code once for every type cannot
+// yet take a function type for a type parameter's closure.
+@test
+fn anAutoclosureIsWorkedOut() {
+    let gateway = MockPaymentGateway()
+    let ran = 1
+    gateway.note("a \(ran)")
+    expect(gateway.on.note().arguments == ["a 1"])
+}
+
+@test
+fn verificationCountsTheCallsItMatches() {
+    let gateway = MockPaymentGateway()
+    gateway.on.charge().returns(Receipt(id: 1))
+    _ = checkout(gateway)
+    _ = checkout(gateway)
+    gateway.on.charge(amount: 100, to: "4242").verify(.exactly(2))
+    gateway.on.charge(amount: .matching { $0 > 100 }).verify(.never)
+    gateway.on.open().verify(.atLeast(1))
+    gateway.on.open().verify(.between(1, 2))
+    gateway.on.balance().verify(.atMost(0))
+    verifyNoOtherCalls(gateway)
+    expect(gateway.recorder.calls == ["open()", "charge(amount: 100, to: \"4242\")", "open()", "charge(amount: 100, to: \"4242\")"])
+}
+
+@test
+fn callsAreInTheOrderTheyWereMade() {
+    let gateway = MockPaymentGateway()
+    let ticker = MockTicker()
+    gateway.on.charge().throwing(.Declined)
+    _ = ticker.tick()
+    _ = checkout(gateway)
+    _ = ticker.tick()
+    verifyInOrder([ticker.on.tick(), gateway.on.open(), gateway.on.charge(), ticker.on.tick()])
+    verifyInOrder([gateway.on.open(), ticker.on.tick()])
+}
+
+@test
+async fn aSendableMockIsCalledFromAnyTask() {
+    let ticker = MockTicker(.Strict)
+    ticker.on.tick().returns(1)
+    let tasks = (0..<8).map({ _ in
+        Task.spawn { ticker.tick() }
+    }).toArray()
+    var sum = 0
+    for task in tasks {
+        sum += await task.value
+    }
+    expect(sum == 8)
+    ticker.on.tick().verify(.exactly(8))
+}
+
+@test
+fn matchersSayWhatTheyMatch() {
+    expect("\(Matcher<Int>.any)" == "any")
+    expect("\(Matcher.equal("a"))" == "\"a\"")
+    expect("\(Matcher<Int>.not(.equal(3)))" == "not 3")
+    expect(Matcher<Int>.not(.equal(3)).matches(4))
+    expect(Matcher.equivalent(to: Receipt(id: 1)).matches(Receipt(id: 1)))
+    expect(!Matcher.equivalent(to: Receipt(id: 1)).matches(Receipt(id: 2)))
+    expect("\(Times.once) \(Times.never) \(Times.exactly(3)) \(Times.atLeastOnce) \(Times.atLeast(2)) \(Times.atMost(1)) \(Times.atMost(4)) \(Times.between(1, 3))"
+        == "once never 3 times at least once at least 2 times at most once at most 4 times 1 to 3 times")
+}
+
+// A test that fails as it is asked to by a variable, and passes when it is
+// not asked: run by 'whatAFailureSays', in a process of its own.
+@test
+async fn fails() {
+    let gateway = MockPaymentGateway()
+    let ticker = MockTicker(.Strict)
+    match Runtime.environment("SABLE_TESTING_FAILS") ?? "" {
+        case "verify" => {
+            gateway.on.charge().returns(Receipt(id: 1))
+            _ = checkout(gateway)
+            _ = try? gateway.charge(amount: 5, to: "x")
+            gateway.on.charge(amount: .equal(100)).verify(.never)
+            gateway.on.balance().verify()
+        }
+        case "no other calls" => {
+            gateway.on.charge().returns(Receipt(id: 1))
+            _ = checkout(gateway)
+            gateway.on.open().verify()
+            verifyNoOtherCalls(gateway)
+        }
+        case "in order" => {
+            gateway.on.charge().returns(Receipt(id: 1))
+            _ = checkout(gateway)
+            verifyInOrder([gateway.on.charge(), gateway.on.open()])
+        }
+        case "strict"   => _ = ticker.tick()
+        case "no value" => _ = try? gateway.charge(amount: 1, to: "x")
+        case "waits" => {
+            gateway.on.balance().does { _ in
+                await Task.yield()
+                return 1
+            }
+            _ = gateway.balance()
+        }
+        case _ => { }
+    }
+}
+
+@test(arguments: ["verify", "no other calls", "in order", "strict", "no value", "waits"])
+fn whatAFailureSays(_ which: String) {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return
+    }
+    unsafe {
+        _ = Runtime.setEnvironment("SABLE_TESTING_FAILS", which)
+    }
+    _ = require(Runtime.run(program, ["--run-test", "MockTests.fails"], ""))
+    let errors = Runtime.lastErrorOutput()
+    expect(Runtime.lastExitStatus() == 134, errors)
+    var said: String[>..] = []
+    for line in errors.lines() {
+        if line.hasPrefix("    ") || line.hasPrefix("expectation failed: ") {
+            said.append(line.replacing(#file, with: "<file>"))
+        }
+    }
+    assertSnapshot(said.joined(separator: "\n"))
+}

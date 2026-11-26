@@ -8,7 +8,7 @@ import Sable.Testing
 
 fn blend(_ from: Quaternion[:], _ to: Quaternion[:], _ amount: F32, _ pose: inout Quaternion[:]) {
     for i in 0..<from.count {
-        pose[i] = from[i].nlerp(to: to[i], amount)
+        pose[i] = from[i].nlerp(to: to[i], by: amount)
     }
     for i in 1..<from.count {
         pose[i] = pose[i] * pose[i / 2]
@@ -17,7 +17,7 @@ fn blend(_ from: Quaternion[:], _ to: Quaternion[:], _ amount: F32, _ pose: inou
 
 fn steady(_ from: Quaternion[:], _ to: Quaternion[:], _ amount: F32, _ pose: inout Quaternion[:]) {
     for i in 0..<from.count {
-        pose[i] = from[i].slerp(to: to[i], amount)
+        pose[i] = from[i].slerp(to: to[i], by: amount)
     }
 }
 

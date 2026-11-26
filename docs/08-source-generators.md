@@ -108,7 +108,7 @@ The standard library's modules have generators too, in
 `lib/<Module>/generators/`, embedded in the compiler (`LibraryGenerators`).
 They run for every package with a file that imports the module, and their
 attributes are known in the files that do: Sable.DependencyInjection's
-`@injectable` and `@container`.
+`@injectable` and `@container`, and Sable.Testing's `@mockable`.
 
 So writing `@json` in your package takes one thing: depending on the package
 whose generator answers to `json`. A transitive dependency's generators do not
@@ -117,8 +117,8 @@ package compiles to.
 
 A generator is given the declarations that carry its attribute:
 
-- structs, classes, actors, unions and enums, at the top level of a file or
-  nested in another type, and
+- structs, classes, actors, unions, enums and protocols, at the top level of
+  a file or nested in another type, and
 - functions at the top level of a file, and methods in a type or an
   extension.
 
@@ -134,7 +134,7 @@ not the compiler's symbols:
 
 | Member | What it is |
 |---|---|
-| `keyword` | How it is declared: `"struct"`, `"class"`, `"actor"`, `"union"`, `"enum"` or `"fn"` |
+| `keyword` | How it is declared: `"struct"`, `"class"`, `"actor"`, `"union"`, `"enum"`, `"protocol"` or `"fn"` |
 | `name` | Its name, as declared (`typeName` adds a type's generic parameters) |
 | `container` | For a nested type or a method, the type it is in, as `Outer.Inner`; otherwise `""` |
 | `moduleName` | The module of the file it is in |
@@ -147,7 +147,8 @@ not the compiler's symbols:
 | `attributes` | Every attribute on the declaration |
 | `type`, `supertypes` | A type as a `TypeRef`, with its generic parameters as its arguments, and what it derives from and conforms to, with theirs |
 | `constraints` | What a type's generic parameters must be: each `parameter`, and the `type` |
-| `initializers`, `methods` | A type's own, each a `Member`: name, modifiers, effects, parameters, what it returns, its attributes. With no initialiser declared, the memberwise one |
+| `initializers`, `methods` | A type's own, each a `Member`: name, modifiers, effects, parameters, what it returns, its attributes. With no initialiser declared, the memberwise one. A protocol's `methods` are its requirements and those of the protocols it refines, each with the protocol it is from (`declaredIn`), whether it is `mutating`, what it throws (`thrown`), its own generic parameters, and its parameters' `modifier`, `isVariadic`, `isAutoclosure` and `isEscaping`; an initialiser, operator or subscript it requires is among them, by its `keyword` |
+| `properties` | A protocol's required properties (`"var"`, with their type as `returned` and `isSettable`) and associated types (`"associatedtype"`), those of the protocols it refines among them |
 | `isFinal` | Whether nothing derives from it |
 | `packageName` | A dependency's declaration's package (§8.1, `with:`), or `""` |
 | `fields` | A type's stored fields: name, type, `var` or `let`, whether it has a default, its attributes |

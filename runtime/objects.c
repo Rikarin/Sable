@@ -26,6 +26,7 @@ enum {
     SABLE_KIND_STRING = 13,
     SABLE_KIND_REFERENCE = 14,
     SABLE_KIND_OPAQUE = 15,
+    SABLE_KIND_INLINE_ARRAY = 16, // T[k] or T[..k]: elements held where the value is; its argument is the element
 };
 
 enum {

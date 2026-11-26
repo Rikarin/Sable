@@ -1,0 +1,77 @@
+module Sable.IO.Ipc
+
+import Sable.IO
+import Sable.Time
+
+/// A lock that processes share by a name: .NET's named `Mutex`. One holder
+/// at a time, whatever process or task it is in; a process that ends holding
+/// it lets it go, as .NET's abandoned mutex is. It is a file of this user's
+/// (in a directory of their own on POSIX, their temporary directory on
+/// Windows) held with `flock` or opened to be shared with no one, so it is
+/// shared by one user's processes.
+///
+/// A lock suspends the task, not its thread, looking again in a while: a
+/// waiter may wait up to a hundredth of a second more than it must. Not
+/// reentrant: a holder that locks it again waits for itself. The name is up
+/// to 64 letters, digits, '.', '_' and '-'. Deeply immutable, so Sendable.
+///
+/// ```sable
+/// fn once() async throws(IoError) {
+///     let mutex = try NamedMutex(name: "sable-mutex-example")
+///     let held = try await mutex.lock()
+///     assert(try mutex.tryLock() == none)
+///     held.unlock()
+///     assert(try mutex.tryLock() != none)
+/// }
+/// ```
+@immutable
+public final class NamedMutex: Sendable {
+    /// Its name.
+    public let name: String
+
+    /// The file it is.
+    public let path: String
+
+    /// The mutex of the name: nothing is held yet.
+    public init(name: String) throws(IoError) {
+        try checkName(name, most: 64)
+        self.name = name
+        self.path = "\(try localDirectory(anyUser: false))/\(name).lock"
+    }
+
+    /// Held, if no one holds it: its guard, or none.
+    public fn tryLock() throws(IoError) -> NamedMutexGuard? {
+        let handle = withBytes(path) { (at: RawPtr<U8>, count: Int) -> Int in
+            unsafe {
+                return lockTry(at, count)
+            }
+        }
+        if handle == -1 {
+            return none
+        }
+        if handle < 0 {
+            throw IoError.lastSystemError(path)
+        }
+        return NamedMutexGuard(handle: handle)
+    }
+
+    /// Held, waiting while another holds it (as long as the timeout, if
+    /// there is one, then TimedOut). A task cancelled while it waits throws
+    /// Cancelled, holding nothing.
+    public fn lock(timeout: Duration? = none) async throws(IoError) -> NamedMutexGuard {
+        let start = Instant.now()
+        var times = 0
+        while true {
+            if let held = try tryLock() {
+                return held
+            }
+            if let limit = timeout {
+                if start.elapsed >= limit {
+                    throw IoError.TimedOut
+                }
+            }
+            try await pause(times)
+            times += 1
+        }
+    }
+}

@@ -436,6 +436,15 @@ members, not conformances — SYNTAX.md §11):
   fit: `U8[:]`'s `contains`, `firstIndex(of:)`, `firstIndex(ofAny:)` and
   `count(of:)` are the runtime's vectorised byte search. Generic code over
   `T[:]` calls the generic member.
+- **`T[k]` and `T[..k]` hold their elements where they are** (docs/02 §2.5,
+  "Inline arrays"): `T[k]` has exactly k, made from a literal of k; `T[..k]`
+  grows within its bound with `append`, `removeLast` and `clear`, and
+  `append` past the bound traps. Every member of `T[:]` is theirs, the array
+  lent to it where it is. An inline array is a value of its element's
+  conformances as every array is, and its size is part of its type:
+  `Int[4]` and `Int[5]` are different types, and generic code that holds
+  one (`T[4]`) is copied for each element type, as code over a value
+  parameter is (docs/06 §6.2). An inline array takes at most 64 KiB (S7004).
 - **`T[>..]` grows at its end and nowhere else**: `append`,
   `append(contentsOf:)`, `reserveCapacity`, `capacity`, and, at the end,
   `removeLast` and `clear`. It does not insert or remove in the middle:

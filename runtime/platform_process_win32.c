@@ -202,7 +202,9 @@ static int64_t pipe_read(PlatformPipe from, void *bytes, int64_t size) {
 
         if (!pipe->pending) {
             pipe_operation(pipe);
-            if (!ReadFile(pipe->handle, pipe->bytes, WIN_PIPE_BUFFER, NULL, &pipe->operation) && GetLastError() != ERROR_IO_PENDING) {
+            // A message longer than the buffer is read in parts (a named pipe's in message mode).
+            if (!ReadFile(pipe->handle, pipe->bytes, WIN_PIPE_BUFFER, NULL, &pipe->operation) && GetLastError() != ERROR_IO_PENDING
+                && GetLastError() != ERROR_MORE_DATA) {
                 result = pipe_broken(GetLastError()) ? 0 : IO_FAILED;
                 break;
             }
@@ -211,7 +213,7 @@ static int64_t pipe_read(PlatformPipe from, void *bytes, int64_t size) {
         }
 
         DWORD got = 0;
-        if (!GetOverlappedResult(pipe->handle, &pipe->operation, &got, FALSE)) {
+        if (!GetOverlappedResult(pipe->handle, &pipe->operation, &got, FALSE) && GetLastError() != ERROR_MORE_DATA) {
             DWORD code = GetLastError();
             if (code == ERROR_IO_INCOMPLETE) {
                 result = IO_WOULD_BLOCK;
@@ -400,6 +402,10 @@ static bool open_stream(const ProcessSpec *spec, int which, HANDLE *stream, Plat
         free(name);
         break;
     }
+    case STDIO_HANDLE:
+        // A copy to be inherited, closed after as the others are: the handle stays this program's.
+        return DuplicateHandle(GetCurrentProcess(), (HANDLE)spec->handles[which], GetCurrentProcess(), stream, 0, TRUE, DUPLICATE_SAME_ACCESS)
+               || process_failed(error, PROCESS_ERROR_FILE, which);
     default:
         return open_pipe(which, stream, pipe) || process_failed(error, PROCESS_ERROR_OTHER, (int64_t)GetLastError());
     }

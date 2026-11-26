@@ -1,0 +1,61 @@
+module Sable.Testing
+
+/// Which arguments a mock's stub answers, or its verification counts: any,
+/// one equal to a value, or those a predicate holds of. What `@mockable`'s
+/// `on` takes for each parameter.
+///
+/// ```sable
+/// let positive = Matcher<Int>.matching("positive") { $0 > 0 }
+/// assert(positive.matches(3) && !positive.matches(-3))
+/// assert(Matcher<Int>.any.matches(-3))
+/// assert(Matcher.equal("a").matches("a"))
+/// assert("\(positive)" == "positive")
+/// ```
+public struct Matcher<T>: Formattable {
+    let predicate: (T) -> Bool
+    let text: String
+
+    /// One that the predicate says, described so in what a failure says.
+    public init(_ description: String, _ predicate: @escaping (T) -> Bool) {
+        self.predicate = predicate
+        text = description
+    }
+
+    /// Whether the value is one it matches.
+    public fn matches(_ value: T) -> Bool {
+        return predicate(value)
+    }
+
+    /// Every value.
+    public static var `any`: Matcher<T> => Matcher<T>("any", { _ in true })
+
+    /// The values the predicate holds of.
+    public static fn matching(_ description: String = "matching", _ predicate: @escaping (T) -> Bool) -> Matcher<T> {
+        return Matcher<T>(description, predicate)
+    }
+
+    /// The values the other does not match.
+    public static fn not(_ other: Matcher<T>) -> Matcher<T> {
+        return Matcher<T>("not \(other.text)", { !other.predicate($0) })
+    }
+
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(text)
+    }
+}
+
+extension Matcher where T: Equatable {
+    /// The value, and those equal to it.
+    public static fn equal(_ value: T) -> Matcher<T> {
+        return Matcher<T>("\(value:?)", { $0 == value })
+    }
+}
+
+extension Matcher where T: Debug {
+    /// The values that say the same of themselves as this one, part by part,
+    /// as `expectEquivalent` compares them: of a type that is not Equatable.
+    public static fn equivalent(to value: T) -> Matcher<T> {
+        let wanted = value.debugDescription()
+        return Matcher<T>("equivalent to \(wanted)", { $0.debugDescription() == wanted })
+    }
+}

@@ -1,5 +1,7 @@
 module Sable.IO.Compression
 
+import Sable.IO.Hashing
+
 // A dictionary trained: the runs of the samples whose eight-byte strings are in
 // the most of them, chosen one after another, what one has no longer counted
 // for the next (as zstd's 'fastcover' does); and before them the codes of what

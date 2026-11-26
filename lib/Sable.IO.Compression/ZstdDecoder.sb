@@ -1,5 +1,7 @@
 module Sable.IO.Compression
 
+import Sable.IO.Hashing
+
 /// Zstandard (RFC 8878) decompressed as it comes: every frame of it, each
 /// one's checksum checked where it has one, skippable frames passed over.
 /// .NET's `ZstandardDecoder`.

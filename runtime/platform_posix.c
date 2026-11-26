@@ -1718,6 +1718,11 @@ static bool socket_name(PlatformSocket socket, bool peer, PlatformAddress *addre
     return true;
 }
 
+// macOS names it only for RFC 3542's API; it is the same number on Linux.
+#ifndef IPV6_DONTFRAG
+#define IPV6_DONTFRAG 62
+#endif
+
 #if defined(__APPLE__)
 #define SOCKET_KEEP_IDLE TCP_KEEPALIVE
 #define SOCKET_LINGER SO_LINGER_SEC
@@ -1762,6 +1767,15 @@ static bool socket_set_option(PlatformSocket socket, int option, int64_t value) 
             done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_UNICAST_HOPS, number) : socket_set(fd, IPPROTO_IP, IP_TTL, number);
             break;
         case NET_OPTION_BROADCAST: done = socket_set(fd, SOL_SOCKET, SO_BROADCAST, number); break;
+        case NET_OPTION_DONT_FRAGMENT:
+#if defined(__linux__)
+            done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_DONTFRAG, number != 0)
+                       : socket_set(fd, IPPROTO_IP, IP_MTU_DISCOVER, number != 0 ? IP_PMTUDISC_DO : IP_PMTUDISC_DONT);
+#else
+            done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_DONTFRAG, number != 0) : socket_set(fd, IPPROTO_IP, IP_DONTFRAG, number != 0);
+#endif
+            break;
+        case NET_OPTION_HEADER_INCLUDED: done = !six && socket_set(fd, IPPROTO_IP, IP_HDRINCL, number != 0); errno = six ? EINVAL : errno; break;
         case NET_OPTION_MULTICAST_LOOP: {
             unsigned char loop = number != 0;
             done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, number != 0)
@@ -1797,8 +1811,50 @@ static bool socket_set_option(PlatformSocket socket, int option, int64_t value) 
     return done;
 }
 
+// The process, or the user, at the other end of a Unix domain socket: as
+// it was when it connected.
+static bool socket_peer(int fd, bool user, int64_t *value) {
+#if defined(__linux__)
+    struct ucred credentials;
+    socklen_t length = sizeof credentials;
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    *value = user ? (int64_t)credentials.uid : (int64_t)credentials.pid;
+    return true;
+#else
+    if (user) {
+        uid_t uid;
+        gid_t gid;
+        if (getpeereid(fd, &uid, &gid) != 0) {
+            socket_fail();
+            return false;
+        }
+
+        *value = uid;
+        return true;
+    }
+
+    pid_t pid = -1;
+    socklen_t length = sizeof pid;
+    if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    *value = pid;
+    return true;
+#endif
+}
+
 static bool socket_get_option(PlatformSocket socket, int option, int64_t *value) {
     int fd = (int)socket;
+    if (option == NET_OPTION_PEER_PROCESS || option == NET_OPTION_PEER_USER) {
+        return socket_peer(fd, option == NET_OPTION_PEER_USER, value);
+    }
+
     struct sockaddr_storage at;
     socklen_t length = sizeof at;
     memset(&at, 0, sizeof at);
@@ -2228,3 +2284,4 @@ static bool random_bytes(void *buffer, size_t length) {
 // ---- The terminal ----------------------------------------------------------
 
 #include "platform_terminal_posix.c"
+#include "platform_ipc_posix.c"

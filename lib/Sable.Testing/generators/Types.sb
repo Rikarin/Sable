@@ -1,0 +1,117 @@
+module TestingGenerators
+
+import Sable.Generators
+import Sable.Text
+
+// The types a generated file names, and the modules they are found in.
+struct TypeWriter {
+    let moduleName: String
+    var imports: String[>..] = []
+
+    init(in moduleName: String) {
+        self.moduleName = moduleName
+    }
+
+    // A type as code in the module writes it.
+    mutating fn source(_ type: TypeRef) -> String {
+        note(type)
+        return spelled(type, moduleName)
+    }
+
+    mutating fn note(_ type: TypeRef) {
+        add(type.moduleName)
+        for argument in type.arguments {
+            note(argument)
+        }
+    }
+
+    mutating fn add(_ name: String) {
+        if !name.isEmpty && name != moduleName && name != "Sable.Core" && !imports.contains(name) {
+            imports.append(name)
+        }
+    }
+
+    fn importLines() -> String {
+        let text = TextBuilder()
+        for name in imports {
+            text.appendLine("import \(name)")
+        }
+        return text.build()
+    }
+}
+
+// What is made of more than a name, where brackets or a member follow it.
+fn grouped(_ text: String, _ type: TypeRef) -> String {
+    return type.kind == "protocol" || type.kind == "function" ? "(\(text))" : text
+}
+
+fn spelled(_ type: TypeRef, _ moduleName: String) -> String {
+    let inner = type.arguments.map { spelled($0, moduleName) }.toArray()
+    if type.kind == "optional" {
+        return grouped(inner[0], type.arguments[0]) + "?"
+    }
+    if type.kind == "array" {
+        return grouped(inner[0], type.arguments[0]) + type.suffix
+    }
+    if type.kind == "dictionary" {
+        return "[\(inner[0]): \(inner[1])]"
+    }
+    if type.kind == "tuple" {
+        return "(" + inner.joined(separator: ", ") + ")"
+    }
+    if type.kind == "function" && !inner.isEmpty {
+        var given = inner
+        let result = given.removeLast()
+        let waits = type.suffix.contains("async") ? "async " : ""
+        let throwing = type.suffix.contains("throws") ? "throws " : ""
+        return "\(waits)(" + given.joined(separator: ", ") + ") \(throwing)-> \(result)"
+    }
+    if type.kind == "parameter" || type.kind == "unresolved" {
+        return type.text.isEmpty ? type.name : type.text
+    }
+    var name = type.qualifiedName.isEmpty ? type.name : type.qualifiedName
+    if !type.moduleName.isEmpty && type.moduleName != moduleName && type.moduleName != "Sable.Core" {
+        name = type.moduleName + "." + name
+    }
+    if type.kind == "protocol" {
+        name = "any " + name
+    }
+    return inner.isEmpty ? name : name + "<" + inner.joined(separator: ", ") + ">"
+}
+
+// What a loose mock answers with where no stub does, as code: none where
+// the type has no such value.
+fn emptyValue(_ type: TypeRef?) -> String? {
+    guard let type = type else {
+        return "()"
+    }
+    if type.kind == "optional" {
+        return "none"
+    }
+    if type.kind == "array" {
+        return type.suffix == "[>..]" || type.suffix == "[>..<]" ? "[]" : none
+    }
+    if type.kind == "dictionary" {
+        return "[:]"
+    }
+    if type.moduleName != "Sable.Core" && type.moduleName != "" {
+        return none
+    }
+    for name in ["Int", "I8", "I16", "I32", "I64", "I128", "UInt", "U8", "U16", "U32", "U64", "U128"] {
+        if type.name == name {
+            return "0"
+        }
+    }
+    for name in ["F16", "F32", "F64"] {
+        if type.name == name {
+            return "0.0"
+        }
+    }
+    if type.name == "Bool" {
+        return "false"
+    }
+    if type.name == "String" {
+        return "\"\""
+    }
+    return none
+}

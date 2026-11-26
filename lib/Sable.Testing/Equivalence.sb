@@ -1,0 +1,268 @@
+module Sable.Testing
+
+/// Which parts of two values `expectEquivalent` compares, and how.
+///
+/// A part is named by its path: `total`, `customer.name`, `lines[2].price`,
+/// `byCode["a"].price`. In an excluded path, `[*]` is every index or key,
+/// and one that begins with `**.` is of a part however deep it is.
+///
+/// ```sable
+/// @derive(Debug)
+/// struct Order {
+///     var id: Int
+///     var codes: String[>..]
+/// }
+/// expectEquivalent(Order(id: 7, codes: ["a", "b"]), Order(id: 1, codes: ["b", "a"])) {
+///     $0.exclude(\.id)
+///     $0.ignoresOrder = true
+/// }
+/// ```
+public struct Equivalence<T> {
+    /// Whether arrays, at any depth, are compared as their elements in no order.
+    public var ignoresOrder: Bool = false
+    var excluded: String[>..] = []
+
+    init() { }
+
+    /// Leaves a part out.
+    public mutating fn exclude<V>(_ path: KeyPath<T, V>) {
+        excluded.append(path.path)
+    }
+
+    /// Leaves out every part the path is of: `"lines[*].id"`, `"**.id"`.
+    public mutating fn exclude(_ path: String) {
+        excluded.append(path)
+    }
+}
+
+/// Where two described values differ.
+final class Differences {
+    let ignoresOrder: Bool
+    let excluded: String[>..]
+    // Which of the excluded paths were come across.
+    var met: Bool[>..]
+    let leftName: String
+    let rightName: String
+    var found: String[>..] = []
+
+    init(_ leftName: String, _ rightName: String, excluding excluded: String[>..] = [], ignoresOrder: Bool = false) {
+        self.excluded = excluded
+        self.ignoresOrder = ignoresOrder
+        self.leftName = leftName
+        self.rightName = rightName
+        met = []
+        for _ in excluded {
+            met.append(false)
+        }
+    }
+
+    // The excluded paths that name no part, and should: those that say which.
+    var unmet: String[>..] {
+        get {
+            var paths: String[>..] = []
+            for (i, path) in excluded.enumerated() {
+                if !met[i] && !path.contains("[*]") && !path.hasPrefix("**.") {
+                    paths.append(path)
+                }
+            }
+            return paths
+        }
+    }
+
+    fn isExcluded(_ path: String) -> Bool {
+        var excludes = false
+        for (i, pattern) in excluded.enumerated() {
+            if Differences.matches(path, pattern) {
+                met[i] = true
+                excludes = true
+            }
+        }
+        return excludes
+    }
+
+    static fn matches(_ path: String, _ pattern: String) -> Bool {
+        if path == pattern {
+            return true
+        }
+        let general = withEveryIndex(path)
+        if pattern.hasPrefix("**.") {
+            let last = pattern.slice(from: 3, to: pattern.count)
+            return general == last || general.hasSuffix("." + last) || general.hasSuffix("]" + last)
+        }
+        return pattern.contains("[*]") && general == pattern
+    }
+
+    // The path with every index and key written '[*]'.
+    static fn withEveryIndex(_ path: String) -> String {
+        var made = ""
+        var depth = 0
+        var isQuoted = false
+        var isEscaped = false
+        for c in path {
+            if isQuoted {
+                isQuoted = isEscaped || c != '"'
+                isEscaped = !isEscaped && c == '\\'
+            } else if depth > 0 && c == '"' {
+                isQuoted = true
+            } else if c == '[' {
+                depth += 1
+                if depth == 1 {
+                    made += "[*]"
+                }
+            } else if c == ']' {
+                depth -= 1
+            } else if depth == 0 {
+                made += String.fromChar(c)
+            }
+        }
+        return made
+    }
+
+    fn differ(_ path: String, _ left: DescribedValue, _ right: DescribedValue) {
+        found.append("\(path.isEmpty ? "the value" : path): \(leftName) \(shown(left.text)), \(rightName) \(shown(right.text))")
+    }
+
+    fn only(_ path: String, _ name: String, _ value: DescribedValue) {
+        found.append("\(path): \(name) \(shown(value.text)), \(name == leftName ? rightName : leftName) nothing")
+    }
+
+    // Long text, shortened.
+    fn shown(_ text: String) -> String {
+        return text.count > 120 ? text.slice(from: 0, to: 117) + "..." : text
+    }
+
+    fn compare(_ path: String, _ left: DescribedValue, _ right: DescribedValue) {
+        if !excluded.isEmpty && isExcluded(path) {
+            return
+        }
+        if excluded.isEmpty && !ignoresOrder && left.text == right.text {
+            return
+        }
+        if left.kind != right.kind {
+            differ(path, left, right)
+            return
+        }
+        match left.kind {
+            case .Whole => {
+                if left.text != right.text {
+                    differ(path, left, right)
+                }
+            }
+            case .Parts => {
+                if left.name != right.name {
+                    differ(path, left, right)
+                } else if left.isUnordered && right.isUnordered {
+                    compareUnordered(path, left.values[0], right.values[0])
+                } else {
+                    compareParts(path, left, right)
+                }
+            }
+            case .Elements => {
+                if ignoresOrder {
+                    compareUnordered(path, left, right)
+                } else {
+                    compareElements(path, left, right)
+                }
+            }
+            case .Entries => compareEntries(path, left, right)
+        }
+    }
+
+    fn partPath(_ path: String, _ value: DescribedValue, _ index: Int) -> String {
+        let label = value.labels[index].isEmpty ? "\(index)" : value.labels[index]
+        return path.isEmpty ? label : "\(path).\(label)"
+    }
+
+    fn compareParts(_ path: String, _ left: DescribedValue, _ right: DescribedValue) {
+        if left.labels != right.labels {
+            differ(path, left, right)
+            return
+        }
+        for i in 0..<left.values.count {
+            compare(partPath(path, left, i), left.values[i], right.values[i])
+        }
+    }
+
+    fn compareElements(_ path: String, _ left: DescribedValue, _ right: DescribedValue) {
+        let common = left.values.count < right.values.count ? left.values.count : right.values.count
+        for i in 0..<common {
+            compare("\(path)[\(i)]", left.values[i], right.values[i])
+        }
+        for i in common..<left.values.count {
+            only("\(path)[\(i)]", leftName, left.values[i])
+        }
+        for i in common..<right.values.count {
+            only("\(path)[\(i)]", rightName, right.values[i])
+        }
+    }
+
+    // Whether the two are the same, with what is found left as it was.
+    fn same(_ path: String, _ left: DescribedValue, _ right: DescribedValue) -> Bool {
+        let before = found
+        found = []
+        compare(path, left, right)
+        let isSame = found.isEmpty
+        found = before
+        return isSame
+    }
+
+    // To be the same is transitive, so that any of the right's elements that
+    // is the same as the left's will do.
+    fn compareUnordered(_ path: String, _ left: DescribedValue, _ right: DescribedValue) {
+        var taken: Bool[>..] = []
+        for _ in right.values {
+            taken.append(false)
+        }
+        var alone: Int[>..] = []
+        for i in 0..<left.values.count {
+            var isFound = false
+            var j = 0
+            while j < right.values.count && !isFound {
+                if !taken[j] && same("\(path)[\(i)]", left.values[i], right.values[j]) {
+                    taken[j] = true
+                    isFound = true
+                }
+                j += 1
+            }
+            if !isFound {
+                alone.append(i)
+            }
+        }
+        for i in alone {
+            only("\(path)[\(i)]", leftName, left.values[i])
+        }
+        for j in 0..<right.values.count {
+            if !taken[j] {
+                only("\(path)[\(j)]", rightName, right.values[j])
+            }
+        }
+    }
+
+    fn compareEntries(_ path: String, _ left: DescribedValue, _ right: DescribedValue) {
+        for (i, key) in left.labels.enumerated() {
+            if let at = right.labels.firstIndex(of: key) {
+                compare("\(path)[\(key)]", left.values[i], right.values[at])
+            } else if !isExcluded("\(path)[\(key)]") {
+                only("\(path)[\(key)]", leftName, left.values[i])
+            }
+        }
+        for (i, key) in right.labels.enumerated() {
+            if !left.labels.contains(key) && !isExcluded("\(path)[\(key)]") {
+                only("\(path)[\(key)]", rightName, right.values[i])
+            }
+        }
+    }
+
+    // A line for each difference, ten at most.
+    fn report(_ indent: String) -> String {
+        var lines: String[>..] = []
+        for line in found {
+            if lines.count == 10 {
+                lines.append("\(indent)and \(found.count - 10) more")
+                break
+            }
+            lines.append(indent + line)
+        }
+        return lines.joined(separator: "\n")
+    }
+}

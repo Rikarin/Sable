@@ -208,10 +208,10 @@ public struct Quaternion: Hashable, Sendable {
     ///
     /// ```sable
     /// let to = Quaternion(axis: Vector3.up, angle: 1)
-    /// assert(nearEqual(Quaternion.identity.slerp(to: to, 0.25).angle, 0.25, tolerance: 0.00001))
+    /// assert(nearEqual(Quaternion.identity.slerp(to: to, by: 0.25).angle, 0.25, tolerance: 0.00001))
     /// ```
-    public fn slerp(to other: Quaternion, _ amount: F32) -> Quaternion {
-        let t = saturated(amount)
+    public fn slerp(to other: Quaternion, by amount: F32) -> Quaternion {
+        let t = saturate(amount)
         let product = dot(other)
         // q and -q are the same rotation, and one of them is the nearer.
         let sign: F32 = product < 0 ? -1 : 1
@@ -233,14 +233,14 @@ public struct Quaternion: Hashable, Sendable {
     /// The rotation so far from this one to the other, in a line by the
     /// shorter way and made unit: near `slerp` for the small steps of a
     /// blend, and cheaper; the amount is held to 0...1.
-    public fn nlerp(to other: Quaternion, _ amount: F32) -> Quaternion {
+    public fn nlerp(to other: Quaternion, by amount: F32) -> Quaternion {
         let sign: F32 = dot(other) < 0 ? -1 : 1
-        return lerp(to: other * sign, saturated(amount)).normalized()
+        return lerp(to: other * sign, by: saturate(amount)).normalized()
     }
 
     /// The components so far from these to the other's, as they are: neither
     /// by the shorter way nor made unit.
-    public fn lerp(to other: Quaternion, _ amount: F32) -> Quaternion => self + (other - self) * amount
+    public fn lerp(to other: Quaternion, by amount: F32) -> Quaternion => self + (other - self) * amount
 
     /// Whether the two turn alike, q and -q among them: the dot product of
     /// the two made unit within the tolerance of 1.

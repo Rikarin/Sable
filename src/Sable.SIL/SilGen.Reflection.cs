@@ -63,7 +63,7 @@ public sealed partial class SilGen {
             (_, ScalarType) => Shape.Scalar,
             (OptionalTypeSymbol, EnumType) => Shape.Optional,
             (TupleTypeSymbol, TupleType) => Shape.Tuple,
-            (ArrayTypeSymbol, ArrayType or SliceType) => Shape.Array,
+            (ArrayTypeSymbol, ArrayType or SliceType or FixedArrayType) => Shape.Array,
             (NamedTypeSymbol named, StructType { IsInline: false }) when Core.IsDictionary(named) => Shape.Dictionary,
             (NamedTypeSymbol { TypeKind: TypeKind.Struct }, StructType { IsInline: false }) => Shape.Struct,
             (NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } named, ClassType) when !named.OriginalDefinition.Equals(Core.Task) => Shape.Class,

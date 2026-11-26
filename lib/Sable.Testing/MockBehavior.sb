@@ -1,0 +1,8 @@
+module Sable.Testing
+
+/// Whether a mock answers a call no stub does with the value its type has
+/// (`Loose`), or fails the test (`Strict`).
+public enum MockBehavior {
+    Loose
+    Strict
+}

@@ -175,6 +175,40 @@ public sealed partial class SilGen {
                     return target;
                 }
 
+                // A bounded array of the block's, read as the inline array it
+                // is outside one (#304): its elements, each read from the
+                // view as a loop over it reads them, appended in order.
+                case InlineArrayType { Capacity: { } } when LowerType(at.Type) is FixedArrayType { IsBounded: true } bounded: {
+                    var element = bounded.Element;
+                    var read = InlineOf(element) is not null ? "inline_copy" : "inline_load";
+                    var elementPointer = new InlinePointerType(element);
+                    var made = NewSlot(bounded);
+                    Emit(new StoreInst(Builtin("array_empty", bounded), made, StoreKind.Init));
+                    var count = Builtin("inline_count", SilType.Int, pointer);
+                    var counter = NewSlot(SilType.Int);
+                    Emit(new StoreInst(Emit(new IntegerLiteralInst(SilType.Int, 0)), counter, StoreKind.Init));
+                    var cursor = NewSlot(elementPointer);
+                    Emit(new StoreInst(Builtin("inline_first", elementPointer, pointer), cursor, StoreKind.Init));
+
+                    var header = function.AddBlock();
+                    var body = function.AddBlock();
+                    var after = function.AddBlock();
+                    Branch(header);
+
+                    _current = header;
+                    Jump(new CondBranchInst(Builtin("cmp_lt_Int", SilType.Bool, Emit(new LoadInst(counter)), count), body, [], after, []));
+
+                    _current = body;
+                    Builtin("array_append", SilType.Unit, made, Builtin(read, element, Emit(new LoadInst(cursor))));
+                    Emit(new StoreInst(Builtin("inline_next", elementPointer, pointer, Emit(new LoadInst(cursor))), cursor, StoreKind.Init));
+                    var one = Emit(new IntegerLiteralInst(SilType.Int, 1));
+                    Emit(new StoreInst(Builtin("add_Int", SilType.Int, Emit(new LoadInst(counter)), one), counter, StoreKind.Init));
+                    Branch(header);
+
+                    _current = after;
+                    return Emit(new LoadInst(made, LoadKind.Take));
+                }
+
                 default:
                     return Missing(at, $"'{Describe(at.Syntax)}' as a value — iterate it, or read its count");
             }

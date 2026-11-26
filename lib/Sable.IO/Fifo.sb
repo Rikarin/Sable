@@ -1,0 +1,85 @@
+module Sable.IO
+
+import Sable.Time
+
+/// A named pipe in the file system (POSIX's FIFO, `mkfifo`): a path that
+/// programs open to read or write, and what is written is read, in order,
+/// not kept. Windows has none (Sable.IO.Ipc's LocalListener is its named
+/// pipes): there each call throws Unsupported.
+///
+/// ```sable
+/// fn send(_ path: String) async throws(IoError) {
+///     try Fifo.create(path)
+///     let reader = try Fifo.openReader(path)
+///     let writer = try await Fifo.openWriter(path)
+///     try await writer.write("hello")
+///     writer.close()
+///     assert(String.fromUtf8Lossy(try await reader.readAll()) == "hello")
+///     try File.remove(path)
+/// }
+/// ```
+public struct Fifo {
+    /// A FIFO made at the path, of the permissions (this user's alone, to
+    /// begin with): AlreadyExists when something is there.
+    public static fn create(_ path: some PathLike, permissions: FilePermissions = FilePermissions(mode: 0o600)) throws(IoError) {
+        let name = try path.filePath.given()
+        let made = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Bool in
+            unsafe {
+                return makeFifo(at, count, permissions.mode)
+            }
+        }
+        if !made {
+            throw IoError.lastSystemError(name)
+        }
+    }
+
+    /// The FIFO at the path, opened to read: at once, whether or not a
+    /// writer has it. A read waits for the first writer, and then reads to
+    /// the end of the last; a writer that opens it and closes it without
+    /// writing between two looks may go unseen.
+    public static fn openReader(_ path: some PathLike) throws(IoError) -> OsPipeReader {
+        let name = try path.filePath.given()
+        let handle = Fifo.open(name, writes: false)
+        if handle <= 0 {
+            throw IoError.lastSystemError(name)
+        }
+        return OsPipeReader(handle: handle, waitsForWriter: true)
+    }
+
+    /// The FIFO at the path, opened to write, once a reader has it: until
+    /// then it waits, looking again in a while, until the task is cancelled
+    /// (Cancelled) or the time is up (TimedOut).
+    public static async fn openWriter(_ path: some PathLike, timeout: Duration? = none) throws(IoError) -> OsPipeWriter {
+        let name = try path.filePath.given()
+        let start = Instant.now()
+        var times = 0
+        while true {
+            let handle = Fifo.open(name, writes: true)
+            if handle > 0 {
+                return OsPipeWriter(handle: handle)
+            }
+            if handle == 0 {
+                throw IoError.lastSystemError(name)
+            }
+            if let limit = timeout {
+                if start.elapsed >= limit {
+                    throw IoError.TimedOut
+                }
+            }
+            do {
+                try await Task.sleep(nanoseconds: (times < 7 ? 1 << times : 100) * 1_000_000)
+            } catch {
+                throw IoError.Cancelled
+            }
+            times += 1
+        }
+    }
+
+    static fn open(_ name: String, writes: Bool) -> Int {
+        return withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
+            unsafe {
+                return openFifo(at, count, writes)
+            }
+        }
+    }
+}

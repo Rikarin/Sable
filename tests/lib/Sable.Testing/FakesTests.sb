@@ -1,0 +1,60 @@
+module FakesTests
+
+// FakeLogger and FakeRandom (Sable.Testing): what a test gives the code it
+// tests in place of a logger and a random number generator. Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Diagnostics
+import Sable.Testing
+
+fn reorder(_ log: Logger, _ left: Int) {
+    if left < 3 {
+        log.warning("low stock", [field("sku", "a-1"), field("left", left)])
+    } else {
+        log.info("enough")
+    }
+}
+
+@test
+fn aFakeLoggerKeepsWhatWasLogged() {
+    let log = FakeLogger("orders")
+    reorder(log.logger, 2)
+    reorder(log.logger, 5)
+    log.logger.debug("detail")
+    log.logger.error("quoted", [field("note", "a b=\"c\"\nd"), field("empty", "")])
+    let records = log.records
+    require(records.count == 4)
+    expect(records[0].level == "WARN" && records[0].name == "orders" && records[0].message == "low stock")
+    expect(records[0].field("sku") == "a-1" && records[0].field("left") == "2" && records[0].field("none") == none)
+    expect(records[1].message == "enough" && records[1].fields.isEmpty)
+    expect(records[2].level == "DEBUG")
+    expect(records[3].field("note") == "a b=\"c\"\nd" && records[3].field("empty") == "")
+    expect(log.messages(at: "INFO") == ["enough"])
+    log.clear()
+    expect(log.records.isEmpty)
+    log.logger.trace("again a=b")
+    expect(log.records[0].message == "again a=b" || log.records[0].field("a") == "b")
+}
+
+@test
+fn aLineThatIsNoRecordIsReadAsWellAsItCanBe() {
+    expect(LogRecord.of("lonely").level == "lonely")
+    expect(LogRecord.of("INFO nameless").message == "nameless")
+    expect(LogRecord.of("INFO n: ends with =").message == "ends with =")
+    expect(LogRecord.of("INFO n: x=\"open").message == "x=\"open")
+}
+
+@test
+fn aFakeRandomGivesTheScriptOrTheSeedsSequence() {
+    let scripted = FakeRandom(returning: [3, 9])
+    var generator = scripted
+    expect(generator.next() == 3 && generator.next() == 9 && generator.next() == 3)
+    expect(scripted.drawn == [3, 9, 3])
+    var seeded = FakeRandom(seed: 7)
+    var same = SeededRandomNumberGenerator(seed: 7)
+    expect(seeded.next() == same.next())
+    expect(Int.random(in: 1...6, using: &seeded) == Int.random(in: 1...6, using: &same))
+    var run = FakeRandom()
+    var again = FakeRandom()
+    expect(run.next() == again.next())
+}

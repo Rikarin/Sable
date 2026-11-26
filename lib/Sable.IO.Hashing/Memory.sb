@@ -1,0 +1,86 @@
+module Sable.IO.Hashing
+
+// The hashes read their bytes where they lie, at addresses, which nothing
+// checks: what is read is proved to be in the bytes by the code around it, as
+// the interpreter, which checks every access, is run to see. Every machine
+// Sable runs on is little endian, as the hashes' words are.
+
+@inline(always)
+unsafe fn load8(_ address: Int) -> U8 {
+    return RawPtr<U8>(address: address).load(as: U8.self)
+}
+
+@inline(always)
+unsafe fn load32(_ address: Int) -> U32 {
+    return RawPtr<U8>(address: address).load(as: U32.self)
+}
+
+@inline(always)
+unsafe fn load64(_ address: Int) -> U64 {
+    return RawPtr<U8>(address: address).load(as: U64.self)
+}
+
+@inline(always)
+unsafe fn store64(_ value: U64, _ address: Int) {
+    RawPtr<U8>(address: address).storeBytes(of: value)
+}
+
+/// So many bytes from one address to another.
+unsafe fn copyBytes(from source: Int, to target: Int, _ count: Int) {
+    NativeMemory.copy(from: RawPtr<U8>(address: source), to: RawPtr<U8>(address: target), byteCount: count)
+}
+
+/// A table made when it is first asked for, rather than as the program starts,
+/// and never freed.
+final class LazyTable {
+    let address: Atomic<Int>
+    let make: () -> Int
+
+    init(_ make: @escaping () -> Int) {
+        address = Atomic<Int>(0)
+        self.make = make
+    }
+
+    /// Where the table is. Two tasks that ask first at once may both make it:
+    /// the one that is kept is either's.
+    @inline(always)
+    fn get() -> Int {
+        let known = address.load(.Acquire)
+        return known != 0 ? known : self.fill()
+    }
+
+    @inline(never)
+    fn fill() -> Int {
+        let made = make()
+        _ = address.compareExchange(expected: 0, desired: made)
+        return address.load(.Acquire)
+    }
+}
+
+/// Constants in memory of their own, which is never freed: their address.
+fn constantTable(_ values: U64[:]) -> Int {
+    unsafe {
+        let table = NativeMemory.allocate(byteCount: 8 * values.count).address
+        var i = 0
+        while i < values.count {
+            store64(values[i], table &+ 8 &* i)
+            i += 1
+        }
+        return table
+    }
+}
+
+/// So many of the bytes from an offset, copied over the buffer's from another.
+fn copyInto(_ buffer: inout U8[>..], at offset: Int, from bytes: U8[:], _ start: Int, _ count: Int) {
+    if count == 0 {
+        return
+    }
+    precondition(offset >= 0 && offset <= buffer.count - count && start >= 0 && start <= bytes.count - count, "copying \(count) bytes")
+    bytes.withPointer { (source: RawPtr<U8>) in
+        buffer.withMutablePointer { (target: RawPtr<U8>) in
+            unsafe {
+                copyBytes(from: source.address &+ start, to: target.address &+ offset, count)
+            }
+        }
+    }
+}

@@ -1,0 +1,74 @@
+module JoiningTests
+
+// Tensor's concatenate, stack, split and gathered (Sable.Math.Tensors), past
+// what NumpyTests.sb holds to NumPy: what they refuse. Run with
+//     tools/stdlib-coverage.sh Sable.Math.Tensors
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+@test
+fn gatheringNothingGivesAnEmptyDimension() {
+    let t = Tensor<Int>(shape: [2, 3], repeating: 1)
+    let nothing = t.gathered([], axis: 1)
+    expect(nothing.shape == [2, 0] && nothing.count == 0)
+}
+
+@test
+fn concatenatingOneTensorIsTheTensor() {
+    let t = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4])
+    expect(Tensor.concatenate([t]) == t)
+    expect(Tensor.stack([t]).shape == [1, 2, 2])
+}
+
+@test(traps: "concatenating no tensors")
+fn concatenatingNoTensorsTraps() {
+    let nothing: Tensor<Int>[>..] = []
+    _ = Tensor.concatenate(nothing)
+}
+
+@test(traps: "a scalar cannot be concatenated")
+fn concatenatingAScalarTraps() {
+    _ = Tensor.concatenate([Tensor<Int>(shape: [], elements: [1])])
+}
+
+@test(traps: "concatenating shapes [2] and [1, 2], of other ranks")
+fn concatenatingOtherRanksTraps() {
+    _ = Tensor.concatenate([Tensor<Int>(shape: [2], repeating: 0), Tensor<Int>(shape: [1, 2], repeating: 0)])
+}
+
+@test(traps: "concatenating shapes [1, 2] and [1, 3] along axis 0")
+fn concatenatingOtherLengthsTraps() {
+    _ = Tensor.concatenate([Tensor<Int>(shape: [1, 2], repeating: 0), Tensor<Int>(shape: [1, 3], repeating: 0)], axis: 0)
+}
+
+@test(traps: "stacking no tensors")
+fn stackingNoTensorsTraps() {
+    let nothing: Tensor<Int>[>..] = []
+    _ = Tensor.stack(nothing)
+}
+
+@test(traps: "stacking shapes [2] and [3]")
+fn stackingOtherShapesTraps() {
+    _ = Tensor.stack([Tensor<Int>(shape: [2], repeating: 0), Tensor<Int>(shape: [3], repeating: 0)])
+}
+
+@test(traps: "a dimension of 5 does not split into 2 equal parts")
+fn splittingUnevenlyTraps() {
+    _ = Tensor<Int>(shape: [5], repeating: 0).split(into: 2)
+}
+
+@test(traps: "parts of 4 for a dimension of 5")
+fn partsThatDoNotAddUpTrap() {
+    _ = Tensor<Int>(shape: [5], repeating: 0).split(lengths: [1, 3])
+}
+
+@test(traps: "a part of length -1")
+fn aNegativePartTraps() {
+    _ = Tensor<Int>(shape: [5], repeating: 0).split(lengths: [6, -1])
+}
+
+@test(traps: "index 3 is out of range for dimension 0 of length 3")
+fn gatheringAPlaceOutsideTraps() {
+    _ = Tensor<Int>(shape: [3], repeating: 0).gathered([3])
+}

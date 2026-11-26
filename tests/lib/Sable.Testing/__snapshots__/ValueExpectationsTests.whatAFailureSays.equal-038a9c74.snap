@@ -1,0 +1,9 @@
+expectation failed: got.lines == expected.lines (<file>:114)
+    the values differ
+       left: [Line(id: 1, price: 10, sku: "a, b"), Line(id: 2, price: 3, sku: "c")]
+      right: [Line(id: 1, price: 12, sku: "a, b"), Line(id: 2, price: 3, sku: "c(")]
+                                  ^ first difference at character 21
+    [0].price: left 10, right 12
+    [1].sku: left "c", right "c("
+    got: Order(id: 1, lines: [Line(id: 1, price: 10, sku: "a, b"), Line(id: 2, price: 3, sku: "c")], tags: ["x": 1, "z": 0], codes: Set(["x", "y"]))
+    expected: Order(id: 2, lines: [Line(id: 1, price: 12, sku: "a, b"), Line(id: 2, price: 3, sku: "c(")], tags: ["x": 2, "y": 3, "z": 0], codes: Set(["x", "y"]))

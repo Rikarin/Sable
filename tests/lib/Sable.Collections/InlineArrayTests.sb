@@ -44,14 +44,15 @@ fn anInlineArrayHasTheWholeArrayAPI() {
 }
 
 @test
-fn readingAndWritingAnInlineArrayAllocatesNothing() {
-    // Made, it is a buffer today: its first write copies a literal's
-    // elements into one of its own, and members over T[:] such as reverse()
-    // and firstIndex(of:) copy (#304). Read, written, swapped and gone
-    // through where it is after that, nothing.
-    var xs: InlineArray<Int, 4> = [4, 2, 3, 1]
-    xs[3] = 1
+fn anInlineArrayAllocatesNothing() {
+    // Its elements are where it is (#304): made from a literal, read,
+    // written, gone through, and lent whole to the members of T[:] that
+    // read it, nothing is allocated. (Those that change it in place are
+    // lent it too, where the library's code is compiled with the program's;
+    // Sable.CodeGen.Tests' InlineArrayTests count them.)
+    var same = false
     assertNoAllocations(() => {
+        var xs: InlineArray<Int, 4> = [4, 2, 3, 1]
         xs[0] = 8
         xs.swapAt(1, 2)
         var total = 0
@@ -59,7 +60,20 @@ fn readingAndWritingAnInlineArrayAllocatesNothing() {
             total += x
         }
         _ = xs.contains(element: total)
+        _ = xs.firstIndex(of: 3)
         _ = xs.count
+        let copy = xs
+        same = copy[0] == xs[0]
     })
-    assertEqual(xs[0], 8)
+    expect(same)
+}
+
+@test
+fn anInlineArrayIsAValue() {
+    var xs: InlineArray<String, 2> = ["a", "b"]
+    let before = xs
+    xs[0] = "z"
+    xs.reverse()
+    expect(before.toArray() == ["a", "b"])
+    expect(xs.toArray() == ["b", "z"])
 }

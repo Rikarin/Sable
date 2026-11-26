@@ -1,0 +1,14 @@
+module Sable.IO.Ipc
+
+/// Who may connect to a local stream (`LocalListener`): .NET's
+/// `PipeOptions.CurrentUserOnly`, or not.
+public enum LocalAccess {
+    /// This user's programs alone: the socket is in a directory no one else
+    /// may enter ($XDG_RUNTIME_DIR, or /tmp/sable-<uid>), and the named
+    /// pipe's DACL is this user's. A client asking so connects only to a
+    /// server of its own user.
+    CurrentUserOnly
+    /// Any user's: the socket is in /tmp, writable by all; the named pipe
+    /// has the system's default DACL.
+    AnyUser
+}

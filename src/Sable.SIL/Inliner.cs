@@ -80,21 +80,50 @@ public sealed class Inliner : ISilPass {
         }
 
         // The calls the function makes now: what is copied in is not looked at again.
-        var calls = function.Blocks.SelectMany(static b => b.Instructions)
-            .Where(static i => i is ApplyInst or TryApplyInst)
-            .Select(call => (Call: call, Callee: call.Operands[0] is FunctionRefInst reference ? module.Find(reference.Function) : null))
-            .Where(call => call.Callee is not null && Inlinable(call.Callee, function, call.Call, references))
-            .ToList();
+        var calls = Calls(function, module, static _ => true, references);
         foreach (var (call, callee) in calls) {
-            Inline(function, call, callee!);
+            Inline(function, call, callee);
+        }
+
+        if (calls.Count == 0) {
+            return;
         }
 
         // What follows a call to a function that never returns — one that
         // only traps — is not reached.
-        if (calls.Count > 0) {
+        function.RemoveUnreachableBlocks();
+
+        // A call through an existential's witness table, or of a closure,
+        // whose value the callees made here is now a call of what they
+        // made: called directly, and inlined as any call is. A witness is
+        // named by its table too, so never as a single caller's.
+        for (var round = 0; round < 2; round++) {
+            var before = function.Blocks.SelectMany(static b => b.Instructions).OfType<FunctionRefInst>().ToHashSet();
+            if (!(Simplify.DirectWitnesses(function) | Simplify.DirectCalls(function))) {
+                return;
+            }
+
+            var direct = Calls(function, module, reference => !before.Contains(reference), null);
+            foreach (var (call, callee) in direct) {
+                Inline(function, call, callee);
+            }
+
+            if (direct.Count == 0) {
+                return;
+            }
+
             function.RemoveUnreachableBlocks();
         }
     }
+
+    /// <summary>The calls of the function to inline, of those whose callee's reference is one <paramref name="named" /> takes.</summary>
+    static List<(SilInstruction Call, SilFunction Callee)> Calls(SilFunction function, SilModule module, Func<FunctionRefInst, bool> named, Dictionary<string, int>? references) =>
+        function.Blocks.SelectMany(static b => b.Instructions)
+            .Where(static i => i is ApplyInst or TryApplyInst)
+            .Select(call => (Call: call, Callee: call.Operands[0] is FunctionRefInst reference && named(reference) ? module.Find(reference.Function) : null))
+            .Where(call => call.Callee is not null && Inlinable(call.Callee, function, call.Call, references))
+            .Select(static call => (call.Call, call.Callee!))
+            .ToList();
 
     /// <summary>
     ///     Whether to inline a call. <c>@inline(never)</c> says never;
@@ -103,7 +132,7 @@ public sealed class Inliner : ISilPass {
     ///     callee's cost decides.
     /// </summary>
     static bool Inlinable(SilFunction callee, SilFunction caller, SilInstruction call, Dictionary<string, int>? references) {
-        if (callee == caller || callee.Inline == SilInline.Never || callee.Vectorised || callee.Blocks.Count == 0 || callee.IsUnspecialised) {
+        if (callee == caller || callee.Inline == SilInline.Never || callee.Vectorised || callee.Blocks.Count == 0 || callee.IsUnspecialised && !ConcreteWitness(callee)) {
             return false;
         }
 
@@ -128,6 +157,32 @@ public sealed class Inliner : ISilPass {
         var budget = references is not null && references.GetValueOrDefault(callee.Name) == 1 ? SingleCallerThreshold : Threshold;
         budget += ConstantBonus * DecidingConstants(callee, call);
         return Cost(callee, budget) <= budget && !Loops(callee);
+    }
+
+    /// <summary>
+    ///     Whether the function is a witness of a type the program knows,
+    ///     generic only in how it is called: what it is given opaque it only
+    ///     asks the address of, as the known type's, and nothing else it does
+    ///     needs the metadata it is given. Inlined where the existential was
+    ///     made, the box it is given is projected to the payload, read there.
+    /// </summary>
+    static bool ConcreteWitness(SilFunction function) {
+        if (!function.Name.StartsWith("$generic$witness$", StringComparison.Ordinal)) {
+            return false;
+        }
+
+        foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            if (instruction is BuiltinInst { Name: "opaque_address", Operands: [SilArgument] } address && !SilType.MentionsOpaque(address.Type)) {
+                continue;
+            }
+
+            if (instruction.HasResult && SilType.MentionsOpaque(instruction.Type)
+                || instruction.Operands.Any(static o => SilType.MentionsOpaque(o.Type) || o.Type == SilType.Metadata)) {
+                return false;
+            }
+        }
+
+        return function.Blocks.Skip(1).All(static b => b.Arguments.All(static a => !SilType.MentionsOpaque(a.Type)));
     }
 
     /// <summary>
@@ -174,6 +229,22 @@ public sealed class Inliner : ISilPass {
         && callee.Blocks.Count > 0 && !callee.IsUnspecialised
         && (callee.Inline == SilInline.Always || Cost(callee, Threshold) <= Threshold && !Loops(callee));
 
+    /// <summary>
+    ///     Whether to inline the code of a closure that is only called and
+    ///     destroyed where it is made, at each of its calls: as a callee is,
+    ///     where a closure called once is moved rather than copied. What it
+    ///     saves is more than a call's: its context, made and destroyed, and
+    ///     the copies of what it captured. One called once may loop: what
+    ///     it borrows it borrows from its context, which is then gone, and
+    ///     its body is where LLVM would put it anyway.
+    /// </summary>
+    internal static bool InlinesClosure(SilFunction code, int calls) =>
+        !code.Vectorised && !code.IsUnspecialised
+        && code.Blocks.Any(static b => b.Terminator is ReturnInst)
+        && (calls == 1
+            ? Cost(code, SingleCallerThreshold) <= SingleCallerThreshold
+            : Cost(code, Threshold) <= Threshold && !Loops(code));
+
     /// <summary>What inlining the function costs, counted until it passes <paramref name="limit" />.</summary>
     public static int Cost(SilFunction function, int limit = int.MaxValue) {
         var cost = 0;
@@ -185,6 +256,8 @@ public sealed class Inliner : ISilPass {
                     StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => 0,
                     LoadBorrowInst or EndBorrowInst or AllocStackInst or DeallocStackInst => 0,
                     BranchInst or ReturnInst or UnreachableInst => 0,
+                    StoreInst store when InSlot(store.Address) && (store.Kind == StoreKind.Init || store.Value.Type.IsTrivial) => 0,
+                    LoadInst load when InSlot(load.Address) && load.Kind != LoadKind.Copy => 0,
                     ApplyInst or TryApplyInst => 1 + CallCost,
                     _ => 1,
                 };
@@ -196,6 +269,29 @@ public sealed class Inliner : ISilPass {
         }
 
         return cost;
+    }
+
+    /// <summary>
+    ///     Whether an address is a stack slot's, or a field's of one: what a
+    ///     struct is built in, field by field, and read whole, which LLVM
+    ///     keeps in registers. Its trivial stores and loads are a struct's
+    ///     fields named, and cost nothing.
+    /// </summary>
+    static bool InSlot(SilValue address) {
+        while (true) {
+            switch (address) {
+                case AllocStackInst:
+                    return true;
+                case StructElementAddrInst field:
+                    address = field.Address;
+                    break;
+                case TupleElementAddrInst element:
+                    address = element.Address;
+                    break;
+                default:
+                    return false;
+            }
+        }
     }
 
     /// <summary>How many of the call's arguments are literals the callee branches on, directly or through a comparison.</summary>

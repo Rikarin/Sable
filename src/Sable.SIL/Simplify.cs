@@ -72,7 +72,7 @@ public sealed class Simplify : ISilPass {
     ///     closure is found through the struct it was put in, and a local
     ///     slot stored once, before the call, with what holds it.
     /// </summary>
-    static bool DirectCalls(SilFunction function) {
+    internal static bool DirectCalls(SilFunction function) {
         var changed = false;
         Dictionary<SilBlock, HashSet<SilBlock>>? dominators = null;
         Uses? uses = null;
@@ -120,7 +120,7 @@ public sealed class Simplify : ISilPass {
     ///     then inline it. The table is found through the struct the
     ///     existential is, and a local slot stored once before the call.
     /// </summary>
-    static bool DirectWitnesses(SilFunction function) {
+    internal static bool DirectWitnesses(SilFunction function) {
         if (function.Module is not { } module) {
             return false;
         }

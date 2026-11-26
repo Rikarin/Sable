@@ -38,9 +38,10 @@ public sealed class InlineClosures : ISilPass {
             changed = false;
             foreach (var closure in function.Blocks.SelectMany(static b => b.Instructions).OfType<PartialApplyInst>().ToList()) {
                 if (closure is { Function: FunctionRefInst code, ThickType.Signature.IsAsync: false }
-                    && module.Find(code.Function) is { Inline: SilInline.Always, Blocks.Count: > 0 } callee
-                    && callee != function
-                    && OnlyCalled(closure, new Uses(function)) is { } uses) {
+                    && module.Find(code.Function) is { Blocks.Count: > 0 } callee
+                    && callee != function && callee.Inline != SilInline.Never
+                    && OnlyCalled(closure, new Uses(function)) is { } uses
+                    && (callee.Inline == SilInline.Always || Inliner.InlinesClosure(callee, uses.Count(static u => u is ApplyInst)))) {
                     Unclose(function, closure, code, callee, uses);
                     changed = true;
                 }

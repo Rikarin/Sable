@@ -587,6 +587,110 @@ public sealed class PassTests {
     }
 
     /// <summary>
+    ///     A struct built in a slot field by field and read whole costs
+    ///     nothing beyond what makes its fields (#329): an operator on a
+    ///     wide struct, named in two places, is still inlined in both.
+    /// </summary>
+    [Fact]
+    public void AStructBuiltFieldByFieldCostsOnlyItsFields() {
+        var module = Lowered(
+            """
+            struct Wide {
+                var a: F64
+                var b: F64
+                var c: F64
+                var d: F64
+                var e: F64
+                var f: F64
+                var g: F64
+                var h: F64
+            }
+            fn mix(_ l: Wide, _ r: Wide) -> Wide {
+                return Wide(a: l.a * r.a + l.b, b: l.b * r.b + l.c, c: l.c * r.c + l.d, d: l.d * r.d + l.e, e: l.e * r.e + l.f, f: l.f * r.f + l.g, g: l.g * r.g + l.h, h: l.h * r.h + l.a)
+            }
+            fn first(_ x: Wide) -> F64 { return mix(x, x).a }
+            fn second(_ x: Wide) -> F64 { return mix(x, x).h }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.False(Calls(module.Find("M.first")!, "M.mix"));
+        Assert.False(Calls(module.Find("M.second")!, "M.mix"));
+    }
+
+    /// <summary>
+    ///     A closure only called where it is made, not marked
+    ///     <c>inline(always)</c>, is inlined there when small, and its context
+    ///     taken apart (#350): nothing is allocated, and what it captured is
+    ///     not copied. One called once is inlined even with a loop.
+    /// </summary>
+    [Fact]
+    public void ASmallClosureCalledWhereItIsMadeIsInlinedAndItsContextGoes() {
+        var module = Lowered(
+            """
+            @inline(never)
+            fn sink(_ s: String) -> Int { return s.utf8Count }
+            fn with(_ v: Int, _ body: (Int) -> Int) -> Int { return body(v) }
+            fn captured(_ s: String, _ k: Int) -> Int {
+                return with(k) { $0 + k + sink(s) }
+            }
+            fn looping(_ n: Int, _ k: Int) -> Int {
+                return with(n) { (count: Int) -> Int in
+                    var t = 0
+                    var i = 0
+                    while i < count {
+                        t = t + i * k
+                        i = i + 1
+                    }
+                    return t
+                }
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        foreach (var name in new[] { "M.captured", "M.looping" }) {
+            var function = module.Find(name)!;
+            Assert.Empty(Instructions(function).OfType<PartialApplyInst>());
+            Assert.Empty(Instructions(function).OfType<AllocRefInst>());
+        }
+
+        Assert.Equal(18L, new SilInterpreter(module).Run("M.looping", 4L, 3L));
+        Assert.Equal(18L, new SilInterpreter(module).Run("M.captured", "abcd", 7L));
+    }
+
+    /// <summary>
+    ///     An existential made by a callee and called through by another,
+    ///     both inlined, calls its witness directly — and the witness is then
+    ///     inlined too, by the inliner rather than left to LLVM.
+    /// </summary>
+    [Fact]
+    public void AWitnessMadeDirectWhileInliningIsInlined() {
+        var module = Lowered(
+            """
+            protocol Shape {
+                fn area() -> Int
+            }
+            struct Square: Shape {
+                var side: Int
+                fn area() -> Int { return side * side }
+            }
+            fn measure(_ shape: any Shape) -> Int { return shape.area() }
+            fn squared(_ side: Int) -> Int { return measure(Square(side: side)) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var squared = module.Find("M.squared")!;
+        Assert.False(Calls(squared, "M.measure"));
+        Assert.DoesNotContain(Instructions(squared).OfType<FunctionRefInst>(), static r => r.Function.Contains("area", StringComparison.Ordinal));
+        Assert.Equal(49L, new SilInterpreter(module).Run("M.squared", 7L));
+    }
+
+    /// <summary>
     ///     An initialiser is inlined into a loop: the object it returns has
     ///     left its frame anyway, and in the caller's it is gone before the
     ///     loop comes round, so it is made on the stack.

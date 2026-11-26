@@ -62,7 +62,7 @@ fn permutingAnAxisTwiceTraps() {
     _ = TensorView<Int>([1, 2], shape: [1, 2]).permuted([0, 0])
 }
 
-@test(traps: "a slice's step is positive, not 0")
+@test(traps: "a slice's step is not zero")
 fn aStepOfZeroTraps() {
     _ = TensorView<Int>([1, 2], shape: [2])[.Slice(start: 0, end: 2, step: 0)]
 }

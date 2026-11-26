@@ -19,10 +19,13 @@ public union TensorIndex {
     /// from the end, as NumPy's does.
     At(Int)
 
-    /// The places from `start` up to `end`, not included, `step` apart. A
-    /// negative start or end counts from the end; either is held to the
-    /// dimension, as NumPy's are. The step is positive.
-    Slice(start: Int, end: Int, step: Int)
+    /// The places from `start` up to `end`, not included, `step` apart, as
+    /// NumPy's `start:end:step`: a negative start or end counts from the end,
+    /// either is held to the dimension, and none is the end the step starts
+    /// from or goes to — the first and past the last for a positive step,
+    /// the last and before the first for a negative one, which goes
+    /// backwards. The step is not zero.
+    Slice(start: Int?, end: Int?, step: Int)
 
     /// A new dimension of length one, here: NumPy's `newaxis`.
     NewAxis
@@ -30,12 +33,31 @@ public union TensorIndex {
     /// The places in a range.
     public static fn range(_ range: Range<Int>) -> TensorIndex => .Slice(start: range.lowerBound, end: range.upperBound, step: 1)
 
-    /// The places in a range, so many apart.
-    public static fn range(_ range: Range<Int>, step: Int) -> TensorIndex => .Slice(start: range.lowerBound, end: range.upperBound, step: step)
+    /// The places in a range, so many apart: from its last backwards where
+    /// the step is negative.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [6]) { $0[0] }
+    /// assert(t[.range(1..<5, step: -2)].toArray() == [4, 2])
+    /// ```
+    public static fn range(_ range: Range<Int>, step: Int) -> TensorIndex {
+        if step >= 0 || range.isEmpty {
+            return .Slice(start: range.lowerBound, end: range.upperBound, step: step)
+        }
+        // Backwards: from the last place, to the one before the first, which
+        // for the first place of all is past the start (none), not -1.
+        let end: Int? = range.lowerBound == 0 ? none : range.lowerBound - 1
+        return .Slice(start: range.upperBound - 1, end: end, step: step)
+    }
 
-    /// Every so many places of the whole dimension, from the first.
-    public static fn step(_ step: Int) -> TensorIndex => .Slice(start: 0, end: Int.max, step: step)
+    /// Every so many places of the whole dimension: from the first, or from
+    /// the last backwards where the step is negative (`.step(-1)` is NumPy's
+    /// `::-1`).
+    public static fn step(_ step: Int) -> TensorIndex => .Slice(start: none, end: none, step: step)
+
+    /// The whole dimension backwards.
+    public static var reversed: TensorIndex => .Slice(start: none, end: none, step: -1)
 
     /// The places from one on.
-    public static fn from(_ start: Int) -> TensorIndex => .Slice(start: start, end: Int.max, step: 1)
+    public static fn from(_ start: Int) -> TensorIndex => .Slice(start: start, end: none, step: 1)
 }

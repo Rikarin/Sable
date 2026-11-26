@@ -137,6 +137,38 @@ fn checkedPlace(_ at: Int, _ length: Int, _ axis: Int) -> Int {
     return place
 }
 
+/// Where a slice of a dimension starts, and how many places it has: NumPy's
+/// rule (PySlice_AdjustIndices), the bounds counted from the end where
+/// negative and held to the dimension, a missing one the end the step
+/// starts from or goes to.
+fn slicePlaces(_ start: Int?, _ end: Int?, _ step: Int, _ length: Int) -> SlicePlaces {
+    if step == 0 {
+        preconditionFailure("a slice's step is not zero")
+    }
+    let lowest = step < 0 ? -1 : 0
+    let highest = step < 0 ? length - 1 : length
+    var from = step < 0 ? highest : 0
+    if let given = start {
+        from = given < 0 ? given + length : given
+        from = from < lowest ? lowest : from > highest ? highest : from
+    }
+    var to = step < 0 ? lowest : length
+    if let given = end {
+        to = given < 0 ? given + length : given
+        to = to < lowest ? lowest : to > highest ? highest : to
+    }
+    if step > 0 {
+        return SlicePlaces(first: from, count: to > from ? (to - from + step - 1) / step : 0)
+    }
+    return SlicePlaces(first: from, count: from > to ? (from - to - step - 1) / -step : 0)
+}
+
+/// A slice's first place in its dimension, and how many places it has.
+struct SlicePlaces {
+    let first: Int
+    let count: Int
+}
+
 /// A view's layout after indexing it: its offset, shape and strides.
 struct Indexed {
     var offset: Int
@@ -164,17 +196,9 @@ fn indexed(_ indices: TensorIndex[:], _ shape: Int[:], _ strides: Int[:], _ star
                 axis += 1
             }
             case .Slice(let start, let end, let step) => {
-                if step <= 0 {
-                    preconditionFailure("a slice's step is positive, not \(step)")
-                }
-                let length = shape[axis]
-                var from = start < 0 ? start + length : start
-                var to = end < 0 ? end + length : end
-                from = from < 0 ? 0 : from > length ? length : from
-                to = to < 0 ? 0 : to > length ? length : to
-                let count = to > from ? (to - from + step - 1) / step : 0
-                result.offset = result.offset + (count > 0 ? from * strides[axis] : 0)
-                result.shape.append(count)
+                let place = slicePlaces(start, end, step, shape[axis])
+                result.offset = result.offset + (place.count > 0 ? place.first * strides[axis] : 0)
+                result.shape.append(place.count)
                 result.strides.append(strides[axis] * step)
                 axis += 1
             }
@@ -210,32 +234,6 @@ fn broadcastStrides(_ shape: Int[:], _ strides: Int[:], to target: Int[:]) -> In
         i += 1
     }
     return result
-}
-
-/// The next index of a shape in row-major order, the last dimension excluded,
-/// moving the offsets by the strides; false once past the end.
-@inline(always)
-fn advance(_ index: inout Int[>..], _ shape: Int[:], _ offsets: inout Int[>..], _ strides: Int[>..][:]) -> Bool {
-    var axis = shape.count - 2
-    while axis >= 0 {
-        index[axis] += 1
-        var k = 0
-        while k < offsets.count {
-            offsets[k] = offsets[k] + strides[k][axis]
-            k += 1
-        }
-        if index[axis] < shape[axis] {
-            return true
-        }
-        k = 0
-        while k < offsets.count {
-            offsets[k] = offsets[k] - strides[k][axis] * shape[axis]
-            k += 1
-        }
-        index[axis] = 0
-        axis -= 1
-    }
-    return false
 }
 
 /// The lengths or strides without the one at a place.

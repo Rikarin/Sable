@@ -1,0 +1,189 @@
+module Sable.Math
+
+// The kernels of VectorKernels.sb over runs of arrays: a count of elements
+// from an offset, so many apart, rather than whole slices. They are what a
+// strided tensor's elementwise work is made of (Sable.Math.Tensors): a run
+// one apart is a vector at a time, and so is one that repeats a single
+// element (a step of zero, which a broadcast dimension has); any other step
+// is an element at a time. The destination is always a run one apart.
+// Each is inlined where it is called, so that the operation, which the
+// caller names, picks its loop there.
+
+/// Writes 'x[xAt + i × xStep] op y[yAt + i × yStep]' to 'target[targetAt + i]' for
+/// each i below the count. Every place must be in its array, or it traps.
+@inline(always)
+package fn arithmeticRun<T: SIMDScalar & BinaryFloatingPoint, N: Int>(
+    _ op: Elementwise, _ x: T[:], _ xAt: Int, _ xStep: Int, _ y: T[:], _ yAt: Int, _ yStep: Int,
+    _ target: inout T[>..], _ targetAt: Int, _ count: Int, _ _zero: SIMD<T, N>
+) {
+    var i = 0
+    if xStep == 1 && yStep == 1 {
+        while i + N <= count {
+            let a = SIMD<T, N>.load(from: x, at: xAt + i)
+            let b = SIMD<T, N>.load(from: y, at: yAt + i)
+            switch op {
+                case .Add: target.store(a + b, at: targetAt + i)
+                case .Subtract: target.store(a - b, at: targetAt + i)
+                case .Multiply: target.store(a * b, at: targetAt + i)
+                case .Divide: target.store(a / b, at: targetAt + i)
+            }
+            i += N
+        }
+    } else if xStep == 1 && yStep == 0 {
+        let b = SIMD<T, N>(repeating: y[yAt])
+        while i + N <= count {
+            let a = SIMD<T, N>.load(from: x, at: xAt + i)
+            switch op {
+                case .Add: target.store(a + b, at: targetAt + i)
+                case .Subtract: target.store(a - b, at: targetAt + i)
+                case .Multiply: target.store(a * b, at: targetAt + i)
+                case .Divide: target.store(a / b, at: targetAt + i)
+            }
+            i += N
+        }
+    } else if xStep == 0 && yStep == 1 {
+        let a = SIMD<T, N>(repeating: x[xAt])
+        while i + N <= count {
+            let b = SIMD<T, N>.load(from: y, at: yAt + i)
+            switch op {
+                case .Add: target.store(a + b, at: targetAt + i)
+                case .Subtract: target.store(a - b, at: targetAt + i)
+                case .Multiply: target.store(a * b, at: targetAt + i)
+                case .Divide: target.store(a / b, at: targetAt + i)
+            }
+            i += N
+        }
+    }
+
+    var p = xAt + i * xStep
+    var q = yAt + i * yStep
+    while i < count {
+        let a = x[p]
+        let b = y[q]
+        switch op {
+            case .Add: target[targetAt + i] = a + b
+            case .Subtract: target[targetAt + i] = a - b
+            case .Multiply: target[targetAt + i] = a * b
+            case .Divide: target[targetAt + i] = a / b
+        }
+        p += xStep
+        q += yStep
+        i += 1
+    }
+}
+
+/// Writes 'target[targetAt + i] op y[yAt + i × yStep]' over 'target[targetAt + i]' for
+/// each i below the count: the left operand is the destination's own run.
+@inline(always)
+package fn arithmeticRunInPlace<T: SIMDScalar & BinaryFloatingPoint, N: Int>(
+    _ op: Elementwise, _ target: inout T[>..], _ targetAt: Int, _ y: T[:], _ yAt: Int, _ yStep: Int, _ count: Int, _ _zero: SIMD<T, N>
+) {
+    var i = 0
+    if yStep == 1 || yStep == 0 {
+        let repeated = SIMD<T, N>(repeating: yStep == 0 && count > 0 ? y[yAt] : T.zero)
+        while i + N <= count {
+            let a = SIMD<T, N>.load(from: target, at: targetAt + i)
+            let b = yStep == 0 ? repeated : SIMD<T, N>.load(from: y, at: yAt + i)
+            switch op {
+                case .Add: target.store(a + b, at: targetAt + i)
+                case .Subtract: target.store(a - b, at: targetAt + i)
+                case .Multiply: target.store(a * b, at: targetAt + i)
+                case .Divide: target.store(a / b, at: targetAt + i)
+            }
+            i += N
+        }
+    }
+
+    var q = yAt + i * yStep
+    while i < count {
+        let a = target[targetAt + i]
+        let b = y[q]
+        switch op {
+            case .Add: target[targetAt + i] = a + b
+            case .Subtract: target[targetAt + i] = a - b
+            case .Multiply: target[targetAt + i] = a * b
+            case .Divide: target[targetAt + i] = a / b
+        }
+        q += yStep
+        i += 1
+    }
+}
+
+/// Writes each 'target[at + i] op value', or 'value op target[at + i]' where the
+/// value is first, over the element, for each i below the count.
+@inline(always)
+package fn arithmeticInPlace<T: SIMDScalar & BinaryFloatingPoint, N: Int>(
+    _ op: Elementwise, _ target: inout T[>..], _ at: Int, _ count: Int, _ value: T, valueFirst: Bool, _ _zero: SIMD<T, N>
+) {
+    let v = SIMD<T, N>(repeating: value)
+    var i = at
+    let end = at + count
+    while i + N <= end {
+        let a = SIMD<T, N>.load(from: target, at: i)
+        switch op {
+            case .Add: target.store(a + v, at: i)
+            case .Subtract: target.store(valueFirst ? v - a : a - v, at: i)
+            case .Multiply: target.store(a * v, at: i)
+            case .Divide: target.store(valueFirst ? v / a : a / v, at: i)
+        }
+        i += N
+    }
+
+    while i < end {
+        let a = target[i]
+        switch op {
+            case .Add: target[i] = a + value
+            case .Subtract: target[i] = valueFirst ? value - a : a - value
+            case .Multiply: target[i] = a * value
+            case .Divide: target[i] = valueFirst ? value / a : a / value
+        }
+        i += 1
+    }
+}
+
+/// Writes '-x[xAt + i × xStep]' to 'target[targetAt + i]' for each i below the count.
+@inline(always)
+package fn negatedRun<T: SIMDScalar & BinaryFloatingPoint, N: Int>(
+    _ x: T[:], _ xAt: Int, _ xStep: Int, _ target: inout T[>..], _ targetAt: Int, _ count: Int, _ _zero: SIMD<T, N>
+) {
+    var i = 0
+    if xStep == 1 {
+        let zero = SIMD<T, N>()
+        while i + N <= count {
+            target.store(zero - SIMD<T, N>.load(from: x, at: xAt + i), at: targetAt + i)
+            i += N
+        }
+    }
+
+    var p = xAt + i * xStep
+    while i < count {
+        target[targetAt + i] = -x[p]
+        p += xStep
+        i += 1
+    }
+}
+
+/// The sum of 'x[at + i × step]' for each i below the count: a vector at a
+/// time where the step is one, added in lanes and then pairwise, as `sum`'s
+/// is, so not always the left-to-right sum.
+@inline(always)
+package fn sumRun<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ at: Int, _ step: Int, _ count: Int, _ _zero: SIMD<T, N>) -> T {
+    var i = 0
+    var total = T.zero
+    if step == 1 && count >= N {
+        var lanes = SIMD<T, N>()
+        while i + N <= count {
+            lanes = lanes + SIMD<T, N>.load(from: x, at: at + i)
+            i += N
+        }
+        total = lanes.reduceAdd()
+    }
+
+    var p = at + i * step
+    while i < count {
+        total = total + x[p]
+        p += step
+        i += 1
+    }
+    return total
+}

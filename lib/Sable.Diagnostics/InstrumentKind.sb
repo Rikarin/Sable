@@ -32,7 +32,4 @@ public enum InstrumentKind {
             }
         }
     }
-
-    // Whether its points are sums.
-    var isSum: Bool => self == .Counter || self == .UpDownCounter || self == .ObservableCounter || self == .ObservableUpDownCounter
 }

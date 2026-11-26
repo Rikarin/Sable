@@ -341,3 +341,43 @@ fn kindsHaveNames() {
     let kinds: InstrumentKind[>..] = [.Counter, .UpDownCounter, .Histogram, .Gauge, .ObservableCounter, .ObservableUpDownCounter, .ObservableGauge]
     expect(kinds.map { $0.name } == ["counter", "updowncounter", "histogram", "gauge", "observable_counter", "observable_updowncounter", "observable_gauge"])
 }
+
+@test
+fn withNoReaderNoInstrumentRecords() {
+    expect(!Metrics.isCollecting)
+    let meter = Meter("idle")
+    let gauge = meter.gauge("g", of: Int.self)
+    let histogram = meter.histogram("h", buckets: HistogramBuckets.standard)
+    let updown = meter.upDownCounter("u")
+    gauge.record(1)
+    gauge.record(1, [KeyValue("a", 1)])
+    histogram.record(1.0)
+    histogram.record(1.0, [KeyValue("a", 1)])
+    updown.add(1)
+    updown.add(1, [KeyValue("a", 1)])
+    let reader = MetricReader()
+    let metrics = reader.collect().filter { $0.meter == "idle" }
+    reader.shutdown()
+    expect(metrics.count == 3)
+    for metric in metrics {
+        expect(metric.points.isEmpty, metric.name)
+    }
+}
+
+@test
+fn pointsSayWhatTheyHold() {
+    let reader = MetricReader()
+    let meter = Meter("described")
+    meter.histogram("h", buckets: .Explicit(boundaries: [1.0])).record(2.0)
+    meter.histogram("e", buckets: HistogramBuckets.exponential).record(2.0)
+    let explicit = data(reader, meter, "h").point()!
+    let exponential = data(reader, meter, "e").point()!
+    reader.shutdown()
+    expect(explicit.number == 2.0 && exponential.number == 2.0)
+    expect("\(explicit.value:?)".contains("HistogramData"))
+    expect("\(exponential.value:?)".contains("ExponentialHistogramData"))
+    expect("\(explicit:?)".contains("MetricPoint"))
+    expect(HistogramBuckets.standard != HistogramBuckets.exponential)
+    expect(HistogramBuckets.exponential == .Exponential(maxSize: 160, maxScale: 20))
+    expect("\(HistogramBuckets.exponential:?)".contains("Exponential"))
+}

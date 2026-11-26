@@ -44,6 +44,32 @@ fn rawModeWithNoTerminalRunsTheBodyAsItIs() {
     expect(!Console.isAlternateScreen)
 }
 
+@test
+fn withoutATerminalNothingButTheTextIsWritten() {
+    if Runtime.environment("CLICOLOR_FORCE") != none {
+        try! skip("CLICOLOR_FORCE asks for styles")
+    }
+    Console.write("plain ", style: Style().bold())
+    Console.writeLine("line", style: Style().foreground(.red))
+    Console.writeError("error ", style: Style().bold())
+    Console.writeErrorLine("line", style: Style().underlined())
+    Console.moveCursor(toColumn: 1, row: 1)
+    Console.moveCursor(columns: -1, rows: 1)
+    Console.clear()
+    Console.clearLine()
+    Console.clearToEndOfLine()
+    Console.clearToEndOfScreen()
+    Console.saveCursor()
+    Console.restoreCursor()
+    Console.setTitle("t")
+    Console.beep()
+    Console.isCursorVisible = false
+    expect(Console.isCursorVisible)
+    Console.flush()
+    expect(Console.size == none || Console.isInputTerminal)
+    expect(!Console.isRawMode)
+}
+
 // ---- Under a terminal ---------------------------------------------------------------
 
 @test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))

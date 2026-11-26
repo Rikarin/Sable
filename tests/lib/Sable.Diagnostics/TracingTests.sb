@@ -373,3 +373,41 @@ fn aLogLineCarriesTheCurrentSpan() {
     }
     expect(logger.lines() == ["INFO app: outside", "INFO app: inside k=v trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7"])
 }
+
+@immutable
+final class Ends: SpanListener {
+    let names = Mutex<String[>..]>([])
+
+    init() { }
+
+    fn ended(_ span: SpanRecord) {
+        names.withLock { $0.append(span.name) }
+    }
+}
+
+@test
+fn aListenerOfItsEndsAloneSamplesAsTheParentDid() {
+    let ends = Ends()
+    let listening = Tracing.addListener(ends)
+    tracer.withSpan("root") { _ in }
+    let unsampled = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")!
+    Tracing.withContext(unsampled) {
+        tracer.withSpan("dropped") { _ in }
+    }
+    listening.cancel()
+    expect(ends.names.withLock { $0 } == ["root"])
+}
+
+@test
+fn recordsAndEventsDescribeThemselves() {
+    let event = SpanEvent(name: "e", time: 5)
+    expect(event.attributes.isEmpty && event.time == 5)
+    expect(event == SpanEvent(name: "e", time: 5) && event != SpanEvent(name: "f", time: 5))
+    expect("\(event:?)".contains("SpanEvent"))
+    let spans = recorded {
+        tracer.withSpan("described") { _ in }
+    }
+    expect("\(spans[0]:?)".contains("described"))
+    expect(SpanId.parse(hex: "00F067AA0BA902B7") == none)
+    expect(SpanId.parse(hex: "00f067aa0ba902b7")!.isValid)
+}

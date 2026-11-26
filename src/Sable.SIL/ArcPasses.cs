@@ -383,10 +383,27 @@ public sealed class BorrowLoads : ISilPass {
 
         var slot = ExclusiveOf(load.Address);
         var owner = Owner(load.Address);
+        // A field of an object borrowed from storage, the borrow ended before
+        // the copy is destroyed — 'program.ops[pc]' of a class's field each
+        // turn of a loop: the borrow's end sinks to the destroy, where
+        // nothing on the way writes the storage it is of.
+        EndBorrowInst? sunk = null;
         for (var k = index + 1; k < end; k++) {
-            if (MayWrite(block.Instructions[k], slot, owner)) {
+            var instruction = block.Instructions[k];
+            if (sunk is null && owner is LoadBorrowInst && instruction is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, owner)) {
+                sunk = (EndBorrowInst)instruction;
+                continue;
+            }
+
+            if (MayWrite(instruction, slot, owner)
+                || sunk is not null && owner is LoadBorrowInst outer && MayWrite(instruction, ExclusiveOf(outer.Address), Owner(outer.Address))) {
                 return null;
             }
+        }
+
+        if (sunk is not null) {
+            block.Instructions.Remove(sunk);
+            block.Instructions.Insert(block.Instructions.IndexOf(destroy) + 1, sunk);
         }
 
         return destroy;

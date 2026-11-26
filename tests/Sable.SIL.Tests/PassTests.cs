@@ -197,6 +197,91 @@ public sealed class PassTests {
         Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
     }
 
+    /// <summary>
+    ///     Views of a local array a loop changes, passed to calls on either
+    ///     side of a branch each turn, borrow the array for as long as they
+    ///     last: no retain of its buffer each turn, though each turn changes it.
+    /// </summary>
+    [Fact]
+    public void AViewOfALocalArrayBorrowsItWhileNothingWritesIt() {
+        var module = Lowered(
+            """
+            @inline(never)
+            fn dot(_ a: Int[:], _ b: Int[:]) -> Int {
+                var total = 0
+                for i in 0..<a.count {
+                    total += a[i] * b[i]
+                }
+                return total
+            }
+
+            fn pick(_ a: Int[:], _ b: Int[:], _ first: Bool) -> Int {
+                if first {
+                    return dot(a, b)
+                }
+                return dot(b, a) * 2
+            }
+
+            fn turns(_ n: Int) -> Int {
+                var x: Int[>..] = [1, 2, 3]
+                let y: Int[>..] = [4, 5, 6]
+                var total = 0
+                for round in 0..<n {
+                    x[round % 3] = round
+                    total += pick(x, y, round % 2 == 0)
+                }
+                return total
+            }
+
+            fn probe() -> Int { return turns(4) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var turns = module.Find("M.turns")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.DoesNotContain(turns, static i => i is BuiltinInst { Name: "slice_of" });
+        Assert.Contains(turns, static i => i is BuiltinInst { Name: "slice_of_borrowed" });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(28L + 46 + 17 + 58, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>
+    ///     An array in a field of an object in a field of self, read each turn
+    ///     of a loop: the borrow of the inner object lasts until the element
+    ///     is read, so the array is borrowed too, not copied each turn.
+    /// </summary>
+    [Fact]
+    public void AFieldOfABorrowedObjectIsReadWithTheBorrowStillOn() {
+        var module = Lowered(
+            """
+            class Code {
+                var ops: Int[>..]
+                init(_ ops: Int[>..]) { self.ops = ops }
+            }
+
+            class Runner {
+                var program: Code
+                init(_ program: Code) { self.program = program }
+
+                fn run(_ n: Int) -> Int {
+                    var total = 0
+                    for i in 0..<n {
+                        total += program.ops[i % 3]
+                    }
+                    return total
+                }
+            }
+
+            fn probe() -> Int { return Runner(Code([1, 2, 3])).run(5) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Equal(0, Copies(module, "M.Runner.run"));
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(9L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
     /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
     [Fact]
     public void ALocalIsBorrowedAcrossACallThatCanThrow() {

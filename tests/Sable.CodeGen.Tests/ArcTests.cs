@@ -437,12 +437,12 @@ public sealed class ArcTests {
         Assert.Contains("alloc_stack [unmanaged] $String, var \"label\"", sil, StringComparison.Ordinal);
         Assert.Contains("alloc_stack $String, var \"label\"", sil, StringComparison.Ordinal);
         if (CanBuild) {
-            // Was 899, then 502: walk's label each turn, and the dictionary's entries
-            // as they were looked up, and copied out to be updated and back; renaming's labels stay.
+            // Was 899, then 502, then 205: walk's label each turn, the dictionary's entries
+            // as they were looked up, and copied out to be updated and back, and a view of an array that now borrows it; renaming's labels stay.
             // Counted for specialised code: compiled once (#297), the dictionary copies its entries through their value witnesses.
             using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
             var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
-            Assert.Contains("retains 205,", stats, StringComparison.Ordinal);
+            Assert.Contains("retains 204,", stats, StringComparison.Ordinal);
         }
     }
 }

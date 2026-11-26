@@ -71,6 +71,7 @@ lib/Sable.Crypto.X509/TrustStore+System.sb        40  30   # half is the macOS a
 lib/Sable.Core/NativeMemory.sb                     85  60   # the rest is the preconditions' traps, which end the test's process
 lib/Sable.Core/Dictionary+Order.sb                 0   0   # package: what OrderedDictionary is made of, and Sable.Collections' OrderedDictionaryTests run it
 lib/Sable.Math/VectorKernels.sb                    50  40   # run only where the processor has no AVX2; SABLE_PORTABLE and Sable.CodeGen.Tests run it everywhere
+lib/Sable.Math/StridedKernels.sb                   0   0   # package: what Sable.Math.Tensors' arithmetic is made of, and its tests run it
 lib/Sable.Text/TranscodingKernels.sb              50  50   # run only where the runtime has no kernel; Sable.CodeGen.Tests run it interpreted
 lib/Sable.Net/UdpSocket.sb                        85  60   # the system's buffers cannot be made to fill, nor a socket have no address
 lib/Sable.Net/UnixStream.sb                       75  30   # only Linux has a full queue to be tried again

@@ -97,6 +97,23 @@ fn aLentArrayKeptPastItsCallIsACopy() {
     }
 }
 
+@test
+fn aShrinkableArrayAdoptsToo() {
+    unsafe {
+        let calls = RawPtr<Int>.allocate(count: 1)
+        calls.initialize(to: 0)
+        let memory = places(2)
+        do {
+            var xs = F64[>..<](adopting: memory, count: 2, release: cFunction(counted).pointer, context: calls.cast(to: Opaque.self))
+            xs[0] = 4
+            expect(xs.count == 2 && memory.load(at: 0) == 4 && xs[1] == 1)
+        }
+        expect(calls.load() == 1)
+        memory.deallocate()
+        calls.deallocate()
+    }
+}
+
 @test(traps: "a foreign array's elements are not aligned for their type")
 fn misalignedMemoryTraps() {
     unsafe {

@@ -51,6 +51,17 @@ extension<Element: PlainData> Element[>..] {
     }
 }
 
+extension<Element: PlainData> Element[>..<] {
+    /// An array of the `count` values at `start`, which C allocated and the
+    /// array owns from now on, as `Element[>..]`'s `init(adopting:)` makes.
+    public unsafe init(adopting start: RawPtr<Element>, count: Int, release: RawPtr<Opaque>, context: RawPtr<Opaque>) {
+        let cell = RawPtr<Element[>..<]>.allocate(count: 1)
+        foreignArray(cell.address, start.address, count, MemoryLayout<Element>.stride, MemoryLayout<Element>.alignment, release.address, context.address)
+        self = cell.move()
+        cell.deallocate()
+    }
+}
+
 /// Calls the body with the `count` values at `start`, which C owns and
 /// keeps, seen as an array for as long as the body runs: nothing is
 /// copied, and nothing is released after. A write changes C's memory

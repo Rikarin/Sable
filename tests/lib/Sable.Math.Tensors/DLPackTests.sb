@@ -119,6 +119,24 @@ fn stridesNoLayoutHasAreCopiedAndTheStructDeletedAtOnce() {
     }
 }
 
+fn roundTrip<T: DLPackElement & Equatable>(_ elements: T[:]) -> Bool {
+    let t = Tensor<T>(shape: [elements.count], elements: elements)
+    unsafe {
+        return Tensor<T>.fromDLPack(t.toDLPack(versioned: false), versioned: false) == t
+    }
+}
+
+@test
+fn everyElementTypeGoesBothWays() {
+    expect(roundTrip([1, -2] as I8[:]) && roundTrip([1, -2] as I16[:]) && roundTrip([1, -2] as I32[:]))
+    expect(roundTrip([1, -2] as I64[:]) && roundTrip([1, -2] as Int[:]))
+    expect(roundTrip([1, 2] as U8[:]) && roundTrip([1, 2] as U16[:]) && roundTrip([1, 2] as U32[:]) && roundTrip([1, 2] as U64[:]))
+    expect(roundTrip([1.5, -2] as F16[:]) && roundTrip([1.5, -2] as F32[:]) && roundTrip([1.5, -2] as F64[:]))
+    expect(roundTrip([BF16(1.5), BF16(-2.0)] as BF16[:]))
+    expect(I8.dlpackCode == 0 && U16.dlpackCode == 1 && F16.dlpackCode == 2 && BF16.dlpackCode == 4)
+    expect(I16.dlpackBits == 16 && U32.dlpackBits == 32 && BF16.dlpackBits == 16 && U64.dlpackBits == 64)
+}
+
 @test(traps: "a DLPack tensor of type code 0, 32 bits, 1 lanes, not 2, 32, 1")
 fn anotherTypeTraps() {
     unsafe {

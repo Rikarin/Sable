@@ -1,0 +1,91 @@
+module OperatorTests
+
+// Every arithmetic operator of F32 and F64 tensors and views — the vector
+// kernels' — and of another float type's (F16, the generic loop), on either
+// side of a number, against a closure saying what each element is.
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+fn grid<T: BinaryFloatingPoint>(_ type: T.Type, _ shape: Int[:], scale: T) -> Tensor<T> {
+    var count = 1
+    for length in shape {
+        count *= length
+    }
+    var elements: T[>..] = []
+    for i in 0..<count {
+        elements.append(T.converting(i + 1) * scale)
+    }
+    return Tensor<T>(shape: shape, elements: elements)
+}
+
+@test
+fn f64Operators() {
+    let a = grid(F64.self, [3, 17], scale: 1)
+    let b = grid(F64.self, [17], scale: 0.25)
+    let x = a.view
+    let y = b.view
+    expect(a + b == a.zip(b) { $0 + $1 } && x + y == a.zip(b) { $0 + $1 })
+    expect(a - b == a.zip(b) { $0 - $1 } && x - y == a.zip(b) { $0 - $1 })
+    expect(a * b == a.zip(b) { $0 * $1 } && x * y == a.zip(b) { $0 * $1 })
+    expect(a / b == a.zip(b) { $0 / $1 } && x / y == a.zip(b) { $0 / $1 })
+    expect(a + 2.0 == a.map { $0 + 2 } && x + 2.0 == a.map { $0 + 2 })
+    expect(a - 2.0 == a.map { $0 - 2 } && x - 2.0 == a.map { $0 - 2 })
+    expect(a * 2.0 == a.map { $0 * 2 } && x * 2.0 == a.map { $0 * 2 })
+    expect(a / 2.0 == a.map { $0 / 2 } && x / 2.0 == a.map { $0 / 2 })
+    expect(2.0 + a == a.map { 2 + $0 } && 2.0 + x == a.map { 2 + $0 })
+    expect(2.0 - a == a.map { 2 - $0 } && 2.0 - x == a.map { 2 - $0 })
+    expect(2.0 * a == a.map { 2 * $0 } && 2.0 * x == a.map { 2 * $0 })
+    expect(2.0 / a == a.map { 2 / $0 } && 2.0 / x == a.map { 2 / $0 })
+    expect(-a == a.map { -$0 } && -x == a.map { -$0 })
+    // A temporary written over, by each operator.
+    expect((a + 0.0) - b == a.zip(b) { $0 - $1 } && (a + 0.0) / b == a.zip(b) { $0 / $1 })
+    expect(1.0 - (a + 0.0) == a.map { 1 - $0 } && 1.0 / (a + 0.0) == a.map { 1 / $0 })
+    expect((a + 0.0) * b == a.zip(b) { $0 * $1 } && (a * 1.0) + b == a.zip(b) { $0 + $1 })
+    expect(a.sum() == a.view.toArray().reduce(0) { $0 + $1 })
+}
+
+@test
+fn f32Operators() {
+    let a = grid(F32.self, [3, 17], scale: 1)
+    let b = grid(F32.self, [17], scale: 0.25)
+    let x = a.view
+    let y = b.view
+    expect(a + b == a.zip(b) { $0 + $1 } && x + y == a.zip(b) { $0 + $1 })
+    expect(a - b == a.zip(b) { $0 - $1 } && x - y == a.zip(b) { $0 - $1 })
+    expect(a * b == a.zip(b) { $0 * $1 } && x * y == a.zip(b) { $0 * $1 })
+    expect(a / b == a.zip(b) { $0 / $1 } && x / y == a.zip(b) { $0 / $1 })
+    expect(a + 2 == a.map { $0 + 2 } && x + 2 == a.map { $0 + 2 })
+    expect(a - 2 == a.map { $0 - 2 } && x - 2 == a.map { $0 - 2 })
+    expect(a * 2 == a.map { $0 * 2 } && x * 2 == a.map { $0 * 2 })
+    expect(a / 2 == a.map { $0 / 2 } && x / 2 == a.map { $0 / 2 })
+    expect(2 + a == a.map { 2 + $0 } && 2 + x == a.map { 2 + $0 })
+    expect(2 - a == a.map { 2 - $0 } && 2 - x == a.map { 2 - $0 })
+    expect(2 * a == a.map { 2 * $0 } && 2 * x == a.map { 2 * $0 })
+    expect(2 / a == a.map { 2 / $0 } && 2 / x == a.map { 2 / $0 })
+    expect(-a == a.map { -$0 } && -x == a.map { -$0 })
+    expect((a + 0) - b == a.zip(b) { $0 - $1 } && (a + 0) / b == a.zip(b) { $0 / $1 })
+    expect(1 - (a + 0) == a.map { 1 - $0 } && 1 / (a + 0) == a.map { 1 / $0 })
+    expect(a.view.sum() == a.sum() && a.view.mean(axis: 1) == a.mean(axis: 1))
+    expect(a.view.sum(axis: 0) == a.sum(axis: 0) && x.transposed().sum(axis: 1) == a.sum(axis: 0))
+}
+
+@test
+fn anotherFloatTypeGoesByTheLoop() {
+    let a = grid(F16.self, [2, 3], scale: 1)
+    let b = grid(F16.self, [3], scale: 0.5)
+    let x = a.view
+    let y = b.view
+    expect(a / b == a.zip(b) { $0 / $1 } && x / y == a.zip(b) { $0 / $1 })
+    expect(a / 2 == a.map { $0 / 2 } && x / 2 == a.map { $0 / 2 })
+    expect(2 / a == a.map { 2 / $0 } && 2 / x == a.map { 2 / $0 })
+    expect(-a == a.map { -$0 } && -x == a.map { -$0 })
+    expect(a + 1 == a.map { $0 + 1 } && 1 - x == a.map { 1 - $0 } && 2 * x == a.map { 2 * $0 })
+    expect(x + y == a.zip(b) { $0 + $1 } && x - y == a.zip(b) { $0 - $1 } && x * y == a.zip(b) { $0 * $1 })
+    expect(a.mean(axis: 1).toArray() == [2, 5])
+    expect(Tensor<Int>(shape: [2], elements: [1, 2]).view + 1 == Tensor<Int>(shape: [2], elements: [2, 3]))
+    expect(3 - Tensor<Int>(shape: [2], elements: [1, 2]).view == Tensor<Int>(shape: [2], elements: [2, 1]))
+    expect(Tensor<Int>(shape: [2], elements: [1, 2]).view * 2 == Tensor<Int>(shape: [2], elements: [2, 4]))
+    expect(2 + Tensor<Int>(shape: [2], elements: [1, 2]) == Tensor<Int>(shape: [2], elements: [3, 4]))
+    expect(Tensor<Int>(shape: [2], elements: [1, 2]) - 1 == Tensor<Int>(shape: [2], elements: [0, 1]))
+}

@@ -50,6 +50,11 @@ public sealed class StructuredConcurrencyTests {
             "true false\n",
             AssertAgree(AsyncProgram("", """
                     let outer = Task.spawn {
+                        // Not before it is cancelled: else it may be done
+                        // before 'cancel' is called, on a loaded runner.
+                        while !Task.isCancelled {
+                            await Task.yield()
+                        }
                         let free = Task.detached {
                             await Task.yield()
                             return Task.isCancelled

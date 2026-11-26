@@ -2,6 +2,7 @@ module PoolStress
 
 import Sable.Concurrency
 import Sable.Text
+import Sable.Time
 
 // Object pools and async pools, rented and given back from tasks on every
 // worker and from threads of the program's own, for ThreadSanitizer
@@ -71,11 +72,13 @@ fn main() async {
         }
         total.add(objects.idleCount + round)
 
-        let connections = AsyncPool<Busy>(maximumCount: 3, create: { Busy(gone) })
+        // Each lives a few microseconds at most, so that some are dropped as
+        // they come back and their room passed on.
+        let connections = AsyncPool<Busy>(maximumCount: 3, maximumLifetime: Duration.microseconds(20), create: { Busy(gone) })
         let renters = (0..<12).map { n in
             Task.spawn {
                 for _ in 0..<30 {
-                    try! await connections.with { busy in
+                    _ = try? await connections.with { busy in
                         if busy.held.exchange(true) {
                             clashes.add(1)
                         }
@@ -91,10 +94,13 @@ fn main() async {
         }
         quitter.cancel()
         _ = await quitter.value
+        // Drained while the last renters are still at it: closed to them,
+        // and waited on until the leased come back.
+        let draining = Task.spawn { try! await connections.drain() }
         for renter in renters {
             await renter.value
         }
-        connections.close()
+        await draining.value
     }
     print(clashes.load() == 0 && total.load() > 0 && gone.load() > 0)
 }

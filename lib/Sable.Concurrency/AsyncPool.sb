@@ -9,18 +9,23 @@ import Sable.Time
 // served; what comes back — an object, or the room to make one, as one is
 // dropped — goes to the first waiting, handed over under the lock, so that
 // no rent that comes by meanwhile takes it. Each waiter parks on a wait
-// list of its own, and is woken once it has been given something.
+// list of its own, and is woken once it has been given something. Past
+// the object, each cell keeps when the object was made, which its maximum
+// lifetime is counted from.
 
 /// Objects that are made asynchronously and are dear to hold — connections,
 /// sessions, handles to a remote service — of which there may be at most so
 /// many: deadpool's and .NET's connection pools' shape. `rent()` gives an
 /// idle one, or makes one while there is room, or else waits, in turn, for
 /// one to come back; the lease gives it back, recycled, as it goes. An
-/// object idle for longer than the idle timeout is dropped as the pool
-/// comes upon it; one the validation finds broken as it is rented is
-/// dropped, and another rented in its place.
+/// object idle for longer than the idle timeout, or older than the maximum
+/// lifetime, is dropped as the pool comes upon it — idle, or coming back;
+/// one the validation finds broken as it is rented is dropped, and another
+/// rented in its place. Dropping an object is its deinit, which closes
+/// what it holds. `close()` stops the rents, and `drain()` waits too, until
+/// the leased have come back and every object is gone.
 ///
-/// The idle timeout is measured on the clock given, so a test passes it a
+/// The timeouts are measured on the clock given, so a test passes it a
 /// `TestClock`.
 ///
 /// ```sable
@@ -43,9 +48,20 @@ public final class AsyncPool<T> {
     /// A pool of at most so many objects, which 'create' makes as they are
     /// needed; 'recycle' readies each that comes back (false drops it), and
     /// 'validate' checks one idle as it is rented (false drops it). One idle
-    /// for longer than the idle timeout, on the clock, is dropped.
+    /// for longer than the idle timeout, or made longer ago than the maximum
+    /// lifetime, on the clock, is dropped.
+    ///
+    /// ```sable
+    /// let clock = TestClock()
+    /// let pool = AsyncPool<Int>(maximumCount: 4, maximumLifetime: Duration.minutes(5), clock: clock, create: { 1 })
+    /// _ = try! await pool.with { $0 }
+    /// assert(pool.idleCount == 1)
+    /// await clock.advance(by: Duration.minutes(6))
+    /// _ = try! await pool.with { $0 }   // the old one dropped, a new one made
+    /// assert(pool.count == 1)
+    /// ```
     public init<C: Clock>(
-        maximumCount: Int, idleTimeout: Duration? = none, clock: C,
+        maximumCount: Int, idleTimeout: Duration? = none, maximumLifetime: Duration? = none, clock: C,
         create: @escaping @Sendable async () throws -> T,
         recycle: @escaping @Sendable (inout T) -> Bool = { _ in true },
         validate: @escaping @Sendable async (inout T) -> Bool = { _ in true }
@@ -54,20 +70,23 @@ public final class AsyncPool<T> {
         if let timeout = idleTimeout {
             precondition(timeout > Duration.zero, "an idle timeout of \(timeout)")
         }
+        if let lifetime = maximumLifetime {
+            precondition(lifetime > Duration.zero, "a maximum lifetime of \(lifetime)")
+        }
         self.maximumCount = maximumCount
         let start = clock.now()
-        core = AsyncPoolCore<T>(maximumCount, idleTimeout, { clock.now().durationSince(start) }, create, recycle, validate)
+        core = AsyncPoolCore<T>(maximumCount, idleTimeout, maximumLifetime, { clock.now().durationSince(start) }, create, recycle, validate)
     }
 
-    /// As `init(maximumCount:idleTimeout:clock:create:recycle:validate:)`,
+    /// As `init(maximumCount:idleTimeout:maximumLifetime:clock:create:recycle:validate:)`,
     /// on the monotonic clock.
     public convenience init(
-        maximumCount: Int, idleTimeout: Duration? = none,
+        maximumCount: Int, idleTimeout: Duration? = none, maximumLifetime: Duration? = none,
         create: @escaping @Sendable async () throws -> T,
         recycle: @escaping @Sendable (inout T) -> Bool = { _ in true },
         validate: @escaping @Sendable async (inout T) -> Bool = { _ in true }
     ) {
-        self.init(maximumCount: maximumCount, idleTimeout: idleTimeout, clock: MonotonicClock(), create: create, recycle: recycle, validate: validate)
+        self.init(maximumCount: maximumCount, idleTimeout: idleTimeout, maximumLifetime: maximumLifetime, clock: MonotonicClock(), create: create, recycle: recycle, validate: validate)
     }
 
     deinit {
@@ -128,6 +147,33 @@ public final class AsyncPool<T> {
     /// `PoolClosedError`.
     public fn close() {
         core.close()
+    }
+
+    /// Closed, as `close()` closes it, and then waited on until every
+    /// object is gone: the leased given back and those being made made,
+    /// and each dropped. Throws `CancellationError` if the task is
+    /// cancelled first; the pool stays closed.
+    ///
+    /// ```sable
+    /// let pool = AsyncPool<Int>(maximumCount: 2, create: { 7 })
+    /// var lease: AsyncLease<Int>? = try! await pool.rent()
+    /// let draining = Task.spawn { try! await pool.drain() }
+    /// await Task.settle()
+    /// assert(pool.isClosed && pool.count == 1)
+    /// lease = none        // given back, and dropped, as the pool is closed
+    /// await draining.value
+    /// assert(pool.count == 0)
+    /// ```
+    public fn drain() async throws {
+        core.close()
+        while true {
+            let ticket = core.drained.ticket
+            if core.state.withLock({ $0.total == 0 }) {
+                return
+            }
+            try Task.checkCancellation()
+            await core.drained.parkCancellably(since: ticket)
+        }
     }
 
     /// The idle objects dropped.
@@ -266,15 +312,26 @@ final class AsyncPoolCore<T> {
     let state: Mutex<AsyncPoolState>
     let maximum: Int
     let idleTimeout: Duration?
+    let lifetime: Duration?
     let elapsed: () -> Duration
     let create: async () throws -> T
     let recycle: (inout T) -> Bool
     let validate: async (inout T) -> Bool
+    // Who waits for the last object to go, once the pool is closed.
+    let drained: WaitList
+    // Where in a cell its object's making is kept, and how big a cell is.
+    let bornAt: Int
+    let cellBytes: Int
 
-    init(_ maximum: Int, _ idleTimeout: Duration?, _ elapsed: @escaping @Sendable () -> Duration, _ create: @escaping @Sendable async () throws -> T, _ recycle: @escaping @Sendable (inout T) -> Bool, _ validate: @escaping @Sendable async (inout T) -> Bool) {
+    init(_ maximum: Int, _ idleTimeout: Duration?, _ lifetime: Duration?, _ elapsed: @escaping @Sendable () -> Duration, _ create: @escaping @Sendable async () throws -> T, _ recycle: @escaping @Sendable (inout T) -> Bool, _ validate: @escaping @Sendable async (inout T) -> Bool) {
         state = Mutex(AsyncPoolState())
         self.maximum = maximum
         self.idleTimeout = idleTimeout
+        self.lifetime = lifetime
+        drained = WaitList()
+        let step = MemoryLayout<Duration>.alignment
+        bornAt = (MemoryLayout<T>.stride + step - 1) / step * step
+        cellBytes = bornAt + MemoryLayout<Duration>.size
         self.elapsed = elapsed
         self.create = create
         self.recycle = recycle
@@ -313,17 +370,18 @@ final class AsyncPoolCore<T> {
     // too long dropped on the way.
     fn next() -> AsyncPoolStep {
         let now = elapsed()
-        let timeout = idleTimeout
+        let timeout = idleTimeout ?? Duration.max
+        let checksAge = idleTimeout != none || lifetime != none
         let maximum = self.maximum
         var expired: Int[>..] = []
         let step = state.withLock { (state: inout AsyncPoolState) -> AsyncPoolStep in
             if state.closed {
                 return .Closed
             }
-            if let limit = timeout {
+            if checksAge {
                 var kept: AsyncPoolIdle[>..] = []
                 for idle in state.idle {
-                    if now - idle.since >= limit {
+                    if now - idle.since >= timeout || tooOld(idle.cell, now) {
                         expired.append(idle.cell)
                     } else {
                         kept.append(idle)
@@ -395,6 +453,16 @@ final class AsyncPoolCore<T> {
         }
     }
 
+    // Whether the cell's object has lived out its lifetime.
+    fn tooOld(_ cell: Int, _ now: Duration) -> Bool {
+        if let limit = lifetime {
+            unsafe {
+                return now - RawPtr<Duration>(address: cell + bornAt).load() >= limit
+            }
+        }
+        return false
+    }
+
     fn valid(_ cell: Int) async -> Bool {
         unsafe {
             let place = RawPtr<T>(address: cell)
@@ -411,14 +479,29 @@ final class AsyncPoolCore<T> {
         do {
             let value = try await create()
             Runtime.share(value)
+            let born = elapsed()
             unsafe {
-                let cell = RawPtr<T>.allocate(count: 1)
-                cell.initialize(to: value)
-                return cell.address
+                let cell = allocateCell()
+                RawPtr<T>(address: cell).initialize(to: value)
+                RawPtr<Duration>(address: cell + bornAt).initialize(to: born)
+                return cell
             }
         } catch {
             giveRoomBack()
             throw error
+        }
+    }
+
+    // Room for a cell, aligned for its object and for the time after it:
+    // as many of whichever is aligned more as cover it.
+    fn allocateCell() -> Int {
+        unsafe {
+            let stride = MemoryLayout<T>.stride
+            if MemoryLayout<T>.alignment > MemoryLayout<Duration>.alignment {
+                return RawPtr<T>.allocate(count: (cellBytes + stride - 1) / stride).address
+            }
+            let step = MemoryLayout<Duration>.stride
+            return RawPtr<Duration>.allocate(count: (cellBytes + step - 1) / step).address
         }
     }
 
@@ -432,14 +515,14 @@ final class AsyncPoolCore<T> {
     }
 
     // A cell back, its value recycled where its holder held it: to the
-    // first waiting, or idle — or, if the recycling refused it, dropped,
-    // and its room passed on.
+    // first waiting, or idle — or, if the recycling refused it or it is
+    // too old, dropped, and its room passed on.
     fn put(_ cell: Int, keep: Bool) {
-        if !keep {
+        let now = elapsed()
+        if !keep || tooOld(cell, now) {
             drop(cell)
             return
         }
-        let now = elapsed()
         var closed = false
         let woken = state.withLock { (state: inout AsyncPoolState) -> AsyncPoolWaiter? in
             if state.closed {
@@ -455,6 +538,7 @@ final class AsyncPoolCore<T> {
         }
         if closed {
             destroy(cell)
+            settled()
         }
         if let waiter = woken {
             waiter.woken.wakeAll()
@@ -480,6 +564,16 @@ final class AsyncPoolCore<T> {
         }
         if let waiter = woken {
             waiter.woken.wakeAll()
+        } else {
+            settled()
+        }
+    }
+
+    // Those draining the pool woken once it is closed and its last object
+    // gone.
+    fn settled() {
+        if state.withLock({ $0.closed && $0.total == 0 }) {
+            drained.wakeAll()
         }
     }
 
@@ -504,6 +598,7 @@ final class AsyncPoolCore<T> {
         for cell in cells {
             destroy(cell)
         }
+        settled()
     }
 
     fn close() {

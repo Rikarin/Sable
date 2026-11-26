@@ -1196,7 +1196,9 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     move-only; PoolPolicy, Resettable; leases tracked
                     with where they were rented) and AsyncPool (made
                     asynchronously, at most so many, rents waiting in
-                    turn, idle timeout on a Clock, validation),
+                    turn, idle timeout and maximum lifetime on a
+                    Clock, validation, drained as it closes: what an
+                    HTTP client's connections need),
                     Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
                     Thread (spawn, scope, park, blockOn), JoinHandle,

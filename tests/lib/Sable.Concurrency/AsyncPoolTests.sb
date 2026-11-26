@@ -36,14 +36,14 @@ struct Connections {
     let clock: TestClock<Instant>
     let pool: AsyncPool<Connection>
 
-    init(maximumCount: Int = 2, idleTimeout: Duration? = none, failing: Bool = false) {
+    init(maximumCount: Int = 2, idleTimeout: Duration? = none, maximumLifetime: Duration? = none, failing: Bool = false) {
         let opened = Atomic(0)
         let closed = Atomic(0)
         let clock = TestClock()
         self.opened = opened
         self.closed = closed
         self.clock = clock
-        pool = AsyncPool<Connection>(maximumCount: maximumCount, idleTimeout: idleTimeout, clock: clock, create: {
+        pool = AsyncPool<Connection>(maximumCount: maximumCount, idleTimeout: idleTimeout, maximumLifetime: maximumLifetime, clock: clock, create: {
             if failing {
                 throw Broken.Down
             }
@@ -279,4 +279,231 @@ fn manyTasksNeverHoldMoreThanTheMaximum() async throws {
     }
     expect(most.load() <= 3)
     expect(c.opened.load() <= 3)
+}
+
+@test
+fn anObjectOlderThanItsLifetimeIsDroppedIdleOrComingBack() async throws {
+    let c = Connections(maximumLifetime: Duration.seconds(60))
+    // Idle when it comes of age: dropped as the next rent comes upon it.
+    assertEqual(try await c.pool.with { $0.id }, 1)
+    await c.clock.advance(by: Duration.seconds(61))
+    assertEqual(try await c.pool.with { $0.id }, 2)
+    assertEqual(c.closed.load(), 1)
+    // Leased when it comes of age: dropped as it comes back, its room
+    // given to the next.
+    if true {
+        let lease = try await c.pool.rent()
+        assertEqual(lease.value.id, 2)
+        await c.clock.advance(by: Duration.seconds(60))
+    }
+    assertEqual(c.pool.count, 0)
+    assertEqual(c.closed.load(), 2)
+    assertEqual(try await c.pool.with { $0.id }, 3)
+}
+
+@test
+fn drainWaitsForTheLeasedToComeBack() async throws {
+    let c = Connections()
+    let pool = c.pool
+    var held: AsyncLease<Connection>? = try await pool.rent()
+    if true {
+        let idle = try await pool.rent()
+    }
+    let done = Atomic(0)
+    let draining = Task.spawn {
+        try! await pool.drain()
+        done.store(1)
+    }
+    await Task.settle()
+    // Closed, the idle one dropped, the leased one not yet back.
+    expect(pool.isClosed)
+    assertEqual(c.closed.load(), 1)
+    assertEqual(done.load(), 0)
+    held = none
+    await draining.value
+    assertEqual(done.load(), 1)
+    assertEqual(pool.count, 0)
+    assertEqual(c.closed.load(), 2)
+}
+
+@test
+fn drainingAnEmptyPoolReturnsAtOnce() async throws {
+    let c = Connections()
+    try await c.pool.drain()
+    expect(c.pool.isClosed)
+    try await c.pool.drain()
+}
+
+@test
+fn aCancelledDrainThrowsAndThePoolStaysClosed() async throws {
+    let c = Connections()
+    let pool = c.pool
+    let held = try await pool.rent()
+    let draining = Task.spawn {
+        do {
+            try await pool.drain()
+            return false
+        } catch is CancellationError {
+            return true
+        } catch {
+            return false
+        }
+    }
+    await Task.settle()
+    draining.cancel()
+    expect(await draining.value)
+    expect(pool.isClosed)
+    _ = held.value
+}
+
+// A server's connections, as an HTTP client's pool (#117) holds them: each
+// opened asynchronously, which may fail; one the server closed while it was
+// idle found as it is rented, and replaced; none kept idle past a timeout
+// or alive past a lifetime; never more than so many open at once, however
+// many requests there are; and on shutdown, every one closed once the
+// requests in flight are done.
+final class ServerConnection {
+    let id: Int
+    let server: FakeServer
+    var requests: Int = 0
+
+    init(_ id: Int, _ server: FakeServer) {
+        self.id = id
+        self.server = server
+    }
+
+    var isOpen: Bool => server.isOpen(id)
+
+    fn send(_ request: Int) async throws -> Int {
+        if !isOpen {
+            throw Broken.Down
+        }
+        requests += 1
+        await Task.yield()
+        return request * 2
+    }
+
+    deinit {
+        server.hangUp(id)
+    }
+}
+
+@immutable
+final class FakeServer {
+    let live: Mutex<Int[>..]> = Mutex([])
+    let opened: Atomic<Int> = Atomic(0)
+    let refusing: Atomic<Int> = Atomic(0)
+    let mostOpen: Atomic<Int> = Atomic(0)
+
+    fn connect() async throws -> ServerConnection {
+        await Task.yield()
+        if refusing.load() > 0 {
+            refusing.add(-1)
+            throw Broken.Down
+        }
+        let id = opened.add(1) + 1
+        let now = live.withLock { (live: inout Int[>..]) -> Int in
+            live.append(id)
+            return live.count
+        }
+        _ = mostOpen.update { $0 > now ? $0 : now }
+        return ServerConnection(id, self)
+    }
+
+    fn isOpen(_ id: Int) -> Bool {
+        return live.withLock { $0.contains(id) }
+    }
+
+    // The server ends a connection: the client finds out as it uses it.
+    fn close(_ id: Int) {
+        live.withLock { (live: inout Int[>..]) -> Void in
+            live = live.filter { $0 != id }
+        }
+    }
+
+    fn hangUp(_ id: Int) {
+        close(id)
+    }
+
+    var openCount: Int => live.withLock { $0.count }
+}
+
+@test
+fn aConnectionPoolOfAnHttpClient() async throws {
+    let server = FakeServer()
+    let clock = TestClock()
+    let pool = AsyncPool<ServerConnection>(
+        maximumCount: 4, idleTimeout: Duration.seconds(90), maximumLifetime: Duration.minutes(10), clock: clock,
+        create: { try await server.connect() },
+        recycle: { $0.isOpen },
+        validate: { $0.isOpen }
+    )
+
+    // A refused connection fails the request that asked for it, and leaves
+    // room for the next.
+    server.refusing.store(1)
+    await expectThrows(Broken.Down) {
+        _ = try await pool.with { try await $0.send(1) }
+    }
+    assertEqual(pool.count, 0)
+
+    // Many requests at once share at most four connections.
+    let requests = (0..<16).map { n in
+        Task.spawn {
+            var sum = 0
+            for k in 0..<5 {
+                sum += try! await pool.with { try await $0.send(n * 10 + k) }
+            }
+            return sum
+        }
+    }
+    var total = 0
+    for request in requests {
+        total += await request.value
+    }
+    assertEqual(total, 2 * (0..<16).reduce(0) { sum, n in sum + 50 * n + 10 })
+    expect(server.mostOpen.load() <= 4)
+    assertEqual(pool.count, pool.idleCount)
+
+    // One the server closed while it was idle is found as it is rented, and
+    // another opened in its place.
+    let idle = pool.idleCount
+    let first = try await pool.with { $0.id }
+    server.close(first)
+    let next = try await pool.with { connection in
+        expect(connection.isOpen)
+        return connection.id
+    }
+    expect(next != first)
+    expect(pool.count <= idle)
+
+    // Idle past the timeout: closed as the pool comes upon them.
+    await clock.advance(by: Duration.seconds(91))
+    let fresh = try await pool.with { $0.id }
+    assertEqual(pool.count, 1)
+    expect(fresh > first)
+
+    // Alive past the lifetime, though busy: closed as it comes back.
+    for _ in 0..<11 {
+        await clock.advance(by: Duration.seconds(60))
+        _ = try await pool.with { try await $0.send(0) }
+    }
+    expect(try await pool.with { $0.id } != fresh)
+
+    // Shutdown: no new requests, and every connection closed once those in
+    // flight are done.
+    var shutdown: Task<Void>? = none
+    if true {
+        let inFlight = try await pool.rent()
+        shutdown = Task.spawn { try! await pool.drain() }
+        await Task.settle()
+        await expectThrows(PoolClosedError()) {
+            _ = try await pool.rent()
+        }
+        assertEqual(server.openCount, 1)
+        assertEqual(try await inFlight.value.send(3), 6)
+    }
+    await shutdown!.value
+    assertEqual(server.openCount, 0)
+    assertEqual(pool.count, 0)
 }

@@ -2818,12 +2818,21 @@ public sealed partial class SilGen {
         if (requirement is { FunctionKind: FunctionKind.Operator, Parameters: [var left, var right] } && OperatorKindOf(requirement.Name) is { } kind) {
             // '>', '<=', '>=' and '!=' bound with a method are derived from it
             // ('<' the other way round); as requirements of their own
-            // (Comparable's), they are that method, applied (#348).
+            // (Comparable's), they are the conformer's own, applied (#348) —
+            // or, met by the protocol's default, derived from '<' as the
+            // default does, which no instance of the default is made for.
+            var method = requirement;
             if (kind is BinaryOperatorKind.NotEqual or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual) {
-                kind = BinaryOperatorKind.UserDefined;
+                var basis = kind == BinaryOperatorKind.NotEqual ? "==" : "<";
+                if (concrete is NamedTypeSymbol named && Implementation(named, requirement) is { ContainingSymbol: ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } }
+                    && ProtocolClosure([protocol]).SelectMany(static p => p.Members).OfType<FunctionSymbol>().FirstOrDefault(f => f.FunctionKind == FunctionKind.Operator && f.Name == basis && f.ContainingSymbol is NamedTypeSymbol) is { } derivedFrom) {
+                    method = derivedFrom;
+                } else {
+                    kind = BinaryOperatorKind.UserDefined;
+                }
             }
 
-            call = new BoundBinaryOperator(syntax, requirement.ReturnType, kind, new BoundParameterAccess(syntax, left), new BoundParameterAccess(syntax, right), requirement);
+            call = new BoundBinaryOperator(syntax, requirement.ReturnType, kind, new BoundParameterAccess(syntax, left), new BoundParameterAccess(syntax, right), method);
         }
 
         // A subscript is indexed, as code that knows the type indexes it: an array's elements, or the type's own subscript.

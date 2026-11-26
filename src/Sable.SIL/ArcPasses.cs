@@ -976,13 +976,15 @@ public sealed class ForwardCopies : ISilPass {
     ///     is moved into the call, not copied for it, so that what the callee
     ///     is given it holds alone — a buffer it changes in place rather than
     ///     copying it first. Nothing may use the slot between the load and its
-    ///     destroy, in the load's block; and the value must run no deinit,
-    ///     which the move would bring forward from the end of the scope.
+    ///     destroy, in the load's block; and the value must hold no object
+    ///     but arrays' buffers and strings: one an object holds, the move
+    ///     could free sooner than the scope says — under an 'unowned'
+    ///     reference to it, or before its deinit was to run.
     /// </summary>
     static bool TryMoveToConsumer(SilFunction function, SilBlock block, int index, LoadInst load, Uses uses) {
         var slot = (AllocStackInst)load.Address;
         if (slot.Unmanaged || uses.Of(load) is not [{ } call] || call is not (ApplyInst or TryApplyInst) || !Uses.Consumes(call, load)
-            || function.Module is not { } module || module.MayRunDeinit(load.Type)) {
+            || !HoldsNoObject(load.Type)) {
             return false;
         }
 
@@ -1003,6 +1005,18 @@ public sealed class ForwardCopies : ISilPass {
 
         return false;
     }
+
+    /// <summary>Whether a value holds nothing that can be referred to but by it: trivial bits, strings, arrays of such, and aggregates of them.</summary>
+    static bool HoldsNoObject(SilType type, int depth = 0) =>
+        depth < 16 && type switch {
+            _ when type.IsTrivial => true,
+            _ when type == SilType.String => true,
+            ArrayType array => HoldsNoObject(array.Element, depth + 1),
+            StructType { Deinit: null, IsInline: false } structType => structType.Fields.TrueForAll(f => HoldsNoObject(f.Type, depth + 1)),
+            TupleType tuple => tuple.Elements.All(e => HoldsNoObject(e, depth + 1)),
+            EnumType enumType => enumType.Cases.TrueForAll(c => c.Payload is null || HoldsNoObject(c.Payload, depth + 1)),
+            _ => false,
+        };
 
     static AllocStackInst? SlotUnder(SilValue address) =>
         address switch {

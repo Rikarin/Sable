@@ -1520,7 +1520,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return ReferenceEquals(Alive((HeapObject)operands[0]!), Alive((HeapObject)operands[1]!));
 
             case "ref_is_unique":
-                return (((IReference)operands[0]!).Peek() is object?[] { Length: 1 } holder ? holder[0] : ((IReference)operands[0]!).Peek()) is Counted { Strong: 1, Immortal: false };
+                // An empty array holds no buffer, and is as unique as one can be.
+                return (((IReference)operands[0]!).Peek() is object?[] { Length: 1 } holder ? holder[0] : ((IReference)operands[0]!).Peek()) switch {
+                    Counted counted => counted is { Strong: 1, Immortal: false },
+                    null => builtin.Operands[0].Type is AddressType { Pointee: StructType { Fields: [(_, ArrayType)] } },
+                    _ => false,
+                };
 
             case "make_immortal":
                 MakeImmortal(builtin.Operands[0].Type, operands[0]);

@@ -456,18 +456,13 @@ public sealed class ArcTests {
     public void ALastUseIntoAConsumingParameterIsAMove() {
         // The callee's copy is the only reference: 'ref_is_unique' (isUniquelyReferenced), declared where a builtin may be.
         Assert.Equal(
-            "true\nfalse\n8\n",
+            "true\nfalse\n8\no\n",
             AssertAgree(
                 """
                 module Sable.MoveCheck
 
-                class Cell {
-                    var n: Int
-                    init(_ n: Int) { self.n = n }
-                }
-
                 struct Held {
-                    var cell: Cell
+                    var xs: Int[>..]
 
                     @builtin("ref_is_unique")
                     mutating fn isUniquelyReferenced() -> Bool
@@ -480,7 +475,21 @@ public sealed class ArcTests {
                 }
 
                 fn make(_ n: Int) -> Held {
-                    return Held { cell: Cell(n) }
+                    var xs: Int[>..] = []
+                    for i in 0..<n {
+                        xs.append(i)
+                    }
+                    return Held { xs: xs }
+                }
+
+                class Owner {
+                    var label: String
+                    init(label: String) { self.label = label }
+                }
+
+                class Pet {
+                    unowned var owner: Owner
+                    init(owner: Owner) { self.owner = owner }
                 }
 
                 @main
@@ -489,7 +498,11 @@ public sealed class ArcTests {
                     print(alone(moved))
                     let kept = make(8)
                     print(alone(kept))
-                    print(kept.cell.n)
+                    print(kept.xs.count)
+                    // An object is not moved: what refers to it unowned may outlive the call.
+                    let o = Owner(label: "o")
+                    let pet = Pet(owner: o)
+                    print(pet.owner.label)
                 }
                 """
             ).Stdout

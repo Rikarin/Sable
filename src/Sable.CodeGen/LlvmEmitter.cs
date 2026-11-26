@@ -5518,6 +5518,22 @@ public sealed partial class LlvmEmitter {
                     var sole = Fresh();
                     var mortal = Fresh();
                     Line($"{objectPointer} = load ptr, ptr {operands[0]}");
+                    // An empty array holds no buffer: it is read as a header of its own, counted once.
+                    if (builtin.Operands[0].Type is AddressType { Pointee: StructType { Fields: [(_, ArrayType)] } }) {
+                        var alone = Scratch("%SableObjectHeader", 8);
+                        var aloneStrong = Fresh();
+                        Line($"{aloneStrong} = getelementptr inbounds %SableObjectHeader, ptr {alone}, i32 0, i32 1");
+                        Line($"store i32 1, ptr {aloneStrong}");
+                        var aloneFlags = Fresh();
+                        Line($"{aloneFlags} = getelementptr inbounds %SableObjectHeader, ptr {alone}, i32 0, i32 2");
+                        Line($"store i32 0, ptr {aloneFlags}");
+                        var none = Fresh();
+                        Line($"{none} = icmp eq ptr {objectPointer}, null");
+                        var buffer = Fresh();
+                        Line($"{buffer} = select i1 {none}, ptr {alone}, ptr {objectPointer}");
+                        objectPointer = buffer;
+                    }
+
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 1");
                     Line($"{strong} = load atomic i32, ptr {strongField} acquire, align 4");
                     Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 2");

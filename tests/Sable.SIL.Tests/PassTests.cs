@@ -282,6 +282,49 @@ public sealed class PassTests {
         Assert.Equal(0, interpreter.LiveObjects);
     }
 
+    /// <summary>
+    ///     A local's last use into a consuming parameter moves an array, but
+    ///     not an object: what keeps an unowned reference to the object may
+    ///     outlive the call, the local keeping the object alive meanwhile.
+    /// </summary>
+    [Fact]
+    public void AnObjectGivenAtItsLastUseIsNotMovedFromUnderAnUnownedReference() {
+        var module = Lowered(
+            """
+            class Owner {
+                var label: Int
+                init(_ label: Int) { self.label = label }
+            }
+
+            class Pet {
+                unowned var owner: Owner
+                init(_ owner: Owner) { self.owner = owner }
+            }
+
+            @inline(never)
+            fn sum(_ xs: consuming Int[>..]) -> Int {
+                var total = 0
+                for x in xs {
+                    total += x
+                }
+                return total
+            }
+
+            fn probe() -> Int {
+                let xs: Int[>..] = [1, 2, 3]
+                let total = sum(xs)
+                let o = Owner(7)
+                let pet = Pet(o)
+                return pet.owner.label + total
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(13L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
     /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
     [Fact]
     public void ALocalIsBorrowedAcrossACallThatCanThrow() {

@@ -3939,7 +3939,9 @@ public sealed partial class SilGen {
                 (FunctionSymbol r, FunctionSymbol m) =>
                     (r.IsStatic == m.IsStatic || r.FunctionKind == FunctionKind.Operator) && r.Parameters.Length == m.Parameters.Length
                     // 'append(contentsOf:)' is not 'append(element:)'.
-                    && (r.FunctionKind == FunctionKind.Operator || SameLabels(r, m)),
+                    && (r.FunctionKind == FunctionKind.Operator || SameLabels(r, m))
+                    // Nor is 'make(_: String)' the 'make(_: FilePath)' it overloads.
+                    && ParametersFit(m, r),
                 (FieldSymbol r, FieldSymbol m) => r.IsStatic == m.IsStatic,
                 _ => false,
             };

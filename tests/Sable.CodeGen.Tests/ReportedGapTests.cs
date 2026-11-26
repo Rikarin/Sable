@@ -146,4 +146,58 @@ public sealed class ReportedGapTests {
                 print(viaGeneric(Memory()))
             }
             """).Stdout);
+
+    /// <summary>A type's own member does not hide its protocol extension's of the same labels and other types: both are overloads.</summary>
+    [Fact]
+    public void AnOwnMemberDoesNotHideAnOverloadOfOtherTypes() =>
+        Assert.Equal(
+            """
+            ext a false
+            ext b true
+            ext1 c true
+            d false
+            ext v e
+
+            """,
+            Programs.AssertAgree("""
+            module Hiding
+
+            import Sable.IO
+
+            protocol Store {
+                fn make(_ path: FilePath, recursive: Bool) -> String
+            }
+
+            extension Store {
+                fn make(_ path: String, recursive: Bool = false) -> String {
+                    return "ext " + make(FilePath(path), recursive: recursive)
+                }
+
+                fn make(_ path: FilePath) -> String {
+                    return "ext1 " + make(path, recursive: true)
+                }
+            }
+
+            final class Memory: Store {
+                fn make(_ path: FilePath, recursive: Bool) -> String {
+                    return "\(path.string!) \(recursive)"
+                }
+            }
+
+            struct Value: Store {
+                fn make(_ path: FilePath, recursive: Bool) -> String {
+                    return "v \(path.string!)"
+                }
+            }
+
+            @main
+            fn main() {
+                let m = Memory()
+                print(m.make("a"))
+                print(m.make("b", recursive: true))
+                print(m.make(FilePath("c")))
+                print(m.make(FilePath("d"), recursive: false))
+                print(Value().make("e"))
+            }
+            """).Stdout);
 }

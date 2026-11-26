@@ -4670,10 +4670,19 @@ public sealed partial class Binder {
                 // A concrete method does not hide a generic one of the same labels:
                 // an array's 'append(contentsOf:)' of a slice, and every growable
                 // collection's of any sequence, are both there.
-                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b) && a.TypeParameters.IsEmpty == b.TypeParameters.IsEmpty,
+                // Nor does one hide another that takes a type it does not, both
+                // named and not generic: a class's own 'make(_: FilePath,
+                // recursive:)' and its protocol extension's 'make(_: String, recursive:)'.
+                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b) && a.TypeParameters.IsEmpty == b.TypeParameters.IsEmpty
+                                                        && !a.Parameters.Zip(b.Parameters).Any(static p => Distinct(p.First.Type, p.Second.Type)),
                 (FieldSymbol a, FieldSymbol b) => a.IsStatic == b.IsStatic,
                 _ => false,
             };
+
+        static bool Distinct(TypeSymbol a, TypeSymbol b) =>
+            a is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeKind: not TypeKind.Protocol }
+            && b is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeKind: not TypeKind.Protocol }
+            && !a.Equals(b);
 
         static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
             a.Parameters.Length == b.Parameters.Length

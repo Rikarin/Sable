@@ -2090,6 +2090,58 @@ public sealed partial class LlvmEmitter {
             return _accessState;
         }
 
+        (string Key, string Cell)? _threadLocalCache;
+
+        (string Key, string Cell) ThreadLocalCache() {
+            if (_threadLocalCache is not { } cache) {
+                cache = (Fresh(), Fresh());
+                _entryAllocas.Append($"  {cache.Key} = alloca i64, align 8\n  {cache.Cell} = alloca i64, align 8\n  store i64 0, ptr {cache.Key}\n");
+                _threadLocalCache = cache;
+            }
+
+            return cache;
+        }
+
+        /// <summary>
+        ///     Where this thread's value of a thread-local is: the latest found
+        ///     in this function remembered, key and cell, so that a `value += x`,
+        ///     or one in a loop, asks the runtime once (#179). A cell does not
+        ///     move while its thread-local lives, whatever is made or freed in
+        ///     the thread's table, and a function runs on one thread from its
+        ///     entry to its return (an async one's resume too); a key is never
+        ///     made again (its generation, runtime/parallel.c), so a freed one
+        ///     is never found here. None found (0) is not remembered: what
+        ///     makes the value is then to run once.
+        /// </summary>
+        void FindThreadLocal(string key, Func<string> result) {
+            var (keySlot, cellSlot) = ThreadLocalCache();
+
+            var known = Fresh();
+            var same = Fresh();
+            var remembered = Fresh();
+            var found = Fresh();
+            var some = Fresh();
+            var kept = Fresh();
+            var hit = NewLabel("thread_local_known");
+            var call = NewLabel("thread_local_find");
+            var done = NewLabel("thread_local_found");
+            Line($"{known} = load i64, ptr {keySlot}");
+            Line($"{same} = icmp eq i64 {known}, {key}");
+            Line($"br i1 {same}, label %{hit}, label %{call}, !prof !{{!\"branch_weights\", i32 2000, i32 1}}");
+            Continue(hit);
+            Line($"{remembered} = load i64, ptr {cellSlot}");
+            Line($"br label %{done}");
+            Continue(call);
+            Line($"{found} = call i64 @sable_thread_local_find(i64 {key})");
+            Line($"{some} = icmp ne i64 {found}, 0");
+            Line($"{kept} = select i1 {some}, i64 {key}, i64 0");
+            Line($"store i64 {kept}, ptr {keySlot}");
+            Line($"store i64 {found}, ptr {cellSlot}");
+            Line($"br label %{done}");
+            Continue(done);
+            Line($"{result()} = phi i64 [ {remembered}, %{hit} ], [ {found}, %{call} ]");
+        }
+
         /// <summary>Each type parameter's metadata, by name (<c>$metadata.T</c>), in unspecialised code.</summary>
         readonly Dictionary<string, string> _opaqueMetadata = new(StringComparer.Ordinal);
 
@@ -5210,6 +5262,16 @@ public sealed partial class LlvmEmitter {
                 // function of its name, a slice its buffer, start and count,
                 // and an array given the metadata to make it with. And threads
                 // (runtime/parallel.c), and their and tasks' locals.
+                case "thread_local_find":
+                    FindThreadLocal(operands[0], Result);
+                    return;
+
+                // Freed here: none remembered is found again (FindThreadLocal).
+                case "thread_local_free":
+                    Line($"store i64 0, ptr {ThreadLocalCache().Key}");
+                    Line($"call void @sable_thread_local_free(i64 {operands[0]})");
+                    return;
+
                 case var net when net.StartsWith("net_", StringComparison.Ordinal) || net.StartsWith("thread_", StringComparison.Ordinal)
                                   || net.StartsWith("task_local_", StringComparison.Ordinal): {
                     List<string> passed = [];

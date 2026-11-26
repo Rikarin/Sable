@@ -106,6 +106,62 @@ public sealed class CoverageTests {
     }
 
     /// <summary>
+    ///     A test that returns while a task it spawned is parked, with others
+    ///     around it: the tasks still waiting as the program ends are dropped
+    ///     while the counts are written, and none of them runs again on a
+    ///     worker meanwhile (#347).
+    /// </summary>
+    [Fact]
+    public void ATestThatLeavesATaskParkedPassesMeasured() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-coverage-");
+        var output = new StringWriter();
+        var saved = Console.Out;
+        try {
+            var file = Path.Combine(directory.FullName, "parked.sb");
+            File.WriteAllText(file, """
+            module CoverageParkedChild
+
+            import Sable.Concurrency
+            import Sable.Testing
+            import Sable.Time
+
+            // A test that returns while the task it spawned is still parked, going
+            // through a debounced channel no one closes, with the debounce's tasks
+            // (one going through the channel, a timer asleep on a TestClock) around it.
+            @test
+            fn aTestLeavesItsConsumerParked() async {
+                let clock = TestClock()
+                let input = Channel<Int>()
+                let seen = Mutex<Int[>..]>([])
+                let debounced = input.debounce(for: Duration.seconds(1), clock: clock)
+                _ = Task.spawn {
+                    for await value in debounced {
+                        seen.withLock { $0.append(value) }
+                    }
+                }
+                for i in 1...5 {
+                    await input.send(i)
+                }
+                await Task.settle()
+                await clock.advance(by: Duration.seconds(1))
+                expect(seen.withLock { $0 } == [5])
+            }
+            """);
+            Console.SetOut(output);
+            Assert.Equal(0, Command.Find("test")!.Run([file, "--coverage", "-j", "1"]));
+        } finally {
+            Console.SetOut(saved);
+            directory.Delete(true);
+        }
+
+        Assert.Contains("1 passed; 0 failed", output.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     '--cover' counts the standard library's code the tests run instead
     ///     of the program's: the lines of lib/Sable.Collections/Stack.sb, by
     ///     the name it is embedded with, and of no other file. A method no

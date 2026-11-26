@@ -664,7 +664,9 @@ public sealed class PassTests {
     /// <summary>
     ///     An existential made by a callee and called through by another,
     ///     both inlined, calls its witness directly — and the witness is then
-    ///     inlined too, by the inliner rather than left to LLVM.
+    ///     inlined too, by the inliner rather than left to LLVM. The copy of
+    ///     the box as its base class, made to put in the existential, is the
+    ///     box itself, which lives as long as the copy did.
     /// </summary>
     [Fact]
     public void AWitnessMadeDirectWhileInliningIsInlined() {
@@ -687,6 +689,8 @@ public sealed class PassTests {
         var squared = module.Find("M.squared")!;
         Assert.False(Calls(squared, "M.measure"));
         Assert.DoesNotContain(Instructions(squared).OfType<FunctionRefInst>(), static r => r.Function.Contains("area", StringComparison.Ordinal));
+        // The box, seen as an existential's, is not copied to be read and destroyed.
+        Assert.Empty(Instructions(squared).OfType<CopyValueInst>());
         Assert.Equal(49L, new SilInterpreter(module).Run("M.squared", 7L));
     }
 

@@ -53,7 +53,7 @@ static class LibraryHashing {
             ulong total = 0;
             for (var round = 0; round < rounds; round++) {
                 var value = Once(hash, bytes);
-                total = unchecked(total + (value & 0xFF));
+                total = unchecked(total + value);
                 bytes[round % bytes.Length] = (byte)(value & 0xFF);
             }
 

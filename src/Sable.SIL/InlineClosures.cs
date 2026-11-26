@@ -8,8 +8,9 @@ namespace Sable.SIL;
 /// <remarks>
 ///     <para>
 ///         A closure whose code is <c>inline(always)</c> — an autoclosure's
-///         — that the function only calls and destroys is no closure at
-///         all: each call is its code, inlined with the context as its
+///         — or small as the inliner counts, as a body given to
+///         <c>withPointer</c> is, that the function only calls and destroys
+///         is no closure at all: each call is its code, inlined with the context as its
 ///         argument, and each destroy the context's. Nothing is left of the
 ///         <c>partial_apply</c>. A callee that never asked for the value,
 ///         as <c>assert</c> in a release build, leaves it only destroyed,

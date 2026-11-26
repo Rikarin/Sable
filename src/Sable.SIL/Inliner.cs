@@ -27,7 +27,9 @@ namespace Sable.SIL;
 ///         callee costs one, but for what only names or reshapes a value
 ///         and is gone in machine code — a literal, a field extracted, a
 ///         cast, a borrow's start and end, a slot, a branch — which costs
-///         nothing, and a call, which costs <see cref="CallCost" /> more. A
+///         nothing, and a call, which costs <see cref="CallCost" /> more. So
+///         do a stack slot's trivial stores and loads: a struct built field
+///         by field and read whole, which LLVM keeps in registers. A
 ///         callee costing up to <see cref="Threshold" /> is inlined; one
 ///         named nowhere else, up to <see cref="SingleCallerThreshold" />,
 ///         since its body is then moved rather than copied; and each literal
@@ -45,7 +47,8 @@ namespace Sable.SIL;
 ///     <para>
 ///         Callees are inlined into their callers bottom up, so a small
 ///         function is inlined with what it has inlined already; a recursive
-///         call stays a call. The copied instructions take the call's source
+///         call stays a call, and a function that calls itself is not
+///         inlined into its other callers either. The copied instructions take the call's source
 ///         position, as the debugger would otherwise place them in the wrong
 ///         function, and the callee's variables lose their names.
 ///     </para>
@@ -140,6 +143,12 @@ public sealed class Inliner : ISilPass {
             return true;
         }
 
+        // A callee that calls itself saves one frame of many, inlined; and
+        // what it borrows from its parameters, the copy in the caller copies.
+        if (CallsItself(callee)) {
+            return false;
+        }
+
         // A callee that never comes back — one that only traps — is cold:
         // a call to it keeps its frame in the trap's backtrace.
         if (!callee.Blocks.Any(static b => b.Terminator is ReturnInst or ThrowInst)) {
@@ -184,6 +193,9 @@ public sealed class Inliner : ISilPass {
 
         return function.Blocks.Skip(1).All(static b => b.Arguments.All(static a => !SilType.MentionsOpaque(a.Type)));
     }
+
+    static bool CallsItself(SilFunction function) =>
+        function.Blocks.SelectMany(static b => b.Instructions).Any(i => i is FunctionRefInst reference && reference.Function == function.Name);
 
     /// <summary>
     ///     Whether the function allocates anything it does not return: what

@@ -3,7 +3,8 @@ module HashingBench
 // Sable.IO.Hashing against .NET's System.IO.Hashing: each hash of a megabyte,
 // two hundred times, and of 256 bytes and of 16, a hundred thousand times,
 // the input changed by what the last gave. What it comes to is the sum of the
-// hashes' low bytes.
+// hashes, whole: a sum of their low bytes alone let LLVM drop half of
+// Adler-32's work.
 
 import Sable.IO.Hashing
 import Sable.Testing
@@ -43,7 +44,7 @@ fn run(_ name: String, _ input: U8[>..], _ rounds: Int) -> String {
     var round = 0
     while round < rounds {
         let value = once(hash, bytes)
-        total = total &+ (value & 0xFF)
+        total = total &+ value
         bytes[round % bytes.count] = U8(value & 0xFF)
         round += 1
     }

@@ -545,7 +545,7 @@ public sealed class ForwardCopies : ISilPass {
                     }
 
                     if (TryBorrowedCopy(function, block, i, copy, uses) || TryOutlivingCopy(function, block, i, copy, uses)
-                        || TryHandOver(function, copy, uses)) {
+                        || TryOutlivingProjection(function, block, i, copy, uses) || TryHandOver(function, copy, uses)) {
                         changed = true;
                         break;
                     }
@@ -984,6 +984,69 @@ public sealed class ForwardCopies : ISilPass {
         Uses.Replace(function, copy, source);
         block.Instructions.Remove(copy);
         block.Instructions.Remove(destroy);
+        return true;
+    }
+
+    /// <summary>
+    ///     A copy, only borrowed and destroyed, of what is all an owned value
+    ///     holds — an object seen as its superclass, or the one field of a
+    ///     struct that is not trivial — when the value is destroyed after
+    ///     the copy, in its block: the copy is the value, kept alive until
+    ///     the copy would have been destroyed, and destroyed there instead.
+    ///     What an inlined callee returns and its caller reads one part of:
+    ///     a digest's bytes, an existential's box.
+    /// </summary>
+    static bool TryOutlivingProjection(SilFunction function, SilBlock block, int index, CopyValueInst copy, Uses uses) {
+        var owner = copy.Value switch {
+            UpcastInst upcast => upcast.Value,
+            UncheckedRefCastInst cast => cast.Value,
+            StructExtractInst { Value.Type: StructType { Deinit: null, IsInline: false, IsNoncopyable: false } structType } extract
+                when structType.Fields.Where((_, i) => i != extract.Field).All(static f => f.Type.IsTrivial) => extract.Value,
+            _ => null,
+        };
+        if (owner is null || SilVerifier.OwnershipOf(owner) != Ownership.Owned) {
+            return false;
+        }
+
+        var consumers = uses.Of(owner).Where(u => Uses.Consumes(u, owner)).ToList();
+        if (consumers is not [DestroyValueInst ownerDestroy] || ownerDestroy.Block != block) {
+            return false;
+        }
+
+        var ownerEnd = block.Instructions.IndexOf(ownerDestroy);
+        if (ownerEnd < index) {
+            return false;
+        }
+
+        var destroys = new List<DestroyValueInst>();
+        foreach (var user in uses.Of(copy)) {
+            if (user is DestroyValueInst { Uncounted: false } destroy) {
+                // Destroyed in its block only after the owner was, or in a block after.
+                if (destroy.Block == block && block.Instructions.IndexOf(destroy) < ownerEnd) {
+                    return false;
+                }
+
+                destroys.Add(destroy);
+                continue;
+            }
+
+            if (user.IsTerminator || Uses.Consumes(user, copy)) {
+                return false;
+            }
+        }
+
+        if (destroys.Count == 0) {
+            return false;
+        }
+
+        foreach (var destroy in destroys) {
+            var at = destroy.Block!.Instructions.IndexOf(destroy);
+            destroy.Block.Instructions[at] = new DestroyValueInst(owner) { Block = destroy.Block, Location = destroy.Location };
+        }
+
+        Uses.Replace(function, copy, copy.Value);
+        block.Instructions.Remove(copy);
+        block.Instructions.Remove(ownerDestroy);
         return true;
     }
 

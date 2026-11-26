@@ -155,8 +155,8 @@ fn callsAreInTheOrderTheyWereMade() {
     _ = ticker.tick()
     _ = checkout(gateway)
     _ = ticker.tick()
-    verifyInOrder([ticker.on.tick(), gateway.on.open(), gateway.on.charge(), ticker.on.tick()])
-    verifyInOrder([gateway.on.open(), ticker.on.tick()])
+    verifyInOrder(ticker.on.tick(), gateway.on.open(), gateway.on.charge(), ticker.on.tick())
+    verifyInOrder(gateway.on.open(), ticker.on.tick())
 }
 
 @test
@@ -209,7 +209,7 @@ async fn fails() {
         case "in order" => {
             gateway.on.charge().returns(Receipt(id: 1))
             _ = checkout(gateway)
-            verifyInOrder([gateway.on.charge(), gateway.on.open()])
+            verifyInOrder(gateway.on.charge(), gateway.on.open())
         }
         case "strict"   => _ = ticker.tick()
         case "no value" => _ = try? gateway.charge(amount: 1, to: "x")

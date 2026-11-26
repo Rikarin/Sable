@@ -330,8 +330,9 @@ ForStatement      = "for" [ "try" ] [ "await" ] BindingPattern "in" Expression
 
 MatchStatement    = "match" Expression "{" { MatchCase } "}" ;
 MatchCase         = "case" PatternList [ "where" Expression ]
-                    ( "=>" ( Expression | Block ) | ":" { Statement } )
-                  | "default" ( "=>" ( Expression | Block ) | ":" { Statement } ) ;
+                    ( "=>" ArmBody | ":" { Statement } )
+                  | "default" ( "=>" ArmBody | ":" { Statement } ) ;
+ArmBody           = Expression | Block | ReturnStatement | BreakStatement | ContinueStatement ;
 PatternList       = Pattern { "," Pattern } ;
 
 SwitchStatement   = "switch" Expression "{" { SwitchCase } "}" ;

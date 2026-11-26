@@ -9,9 +9,28 @@ public protocol Equatable {
     operator == (lhs: Self, rhs: Self) -> Bool
 }
 
-/// Values in an order: '<', and '>', '<=' and '>=' with it.
+/// Values in an order: '<', and '>', '<=' and '>=', which follow from it
+/// unless a type says otherwise — as a floating-point type does, whose NaN
+/// is neither less than nor at least anything.
+///
+/// ```sable
+/// fn atLeast<T: Comparable>(_ a: T, _ b: T) -> Bool { return a >= b }
+/// assert(atLeast(2, 1) && !atLeast(F64.nan, 1.0))
+/// ```
 public protocol Comparable: Equatable {
     operator < (lhs: Self, rhs: Self) -> Bool
+    operator > (lhs: Self, rhs: Self) -> Bool
+    operator <= (lhs: Self, rhs: Self) -> Bool
+    operator >= (lhs: Self, rhs: Self) -> Bool
+}
+
+extension Comparable {
+    /// Whether the right comes before the left: '<' the other way round.
+    public operator > (lhs: Self, rhs: Self) -> Bool { return rhs < lhs }
+    /// Whether the right does not come before the left.
+    public operator <= (lhs: Self, rhs: Self) -> Bool { return !(rhs < lhs) }
+    /// Whether the left does not come before the right.
+    public operator >= (lhs: Self, rhs: Self) -> Bool { return !(lhs < rhs) }
 }
 
 /// Values that can be hashed: equal values hash equal. A type feeds what
@@ -133,6 +152,9 @@ extension U128: Comparable, Hashable {
 extension F16: Comparable, Hashable {
     public operator == (lhs: F16, rhs: F16) -> Bool { return lhs == rhs }
     public operator < (lhs: F16, rhs: F16) -> Bool { return lhs < rhs }
+    public operator > (lhs: F16, rhs: F16) -> Bool { return lhs > rhs }
+    public operator <= (lhs: F16, rhs: F16) -> Bool { return lhs <= rhs }
+    public operator >= (lhs: F16, rhs: F16) -> Bool { return lhs >= rhs }
 
     /// Every F16 is an F64 exactly, so it hashes as one: equal values hash equal.
     public fn hash(into hasher: inout Hasher) { F64(self).hash(into: &hasher) }
@@ -141,6 +163,9 @@ extension F16: Comparable, Hashable {
 extension F32: Comparable, Hashable {
     public operator == (lhs: F32, rhs: F32) -> Bool { return lhs == rhs }
     public operator < (lhs: F32, rhs: F32) -> Bool { return lhs < rhs }
+    public operator > (lhs: F32, rhs: F32) -> Bool { return lhs > rhs }
+    public operator <= (lhs: F32, rhs: F32) -> Bool { return lhs <= rhs }
+    public operator >= (lhs: F32, rhs: F32) -> Bool { return lhs >= rhs }
 
     /// Every F32 is an F64 exactly, so it hashes as one: equal values hash equal.
     public fn hash(into hasher: inout Hasher) { F64(self).hash(into: &hasher) }
@@ -149,6 +174,9 @@ extension F32: Comparable, Hashable {
 extension F64: Comparable, Hashable {
     public operator == (lhs: F64, rhs: F64) -> Bool { return lhs == rhs }
     public operator < (lhs: F64, rhs: F64) -> Bool { return lhs < rhs }
+    public operator > (lhs: F64, rhs: F64) -> Bool { return lhs > rhs }
+    public operator <= (lhs: F64, rhs: F64) -> Bool { return lhs <= rhs }
+    public operator >= (lhs: F64, rhs: F64) -> Bool { return lhs >= rhs }
 
     /// By its bits: equal values have equal bits, but for zero, whose two
     /// signs compare equal and so hash as one.

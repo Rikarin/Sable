@@ -2539,6 +2539,12 @@ static void after_suspend(SableTask *task) {
 
 // Resumes a task until it finishes or waits: its root frame made the first time.
 static void step(SableTask *task) {
+    // One dropped as the program ends (drain) is not begun again, nor
+    // resumed, by a wake that comes as another is dropped (#347).
+    if (__atomic_load_n(&task->done, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+
     SableTask *previous = current_task;
     switch_to(task);
     if (task->frame == NULL) {
@@ -2547,13 +2553,13 @@ static void step(SableTask *task) {
 
     // The task's accesses in progress are the thread's while it runs; with
     // none on either side, as nearly always, there are none to swap.
-    bool apart = sable_access_count > 0 || task->accesses.count > 0;
+    bool apart = sable_access_state.count > 0 || task->accesses.count > 0;
     if (apart) {
         accesses_swap(&task->accesses);
     }
 
     bool finished = task->resume(task->frame) & 1;
-    if (apart || sable_access_count > 0) {
+    if (apart || sable_access_state.count > 0) {
         accesses_swap(&task->accesses);
     }
 
@@ -3575,6 +3581,13 @@ static void drain(void) {
     if (count == 0) {
         cache_flush(current_thread());
         return;
+    }
+
+    // Each done before any is dropped: what a drop runs — a deinit that
+    // wakes or cancels another of them — then sets none of them going
+    // again on a worker while it is dropped here (#347).
+    for (int64_t i = 0; i < count; i++) {
+        __atomic_store_n(&stuck[i]->done, true, __ATOMIC_SEQ_CST);
     }
 
     // The earliest spawned first. Dropping one may release others, but

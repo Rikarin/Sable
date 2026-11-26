@@ -77,6 +77,9 @@ extension BF16 {
 extension BF16: Comparable, Hashable {
     public operator == (lhs: BF16, rhs: BF16) -> Bool { return lhs == rhs }
     public operator < (lhs: BF16, rhs: BF16) -> Bool { return lhs < rhs }
+    public operator > (lhs: BF16, rhs: BF16) -> Bool { return lhs > rhs }
+    public operator <= (lhs: BF16, rhs: BF16) -> Bool { return lhs <= rhs }
+    public operator >= (lhs: BF16, rhs: BF16) -> Bool { return lhs >= rhs }
 
     /// Every BF16 is an F64 exactly, so it hashes as one: equal values hash equal.
     public fn hash(into hasher: inout Hasher) { F64(self).hash(into: &hasher) }

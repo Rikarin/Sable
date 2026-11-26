@@ -1362,7 +1362,7 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   every parameter is Equatable — to stub them, `.returns(v)`, `.throwing(e)`,
   `.does { arguments in … }` (which may wait), answered in turn, the last
   again; and to verify them, `.verify(.once)` with `Times`, `.arguments`,
-  `verifyInOrder([...])` across mocks and `verifyNoOtherCalls(mock)`. A
+  `verifyInOrder(...)` across mocks and `verifyNoOtherCalls(mock)`. A
   property is `on.name` and `on.setName(_:)`. A loose mock (the default)
   answers what no stub does with the empty value of its type, where it has
   one; `.Strict` fails the test. A mock is `@immutable`, so Sendable, and may

@@ -40,6 +40,41 @@ fn theDiskAndMemoryAnswerAlike() {
 }
 
 @test
+fn everyMemberTakesAStringOrAFilePath() {
+    let temp = try! Temp.directory()
+    for files in [InMemoryFileSystem() as any FileSystem, DiskFileSystem()] {
+        let root = files is DiskFileSystem ? temp.path : FilePath("/m")
+        try! files.createDirectory(root, recursive: true)
+        let path = root.appending("a.txt")
+        try! files.writeBytes(path, [97])
+        try! files.appendBytes(path.string!, [98])
+        expect(try! files.readBytes(path) == [97, 98])
+        expect(try! files.list(root) == ["a.txt"])
+        expect((try! files.metadata(path.string!)).size == 2)
+        try! files.copy(from: path, to: root.appending("b.txt").string!, overwrite: true)
+        try! files.rename(from: path.string!, to: root.appending("c.txt"), overwrite: false)
+        expect(try! files.list(root.string!) == ["b.txt", "c.txt"])
+        try! files.removeFile(root.appending("b.txt"))
+        try! files.createDirectory(root.appending("d"))
+        try! files.removeDirectory(root.appending("d"))
+        expect(try! files.list(root) == ["c.txt"])
+    }
+}
+
+// A path is read in its own style: a Windows one's '\' separates names, as
+// FilePath.appending joins them there, and its drive is passed over.
+@test
+fn aPathIsReadInItsOwnStyle() {
+    let files = InMemoryFileSystem()
+    try! files.createDirectory(FilePath("\\m", style: .Windows))
+    try! files.write(FilePath("\\m", style: .Windows).appending("a.txt"), "a")
+    try! files.write(FilePath("C:\\m\\b.txt", style: .Windows), "b")
+    expect(try! files.list(FilePath("/m", style: .Posix)) == ["a.txt", "b.txt"])
+    expect(try! files.read(FilePath("/m/a.txt", style: .Posix)) == "a")
+    expect(files.paths == ["/m", "/m/a.txt", "/m/b.txt"])
+}
+
+@test
 fn filesGivenAreMadeWithTheirDirectories() {
     let files = InMemoryFileSystem(["config/app.toml": "port = 80", "/b.txt": "b"])
     expect(files.paths == ["/b.txt", "/config", "/config/app.toml"])

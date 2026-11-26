@@ -4671,10 +4671,19 @@ public sealed partial class Binder {
                 // A concrete method does not hide a generic one of the same labels:
                 // an array's 'append(contentsOf:)' of a slice, and every growable
                 // collection's of any sequence, are both there.
-                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b) && a.TypeParameters.IsEmpty == b.TypeParameters.IsEmpty,
+                // Nor does one hide another that takes a type it does not, both
+                // named and not generic: a class's own 'make(_: FilePath,
+                // recursive:)' and its protocol extension's 'make(_: String, recursive:)'.
+                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b) && a.TypeParameters.IsEmpty == b.TypeParameters.IsEmpty
+                                                        && !a.Parameters.Zip(b.Parameters).Any(static p => Distinct(p.First.Type, p.Second.Type)),
                 (FieldSymbol a, FieldSymbol b) => a.IsStatic == b.IsStatic,
                 _ => false,
             };
+
+        static bool Distinct(TypeSymbol a, TypeSymbol b) =>
+            a is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeKind: not TypeKind.Protocol }
+            && b is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeKind: not TypeKind.Protocol }
+            && !a.Equals(b);
 
         static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
             a.Parameters.Length == b.Parameters.Length
@@ -5958,7 +5967,19 @@ public sealed partial class Binder {
         var next = 0;
         for (var p = 0; p < resolved.Parameters.Length; p++) {
             if (resolved.Parameters[p].IsVariadic) {
-                break;
+                if (p == resolved.Parameters.Length - 1) {
+                    break;
+                }
+
+                // One with parameters after it: its elements gathered here,
+                // so that every argument is its parameter's.
+                var elements = ImmutableArray.CreateBuilder<BoundExpression>();
+                while (next < converted.Count && slots[next] == p) {
+                    elements.Add(converted[next++]);
+                }
+
+                passed.Add(new BoundArray(elements.Count > 0 ? elements[0].Syntax : syntax, substitution.Apply(resolved.Parameters[p].Type), elements.ToImmutable()));
+                continue;
             }
 
             if (next < converted.Count && slots[next] == p) {
@@ -6469,6 +6490,11 @@ public sealed partial class Binder {
             }
 
             var wanted = ArgumentTypeFor(function.Parameters[slots[i]], outer.Apply(function.Parameters[slots[i]].Type), arguments[i]);
+            // Each of a variadic parameter's arguments is one of its elements.
+            if (function.Parameters[slots[i]].IsVariadic && wanted is ArrayTypeSymbol variadic) {
+                wanted = variadic.ElementType;
+            }
+
             if (IsNumericLiteral(arguments[i])) {
                 literals.Add((wanted, arguments[i]));
                 continue;
@@ -7173,7 +7199,8 @@ public sealed partial class Binder {
         var parameters = candidate.Parameters;
 
         var required = parameters.Count(static p => p is { HasDefaultValue: false, IsVariadic: false });
-        var variadic = parameters.Any(static p => p.IsVariadic);
+        // An argument past the parameters is the last one's element only if it is variadic.
+        var variadic = parameters is [.., { IsVariadic: true }];
         var slots = Align(candidate, labels, arguments.Length);
 
         if (arguments.Length < required) {
@@ -7417,6 +7444,20 @@ public sealed partial class Binder {
 
                 if (reach < parameters.Length && Names(parameters[reach], label)) {
                     next = reach;
+                } else if (next < parameters.Length && parameters[next].IsVariadic && !Names(parameters[next], label)) {
+                    // A label ends a variadic parameter's elements, reaching
+                    // the parameter after it that it names, past ones with
+                    // defaults: 'f(1, 2, file: f)' of 'f(_ xs: Int..., file: String = #file)'.
+                    reach = next + 1;
+                    while (reach < parameters.Length
+                           && parameters[reach] is { HasDefaultValue: true, IsDeclared: true }
+                           && !Names(parameters[reach], label)) {
+                        reach++;
+                    }
+
+                    if (reach < parameters.Length && Names(parameters[reach], label)) {
+                        next = reach;
+                    }
                 }
             }
 
@@ -7675,7 +7716,12 @@ public sealed partial class Binder {
                 // Stored through, 'xs[^1] = v' and 'xs[^1].x = v' want a
                 // subscript with a setter, of those whose labels fit.
                 var use = IsPlaceBeingWritten(syntax) ? SubscriptUse.Store : SubscriptUse.Read;
-                var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution, use);
+                // The labels written choose among subscripts, as a call's do:
+                // 'g[sum: 1, 2, scale: 3]' is not 'g[1, 2, 3]' (#349).
+                ImmutableArray<string?> labels = syntax.ArgumentList.Arguments.Any(static a => !a.NameToken.IsNone)
+                    ? [..syntax.ArgumentList.Arguments.Select(static a => a.NameToken.IsNone ? null : a.NameToken.Text)]
+                    : [];
+                var resolved = ResolveOverload(group.Candidates, indices, labels, syntax, found.Substitution, use);
 
                 if (resolved is null) {
                     return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
@@ -7686,12 +7732,34 @@ public sealed partial class Binder {
                 }
 
                 var converted = ImmutableArray.CreateBuilder<BoundExpression>(indices.Length);
-                for (var i = 0; i < indices.Length && i < resolved.Parameters.Length; i++) {
-                    var wanted = found.Substitution.Apply(resolved.Parameters[i].Type);
+                BoundExpression Index(int i, TypeSymbol wanted) {
                     var index = indices[i] is BoundUnboundClosure unbound
                         ? BindExpression(unbound.Syntax as ExpressionSyntax ?? throw new InvalidOperationException(), wanted)
                         : indices[i];
-                    converted.Add(Convert(index, wanted, index.Syntax));
+                    return Convert(index, wanted, index.Syntax);
+                }
+
+                var at = 0;
+                for (var p = 0; p < resolved.Parameters.Length; p++) {
+                    var wanted = found.Substitution.Apply(resolved.Parameters[p].Type);
+                    if (resolved.Parameters[p].IsVariadic && wanted is ArrayTypeSymbol variadic) {
+                        // A variadic parameter's indices, each one of its elements, as a
+                        // call's arguments are (#349).
+                        var elements = ImmutableArray.CreateBuilder<BoundExpression>();
+                        for (var last = indices.Length - (resolved.Parameters.Length - 1 - p); at < last; at++) {
+                            elements.Add(Index(at, variadic.ElementType));
+                        }
+
+                        // Gathered here, as the setter has 'newValue' after them.
+                        converted.Add(new BoundArray(elements.Count > 0 ? elements[0].Syntax : syntax, wanted, elements.ToImmutable()) { IsVariadicPack = true });
+                        continue;
+                    }
+
+                    if (at >= indices.Length) {
+                        break;
+                    }
+
+                    converted.Add(Index(at++, wanted));
                 }
 
                 return new BoundIndexAccess(
@@ -10011,7 +10079,13 @@ public sealed partial class Binder {
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
             // A literal operand takes the parameter's type, as an argument does: 'v * 2' on a SIMD<F32, 4>.
-            if (FindUserOperator(symbol, left.Type, right.Type, leftLiteral: left is BoundLiteral, rightLiteral: right is BoundLiteral) is { } own) {
+            // Comparable's '>', '<=' and '>=' of a type that declares only '<'
+            // are its extension's defaults, which say what follows from '<' —
+            // as the derivation below does, with no call of the default.
+            if (FindUserOperator(symbol, left.Type, right.Type, leftLiteral: left is BoundLiteral, rightLiteral: right is BoundLiteral) is { } own
+                && !(kind is BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual
+                     && own.Method.ContainingSymbol is ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } }
+                     && left.Type is not TypeParameterSymbol)) {
                 (left, right) = UserOperands(own, left, right);
                 return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type, own.Owner), BinaryOperatorKind.UserDefined, left, right, own.Method);
             }

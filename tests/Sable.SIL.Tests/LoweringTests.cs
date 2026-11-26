@@ -511,7 +511,7 @@ public sealed class LoweringTests {
             """
             module M
             @noncopy struct Token { var id: Int }
-            struct Point { var x: Token[] }
+            struct Point { var x: Token[4] }
             fn origin(_ p: Point) -> Int { return 0 }
             """
         );
@@ -530,7 +530,7 @@ public sealed class LoweringTests {
             module M
             @noncopy struct Token { var id: Int }
             fn label(_ n: Int) -> Int {
-                let tokens: Token[] = []
+                let tokens: Token[2] = [Token { id: 1 }, Token { id: 2 }]
                 return n
             }
             """

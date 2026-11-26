@@ -46,9 +46,8 @@ static void foreign_thread_end(void *pointer) {
     leave_locals(&thread->task);
     leave_children(&thread->task);
     thread->task.child_count = 0;
-    free(accesses);
-    accesses = NULL;
-    access_capacity = 0;
+    free(sable_access_state.list);
+    sable_access_state = (SableAccesses){ 0 };
     free(share_stack);
     share_stack = NULL;
     share_capacity = 0;

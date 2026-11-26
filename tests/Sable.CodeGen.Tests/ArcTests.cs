@@ -340,7 +340,7 @@ public sealed class ArcTests {
         Assert.DoesNotContain("[unmanaged] $Optional$Test.Node, var \"p\"", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
     }
 
-    /// <summary>A binding read after its local changes keeps its own count.</summary>
+    /// <summary>A binding read after its local changes keeps its own count, until the 'if' that binds it is done.</summary>
     [Fact]
     public void ABindingReadAfterItsLocalChangesKeepsItsCopy() {
         var source = Program(
@@ -364,7 +364,7 @@ public sealed class ArcTests {
                 print("end")
             """
         );
-        Assert.Equal("a\nend\nbye a\nbye b\n", AssertAgree(source).Stdout);
+        Assert.Equal("a\nbye a\nend\nbye b\n", AssertAgree(source).Stdout);
         Assert.DoesNotContain("[unmanaged] $Test.Named, var \"n\"", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
     }
 

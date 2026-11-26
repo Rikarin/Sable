@@ -7,8 +7,9 @@ import Sable.Time
 /// `FileSystem`, so that it reads and writes no disk, and its files are
 /// what the test says. .NET's `MockFileSystem`.
 ///
-/// Paths are `/`-separated whatever the machine; a relative one is from
-/// the root, and `.` and `..` are taken as they read. Errors are those the
+/// Paths are read as `FilePath` reads them on the machine — `/` between
+/// names everywhere, and `\` too on Windows, where a drive is passed over;
+/// a relative one is from the root, and `.` and `..` are taken as they read. Errors are those the
 /// disk's would be: `NotFound`, `AlreadyExists`, `IsDirectory`,
 /// `NotADirectory`, `DirectoryNotEmpty`. A file is written when the clock
 /// given says; by default all are at the Unix epoch. It may be used from
@@ -60,9 +61,11 @@ public final class InMemoryFileSystem: FileSystem {
     }
 
     // The path's names from the root, '/' between them: "" for the root.
+    // Split by the path's own style, as 'appending' joined it: on Windows
+    // by '\' as well as '/'.
     static fn key(_ path: FilePath) -> String {
         var names: String[>..] = []
-        for component in FilePath(path.string ?? String.fromUtf8Lossy(path.bytes), style: .Posix).components {
+        for component in path.components {
             match component.kind {
                 case .Normal => { names.append(component.string ?? String.fromUtf8Lossy(component.bytes)) }
                 case .ParentDirectory => {
@@ -104,8 +107,8 @@ public final class InMemoryFileSystem: FileSystem {
         }
     }
 
-    public fn readBytes(_ path: FilePath) throws(IoError) -> U8[>..] {
-        let key = InMemoryFileSystem.key(path)
+    public fn readBytes(_ path: some PathLike) throws(IoError) -> U8[>..] {
+        let key = InMemoryFileSystem.key(path.filePath)
         guard let entry = entries.withLock({ $0[key] }) else {
             throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
         }
@@ -115,16 +118,16 @@ public final class InMemoryFileSystem: FileSystem {
         return entry.bytes
     }
 
-    public fn writeBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
-        try store(path, bytes, appending: false)
+    public fn writeBytes(_ path: some PathLike, _ bytes: U8[:]) throws(IoError) {
+        try store(path.filePath, bytes, appending: false)
     }
 
-    public fn appendBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
-        try store(path, bytes, appending: true)
+    public fn appendBytes(_ path: some PathLike, _ bytes: U8[:]) throws(IoError) {
+        try store(path.filePath, bytes, appending: true)
     }
 
     fn store(_ path: FilePath, _ bytes: U8[:], appending: Bool) throws(IoError) {
-        let key = InMemoryFileSystem.key(path)
+        let key = InMemoryFileSystem.key(path.filePath)
         let time = now()
         try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
             try InMemoryFileSystem.checkParent(all, key)
@@ -142,8 +145,8 @@ public final class InMemoryFileSystem: FileSystem {
         }
     }
 
-    public fn metadata(_ path: FilePath) throws(IoError) -> FileMetadata {
-        let key = InMemoryFileSystem.key(path)
+    public fn metadata(_ path: some PathLike) throws(IoError) -> FileMetadata {
+        let key = InMemoryFileSystem.key(path.filePath)
         guard let entry = entries.withLock({ $0[key] }) else {
             throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
         }
@@ -156,8 +159,8 @@ public final class InMemoryFileSystem: FileSystem {
         ])
     }
 
-    public fn createDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
-        let key = InMemoryFileSystem.key(path)
+    public fn createDirectory(_ path: some PathLike, recursive: Bool) throws(IoError) {
+        let key = InMemoryFileSystem.key(path.filePath)
         let time = now()
         try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
             if !recursive {
@@ -182,8 +185,8 @@ public final class InMemoryFileSystem: FileSystem {
         }
     }
 
-    public fn list(_ path: FilePath) throws(IoError) -> String[>..] {
-        let key = InMemoryFileSystem.key(path)
+    public fn list(_ path: some PathLike) throws(IoError) -> String[>..] {
+        let key = InMemoryFileSystem.key(path.filePath)
         let all = entries.withLock { $0 }
         guard let entry = all[key] else {
             throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
@@ -201,8 +204,8 @@ public final class InMemoryFileSystem: FileSystem {
         return names
     }
 
-    public fn removeFile(_ path: FilePath) throws(IoError) {
-        let key = InMemoryFileSystem.key(path)
+    public fn removeFile(_ path: some PathLike) throws(IoError) {
+        let key = InMemoryFileSystem.key(path.filePath)
         try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
             guard let entry = all[key] else {
                 throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
@@ -214,8 +217,8 @@ public final class InMemoryFileSystem: FileSystem {
         }
     }
 
-    public fn removeDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
-        let key = InMemoryFileSystem.key(path)
+    public fn removeDirectory(_ path: some PathLike, recursive: Bool) throws(IoError) {
+        let key = InMemoryFileSystem.key(path.filePath)
         try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
             if key.isEmpty {
                 throw IoError.InvalidInput(path: "/")
@@ -248,9 +251,9 @@ public final class InMemoryFileSystem: FileSystem {
         return found
     }
 
-    public fn rename(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
-        let from = InMemoryFileSystem.key(source)
-        let to = InMemoryFileSystem.key(target)
+    public fn rename<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool) throws(IoError) {
+        let from = InMemoryFileSystem.key(source.filePath)
+        let to = InMemoryFileSystem.key(target.filePath)
         if from == to {
             return
         }
@@ -284,9 +287,9 @@ public final class InMemoryFileSystem: FileSystem {
         }
     }
 
-    public fn copy(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
-        let from = InMemoryFileSystem.key(source)
-        let to = InMemoryFileSystem.key(target)
+    public fn copy<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool) throws(IoError) {
+        let from = InMemoryFileSystem.key(source.filePath)
+        let to = InMemoryFileSystem.key(target.filePath)
         let time = now()
         try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
             guard let entry = all[from] else {
@@ -309,46 +312,6 @@ public final class InMemoryFileSystem: FileSystem {
             }
             all[to] = MemoryEntry(directory: false, bytes: entry.bytes, modified: time)
         }
-    }
-}
-
-// What FileSystem's extension gives, which the class's own members of the
-// same names would hide.
-extension InMemoryFileSystem {
-    public fn readBytes(_ path: String) throws(IoError) -> U8[>..] {
-        return try readBytes(FilePath(path))
-    }
-
-    public fn writeBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
-        try writeBytes(FilePath(path), bytes)
-    }
-
-    public fn metadata(_ path: String) throws(IoError) -> FileMetadata {
-        return try metadata(FilePath(path))
-    }
-
-    public fn createDirectory(_ path: String, recursive: Bool = false) throws(IoError) {
-        try createDirectory(FilePath(path), recursive: recursive)
-    }
-
-    public fn list(_ path: String) throws(IoError) -> String[>..] {
-        return try list(FilePath(path))
-    }
-
-    public fn removeFile(_ path: String) throws(IoError) {
-        try removeFile(FilePath(path))
-    }
-
-    public fn removeDirectory(_ path: String, recursive: Bool = false) throws(IoError) {
-        try removeDirectory(FilePath(path), recursive: recursive)
-    }
-
-    public fn rename(from source: String, to target: String, overwrite: Bool = true) throws(IoError) {
-        try rename(from: FilePath(source), to: FilePath(target), overwrite: overwrite)
-    }
-
-    public fn copy(from source: String, to target: String, overwrite: Bool = true) throws(IoError) {
-        try copy(from: FilePath(source), to: FilePath(target), overwrite: overwrite)
     }
 }
 

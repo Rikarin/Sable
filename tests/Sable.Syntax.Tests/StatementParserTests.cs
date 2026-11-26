@@ -463,6 +463,26 @@ public sealed class StatementParserTests {
         Assert.IsType<ThrowExpressionSyntax>(Assert.IsType<MatchArmSyntax>(match.Arms[0]).Body);
     }
 
+    /// <summary>'=> return r', '=> break' and '=> continue': a statement that leaves is an arm's body, a block of it alone, kept on the arm's line.</summary>
+    [Theory]
+    [InlineData("return r", SyntaxKind.ReturnStatement)]
+    [InlineData("break", SyntaxKind.BreakStatement)]
+    [InlineData("continue", SyntaxKind.ContinueStatement)]
+    public void AStatementThatLeavesIsAMatchArmsBody(string statement, SyntaxKind kind) {
+        var source = $"match f {{\n    case .Some(let r) => {statement}\n    case _ => 1\n}}";
+        var root = ParseRoot(source);
+        var match = Assert.IsType<MatchExpressionSyntax>(Assert.IsType<ExpressionStatementSyntax>(root).Expression);
+        var body = Assert.IsType<BlockSyntax>(Assert.IsType<MatchArmSyntax>(match.Arms[0]).Body);
+        Assert.True(body.OpenBraceToken.IsMissing && body.CloseBraceToken.IsMissing);
+        Assert.Equal(kind, Assert.Single(body.Statements).Kind);
+    }
+
+    [Fact]
+    public void AStatementArmStaysOnItsLine() {
+        const string source = "fn f(_ x: Int?) -> Int {\n    match x {\n        case .Some(let r) => return r\n        case .None        => return 0\n    }\n}\n";
+        Assert.Equal(source, SyntaxFormatter.Format(source));
+    }
+
     [Fact]
     public void AThrowAtTheStartOfAStatementIsTheStatement() =>
         Assert.IsType<ThrowStatementSyntax>(ParseRoot("throw E.Skipped"));

@@ -1925,6 +1925,9 @@ let n = match fit {
 let port = configured ?? throw ConfigError.Missing("port")
 ```
 
+A match arm's body may also be a `return`, a `break` or a `continue`, which
+leave as `throw` does: `case .Some(let r) => return r` is `=> { return r }`.
+
 - `throws` with no type means `throws(any Error)`.
 - `Error` is Sable.Core's `protocol Error: Debug, Sendable`, with `var source:
   (any Error)? { get }` and `fn description() -> String`, each with a default.

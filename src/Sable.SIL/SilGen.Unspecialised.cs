@@ -2314,9 +2314,12 @@ public sealed partial class SilGen {
         }
 
         // An initialiser borrows what it is given, as any function compiled
-        // once does, and one that consumes a parameter: its callers pass
-        // values of a type parameter where they are.
-        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) || symbol.Parameters.Any(static p => p.Modifier == ParameterModifier.Consuming) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
+        // once does; a 'consuming' parameter is the callee's, as it is
+        // specialised (#342).
+        var selfCount = HasSelf(symbol) ? 1 : 0;
+        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) || !symbol.Parameters.Any(static p => p.Modifier == ParameterModifier.Consuming)
+            ? default
+            : signature.Owned.Select((o, i) => o && i >= selfCount && symbol.Parameters[i - selfCount].Modifier == ParameterModifier.Consuming).Concat(hidden.Select(static _ => false)).ToImmutableArray();
         var type = new FunctionType([..signature.Parameters, ..hidden], result, thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);
@@ -2813,7 +2816,28 @@ public sealed partial class SilGen {
         // type does with it — an enum's '==' compares cases — and no call of
         // a function the type may not have.
         if (requirement is { FunctionKind: FunctionKind.Operator, Parameters: [var left, var right] } && OperatorKindOf(requirement.Name) is { } kind) {
-            call = new BoundBinaryOperator(syntax, requirement.ReturnType, kind, new BoundParameterAccess(syntax, left), new BoundParameterAccess(syntax, right), requirement);
+            // '>', '<=', '>=' and '!=' bound with a method are derived from it
+            // ('<' the other way round); as requirements of their own
+            // (Comparable's), they are the conformer's own, applied (#348) —
+            // or, met by the protocol's default, derived from '<' as the
+            // default does, which no instance of the default is made for.
+            var method = requirement;
+            if (kind is BinaryOperatorKind.NotEqual or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual) {
+                var basis = kind == BinaryOperatorKind.NotEqual ? "==" : "<";
+                var own = concrete switch {
+                    NamedTypeSymbol named => Implementation(named, requirement),
+                    ArrayTypeSymbol array => ArrayImplementation(array, requirement),
+                    _ => null,
+                };
+                if (own is null or { ContainingSymbol: ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } }
+                    && ProtocolClosure([protocol]).SelectMany(static p => p.Members).OfType<FunctionSymbol>().FirstOrDefault(f => f.FunctionKind == FunctionKind.Operator && f.Name == basis && f.ContainingSymbol is NamedTypeSymbol) is { } derivedFrom) {
+                    method = derivedFrom;
+                } else {
+                    kind = BinaryOperatorKind.UserDefined;
+                }
+            }
+
+            call = new BoundBinaryOperator(syntax, requirement.ReturnType, kind, new BoundParameterAccess(syntax, left), new BoundParameterAccess(syntax, right), method);
         }
 
         // A subscript is indexed, as code that knows the type indexes it: an array's elements, or the type's own subscript.
@@ -3822,6 +3846,16 @@ public sealed partial class SilGen {
                     }
                 }
 
+                // A 'some P' parameter's type is passed by its metadata alone,
+                // and the witness finds its table of P in the registry (#341).
+                foreach (var ownParameter in ownShape.Parameters) {
+                    if (ownParameter.OpaqueParameter is { } opaque && ownBound.Lookup(ownParameter) is { } given && !Mentions(given, [.._genericMetadata.Keys])) {
+                        foreach (var part in CompositionTypeSymbol.PartsOf(opaque.Constraint).OfType<NamedTypeSymbol>().Where(static p => p.TypeKind == TypeKind.Protocol && !IsMarker(p))) {
+                            generator.GenericTable(given, part.OriginalDefinition, call.Syntax, true, true);
+                        }
+                    }
+                }
+
                 if (GenericHiddenArguments(ownShape, ownBound, call.Syntax) is not { } hidden) {
                     EndAll(borrows);
                     return null;
@@ -4017,6 +4051,28 @@ public sealed partial class SilGen {
 
             borrows.Add(borrowed);
             return GenericLent(borrowed, type, expected, borrows);
+        }
+
+        /// <summary>
+        ///     An argument for a <c>consuming</c> parameter of a type
+        ///     parameter's type, to an unspecialised callee, which owns it: a
+        ///     value of its own, moved where the callee takes it from, and not
+        ///     destroyed here.
+        /// </summary>
+        SilValue? GenericOwnedArgument(BoundExpression argument, TypeSymbol given, SilType expected) {
+            if (Expression(argument) is not { } value) {
+                return null;
+            }
+
+            var handed = Owned(value);
+            if (IsOpaqueHere(given) || SilType.IsIndirect(handed.Type)) {
+                return SilType.SameErasingOpaque(handed.Type, expected) ? handed : Emit(new BuiltinInst("opaque_take_as", expected, handed));
+            }
+
+            // Taken out of the slot by the call, which the slot's destroy then knows.
+            var slot = NewSlot(handed.Type);
+            Emit(new StoreInst(handed, slot, StoreKind.Init));
+            return Emit(new LoadInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot)), LoadKind.Take));
         }
 
         /// <summary>

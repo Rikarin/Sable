@@ -174,11 +174,23 @@ public sealed class ExclusivityTests {
         Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:30:5\n", execution.Stderr);
     }
 
+    /// <summary>
+    ///     A checked build keeps the checks; each function finds the thread's
+    ///     accesses once, where it starts, and gives the runtime the trap's
+    ///     place, rather than reaching a thread-local at every access — a call
+    ///     on macOS (#346).
+    /// </summary>
     [Fact]
     public void AReleaseBuildDropsTheDynamicChecks() {
         var source = new SourceText(Program(Declarations, "    let box = Box(1)\n    both(box, box)\n    print(box.value)"), "test.sb");
-        Assert.Contains("call void @sable_access_begin(", Pipeline.Compile(source).LlvmIr!, StringComparison.Ordinal);
-        Assert.Contains("@sable_access_count", Pipeline.Compile(source).LlvmIr!, StringComparison.Ordinal);
+        var checkedIr = Pipeline.Compile(source).LlvmIr!;
+        Assert.Contains("call void @sable_access_begin(", checkedIr, StringComparison.Ordinal);
+        Assert.Contains("call ptr @sable_access_state_here()", checkedIr, StringComparison.Ordinal);
+        Assert.DoesNotContain("@sable_access_count", checkedIr, StringComparison.Ordinal);
+        foreach (var function in checkedIr.Split("\ndefine ").Skip(1)) {
+            Assert.True(function.Split("call ptr @sable_access_state_here()").Length <= 2, function);
+        }
+
         Assert.DoesNotContain("call void @sable_access_begin(", Pipeline.Compile(source, checkExclusivity: false).LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("call void @sable_access_check(", Pipeline.Compile(source, checkExclusivity: false).LlvmIr!, StringComparison.Ordinal);
     }

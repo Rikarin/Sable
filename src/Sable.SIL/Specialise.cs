@@ -805,6 +805,16 @@ sealed class Specialiser(SilModule module, bool forSize) {
             });
         }
 
+        // A value taken out of a slot seen as a type parameter's, for a 'consuming' parameter: taken out of the slot.
+        if (owned && argument is LoadInst { Kind: LoadKind.Take, Address: BuiltinInst { Name: "opaque_cast", Operands: [var source] } } taken && source.Type == SilType.Address(target)) {
+            return new(function => {
+                var again = InsertAfter(taken, new LoadInst(source, target.IsTrivial ? LoadKind.Trivial : LoadKind.Take) { Location = taken.Location });
+                Uses.Replace(function, taken, again);
+                taken.Block.Instructions.Remove(taken);
+                return again;
+            });
+        }
+
         // A closure made here in the generic convention, by a reabstraction of one that knows the types:
         // the same closure, its reabstraction specialised — when nothing but the call and its destruction uses it.
         if (target is ThickFunctionType thick && argument is PartialApplyInst { Function: FunctionRefInst { Function: var thunk } } closure

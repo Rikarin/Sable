@@ -12,43 +12,43 @@ module Sable.IO
 public struct DiskFileSystem: FileSystem {
     public init() { }
 
-    public fn readBytes(_ path: FilePath) throws(IoError) -> U8[>..] {
+    public fn readBytes(_ path: some PathLike) throws(IoError) -> U8[>..] {
         return try File.readBytes(path)
     }
 
-    public fn writeBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
+    public fn writeBytes(_ path: some PathLike, _ bytes: U8[:]) throws(IoError) {
         try File.writeBytes(path, bytes)
     }
 
-    public fn appendBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
+    public fn appendBytes(_ path: some PathLike, _ bytes: U8[:]) throws(IoError) {
         try File.appendBytes(path, bytes)
     }
 
-    public fn metadata(_ path: FilePath) throws(IoError) -> FileMetadata {
+    public fn metadata(_ path: some PathLike) throws(IoError) -> FileMetadata {
         return try File.metadata(path)
     }
 
-    public fn createDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
+    public fn createDirectory(_ path: some PathLike, recursive: Bool) throws(IoError) {
         try Directory.create(path, recursive: recursive)
     }
 
-    public fn list(_ path: FilePath) throws(IoError) -> String[>..] {
+    public fn list(_ path: some PathLike) throws(IoError) -> String[>..] {
         return try Directory.list(path)
     }
 
-    public fn removeFile(_ path: FilePath) throws(IoError) {
+    public fn removeFile(_ path: some PathLike) throws(IoError) {
         try File.remove(path)
     }
 
-    public fn removeDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
+    public fn removeDirectory(_ path: some PathLike, recursive: Bool) throws(IoError) {
         try Directory.remove(path, recursive: recursive)
     }
 
-    public fn rename(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
+    public fn rename<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool) throws(IoError) {
         try File.rename(from: source, to: target, overwrite: overwrite)
     }
 
-    public fn copy(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
+    public fn copy<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool) throws(IoError) {
         try File.copy(from: source, to: target, overwrite: overwrite)
     }
 }

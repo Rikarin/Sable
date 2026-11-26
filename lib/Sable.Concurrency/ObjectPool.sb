@@ -1,0 +1,544 @@
+module Sable.Concurrency
+
+// An object pool keeps each of its objects in a cell of raw memory of its
+// own, made once, and passes the cells' addresses about: a rent and a
+// return move a word, not the object, so nothing is counted on the way and
+// a value type is changed where it is. In front of a shared stack of cells,
+// under a lock, each thread keeps one cell in a place of its own (a
+// ThreadLocal), which a rent looks in first and a return fills first, as
+// .NET's DefaultObjectPool's fast slot does, but per thread: a thread that
+// rents and returns one object at a time takes no lock at all.
+//
+// The places are the pool's, in a book it keeps under its lock: a thread
+// ending gives its place's cell to the stack; the pool let go destroys
+// every cell, the threads' among them.
+
+/// Objects kept for reuse, from any thread: .NET's `ObjectPool<T>` with
+/// its `DefaultObjectPool`, for what is dear to make and cheap to reset —
+/// a builder, an encoder, a parser's state, a scratch buffer. `rent()`
+/// gives a `Lease`, which hands the object back as it goes; `with` lends
+/// one to a closure. An object coming back is recycled first — reset, for
+/// a `Resettable` one — and the recycling may refuse it (too big, broken),
+/// which drops it. The pool keeps at most `capacity` objects besides one
+/// on each thread that uses it; more coming back are dropped, and a rent
+/// with none kept makes one.
+///
+/// A rent and a return on the same thread take no lock: each thread keeps
+/// the last object it gave back in a place of its own, in front of the
+/// shared stack. Sendable, whatever it holds, since only the lease's holder
+/// reaches an object; what the pool makes is counted atomically.
+///
+/// A `TextBuilder` is Resettable, so `ObjectPool<TextBuilder>(capacity: 64,
+/// create: { TextBuilder(capacity: 256) })` is a pool of builders, each
+/// cleared as it comes back, its buffer kept.
+///
+/// ```sable
+/// let buffers = ObjectPool<Int[>..]>(capacity: 64, create: { [] }, recycle: { scratch in
+///     scratch.removeAll(keepingCapacity: true)
+///     return true
+/// })
+/// let total = buffers.with { scratch in
+///     scratch.append(contentsOf: [1, 2, 3])
+///     return scratch.reduce(0) { $0 + $1 }
+/// }
+/// assert(total == 6)
+/// var lease = buffers.rent()      // the same array, emptied, its room kept
+/// assert(lease.value.isEmpty && lease.value.capacity >= 3)
+/// ```
+@immutable
+public final class ObjectPool<T> {
+    let shared: PoolShared<T>
+    // The key of each thread's place: a word holding its cell, or 0.
+    let key: Int
+
+    /// How many objects it keeps, besides one on each thread.
+    public let capacity: Int
+
+    /// A pool of at most so many objects (by default, two for each
+    /// processor), which 'create' makes when none is kept, and 'recycle'
+    /// readies for reuse as each comes back: false drops it. Both run on
+    /// any thread.
+    ///
+    /// ```sable
+    /// let buffers = ObjectPool<U8[>..]>(capacity: 8, create: { [] }, recycle: { bytes in
+    ///     bytes.removeAll(keepingCapacity: true)
+    ///     return bytes.capacity <= 1 << 16   // a buffer grown too big is let go
+    /// })
+    /// var lease = buffers.rent()
+    /// lease.withValue { $0.append(1) }
+    /// ```
+    public init(capacity: Int = 2 * Thread.availableParallelism, create: @escaping @Sendable () -> T, recycle: @escaping @Sendable (inout T) -> Bool, tracksLeases: Bool = false) {
+        precondition(capacity >= 0, "a pool cannot keep \(capacity) objects")
+        self.capacity = capacity
+        let shared = PoolShared<T>(capacity, create, recycle, tracksLeases)
+        self.shared = shared
+        key = Runtime.threadLocalKey()
+    }
+
+    /// A pool whose policy makes and recycles its objects.
+    ///
+    /// ```sable
+    /// struct Lists: PoolPolicy {
+    ///     fn create() -> Int[>..] {
+    ///         return []
+    ///     }
+    ///
+    ///     fn recycle(_ list: inout Int[>..]) -> Bool {
+    ///         list.removeAll(keepingCapacity: true)
+    ///         return list.capacity <= 1024
+    ///     }
+    /// }
+    /// let lists = ObjectPool<Int[>..]>(capacity: 4, policy: Lists())
+    /// assert(lists.with { $0.isEmpty })
+    /// ```
+    public convenience init<P: PoolPolicy>(capacity: Int = 2 * Thread.availableParallelism, policy: P, tracksLeases: Bool = false) where P.Object == T, P: Sendable {
+        self.init(capacity: capacity, create: { policy.create() }, recycle: { policy.recycle(&$0) }, tracksLeases: tracksLeases)
+    }
+
+    deinit {
+        Runtime.threadLocalFree(key)
+        shared.close()
+    }
+
+    /// An object for the caller alone until the lease goes: one kept, or a
+    /// new one.
+    public fn rent() -> Lease<T> {
+        return Lease<T>(self, take(place()))
+    }
+
+    /// What the closure makes of an object lent to it, which comes back,
+    /// recycled, as the closure returns or throws.
+    public fn with<R, E: Error>(_ body: (inout T) throws(E) -> R) throws(E) -> R {
+        let place = self.place()
+        let cell = take(place)
+        unsafe {
+            var value = RawPtr<T>(address: cell).move()
+            do {
+                let result = try body(&value)
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place)
+                return result
+            } catch {
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place)
+                throw error
+            }
+        }
+    }
+
+    /// As `with`, for an async closure: the object is the caller's across
+    /// its suspensions.
+    public fn withAsync<R, E: Error>(_ body: async (inout T) throws(E) -> R) async throws(E) -> R {
+        let cell = take(place())
+        unsafe {
+            var value = RawPtr<T>(address: cell).move()
+            do {
+                let result = try await body(&value)
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place())
+                return result
+            } catch {
+                let keep = shared.recycle(&value)
+                RawPtr<T>(address: cell).initialize(to: move value)
+                settle(cell, keep, place())
+                throw error
+            }
+        }
+    }
+
+    /// The object leased taken from the pool for good: it is the caller's,
+    /// and the pool makes another in its place when it needs one.
+    public fn keep(_ lease: consuming Lease<T>) -> T {
+        var taken = move lease
+        let cell = taken.cell
+        taken.cell = 0
+        shared.forget(cell)
+        unsafe {
+            let place = RawPtr<T>(address: cell)
+            let value = place.move()
+            place.deallocate()
+            return value
+        }
+    }
+
+    /// How many objects it keeps now, the threads' among them.
+    public var idleCount: Int => shared.idleCount
+
+    /// The leases not yet given back, each with where it was rented: for a
+    /// pool made to track leases, those held too long, or never let go — a
+    /// lease in a cycle of objects, or in a global. Empty for a pool that
+    /// does not track them.
+    ///
+    /// ```sable
+    /// let pool = ObjectPool<Int[>..]>(capacity: 2, create: { [] }, recycle: { _ in true }, tracksLeases: true)
+    /// let lease = pool.rent()
+    /// assert(pool.outstandingLeases.count == 1)
+    /// ```
+    public var outstandingLeases: OutstandingLease[>..] => shared.outstanding()
+
+    /// Every object it keeps let go: the shared ones, and this thread's.
+    public fn trim() {
+        unsafe {
+            let cell = Int.atomicExchange(place(), 0, 0)
+            if cell != 0 {
+                shared.destroy(cell)
+            }
+        }
+        shared.trim()
+    }
+
+    // This thread's place, made the first time it asks.
+    @inline(always)
+    fn place() -> Int {
+        let found = Runtime.threadLocalFind(key)
+        return found != 0 ? found : madePlace()
+    }
+
+    @inline(never)
+    fn madePlace() -> Int {
+        let shared = self.shared
+        let place = shared.addPlace()
+        Runtime.setThreadLocal(key, place) {
+            shared.retire(place)
+        }
+        return place
+    }
+
+    // A cell: this thread's, else one from the stack, else a new one.
+    @inline(always)
+    fn take(_ place: Int) -> Int {
+        var cell = Int.atomicLoad(place, 0)
+        if cell != 0 {
+            Int.atomicStore(place, 0, 0)
+        } else {
+            cell = shared.pop()
+        }
+        if shared.tracks {
+            shared.rented(cell)
+        }
+        return cell
+    }
+
+    // A cell back, its value recycled: to this thread's place if it is
+    // empty, else to the stack, unless the recycling refused it. (Each
+    // caller recycles the value where it holds it, so that it is the only
+    // reference to what it holds, and is changed in place.)
+    @inline(always)
+    fn settle(_ cell: Int, _ keep: Bool, _ place: Int) {
+        if shared.tracks {
+            shared.returned(cell)
+        }
+        if !keep {
+            shared.destroy(cell)
+        } else if Int.atomicLoad(place, 0) == 0 {
+            Int.atomicStore(place, cell, 0)
+        } else {
+            shared.push(cell)
+        }
+    }
+
+    // A lease's cell back.
+    fn giveBack(_ cell: Int) {
+        unsafe {
+            var value = RawPtr<T>(address: cell).move()
+            let keep = shared.recycle(&value)
+            RawPtr<T>(address: cell).initialize(to: move value)
+            settle(cell, keep, place())
+        }
+    }
+}
+
+/// What an `ObjectPool` makes its objects with, and readies them for
+/// reuse with: .NET's `IPooledObjectPolicy<T>`.
+public protocol PoolPolicy {
+    /// What the pool holds.
+    associatedtype Object
+
+    /// A new object, for a rent when none is kept.
+    fn create() -> Object
+
+    /// The object readied for the next to rent it, as it comes back:
+    /// whether to keep it — false drops it.
+    fn recycle(_ object: inout Object) -> Bool
+}
+
+extension ObjectPool where T: Resettable {
+    /// A pool of at most so many objects, which 'create' makes, each reset
+    /// as it comes back.
+    ///
+    /// ```sable
+    /// struct Lines: Resettable {
+    ///     var lines: String[>..]
+    ///
+    ///     mutating fn reset() {
+    ///         lines.removeAll(keepingCapacity: true)
+    ///     }
+    /// }
+    /// let pool = ObjectPool<Lines>(capacity: 4, create: { Lines { lines: [] } })
+    /// pool.with { $0.lines.append("used") }
+    /// assert(pool.with { $0.lines.isEmpty })
+    /// ```
+    public convenience init(capacity: Int = 2 * Thread.availableParallelism, create: @escaping @Sendable () -> T, tracksLeases: Bool = false) {
+        self.init(capacity: capacity, create: create, recycle: { object in
+            object.reset()
+            return true
+        }, tracksLeases: tracksLeases)
+    }
+}
+
+/// An object rented from an `ObjectPool`, the holder's alone: it goes back
+/// to the pool, recycled, as the lease goes. It is moved, never copied, so
+/// it is given back once, and cannot be used after. A class's object is
+/// reached through `value`; a value type is changed where it is with
+/// `withValue`, as `value`'s setter replaces it whole.
+///
+/// ```sable
+/// let pool = ObjectPool<Int[>..]>(capacity: 2, create: { [] }, recycle: { list in
+///     list.removeAll(keepingCapacity: true)
+///     return true
+/// })
+/// var lease = pool.rent()
+/// lease.withValue { $0.append(7) }
+/// assert(lease.value == [7])
+/// ```
+@noncopy
+public struct Lease<T> {
+    let pool: ObjectPool<T>
+    var cell: Int
+
+    init(_ pool: ObjectPool<T>, _ cell: Int) {
+        self.pool = pool
+        self.cell = cell
+    }
+
+    deinit {
+        if cell != 0 {
+            pool.giveBack(cell)
+        }
+    }
+
+    /// The object: for a value type, a copy of it; set, replaced.
+    public var value: T {
+        get {
+            unsafe {
+                return RawPtr<T>(address: cell).load()
+            }
+        }
+        set {
+            unsafe {
+                RawPtr<T>(address: cell).store(newValue)
+            }
+        }
+    }
+
+    /// What the closure makes of the object, which it may change where it
+    /// is.
+    public mutating fn withValue<R, E: Error>(_ body: (inout T) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let place = RawPtr<T>(address: cell)
+            var value = place.move()
+            do {
+                let result = try body(&value)
+                place.initialize(to: move value)
+                return result
+            } catch {
+                place.initialize(to: move value)
+                throw error
+            }
+        }
+    }
+}
+
+/// A lease an `ObjectPool` that tracks them has not had back: where it was
+/// rented.
+public struct OutstandingLease: Sendable {
+    /// Which of the pool's leases it is, in the order they were rented.
+    public let number: Int
+
+    /// The calls that rented it, innermost first, as `Backtrace` gives them
+    /// (none in the interpreter).
+    public let frames: String[>..]
+}
+
+// What the pool's threads share: the stack of cells and the book of places,
+// under one lock; and the policy.
+struct PoolBook {
+    var stack: Int[>..] = []
+    var places: Int[>..] = []
+    var closed: Bool = false
+    var lastLease: Int = 0
+    var leases: [Int: OutstandingLease] = [:]
+
+    init() { }
+}
+
+@immutable
+final class PoolShared<T> {
+    let book: Mutex<PoolBook>
+    let capacity: Int
+    let create: () -> T
+    let recycle: (inout T) -> Bool
+    let tracks: Bool
+
+    init(_ capacity: Int, _ create: @escaping @Sendable () -> T, _ recycle: @escaping @Sendable (inout T) -> Bool, _ tracks: Bool) {
+        var book = PoolBook()
+        book.stack.reserveCapacity(capacity)
+        self.book = Mutex(book)
+        self.capacity = capacity
+        self.create = create
+        self.recycle = recycle
+        self.tracks = tracks
+    }
+
+    // A cell from the stack, or a new one with a new object.
+    fn pop() -> Int {
+        let cell = book.withLock { (book: inout PoolBook) -> Int in
+            return book.stack.isEmpty ? 0 : book.stack.removeLast()
+        }
+        if cell != 0 {
+            return cell
+        }
+        let value = create()
+        Runtime.share(value)
+        unsafe {
+            let made = RawPtr<T>.allocate(count: 1)
+            made.initialize(to: value)
+            return made.address
+        }
+    }
+
+    fn push(_ cell: Int) {
+        let capacity = self.capacity
+        let kept = book.withLock { (book: inout PoolBook) -> Bool in
+            if book.closed || book.stack.count >= capacity {
+                return false
+            }
+            book.stack.append(cell)
+            return true
+        }
+        if !kept {
+            destroy(cell)
+        }
+    }
+
+    fn destroy(_ cell: Int) {
+        unsafe {
+            let place = RawPtr<T>(address: cell)
+            place.deinitialize()
+            place.deallocate()
+        }
+    }
+
+    @inline(never)
+    fn rented(_ cell: Int) {
+        let frames = Runtime.backtraceFrames()
+        book.withLock { (book: inout PoolBook) -> Void in
+            book.lastLease += 1
+            book.leases[cell] = OutstandingLease { number: book.lastLease, frames: frames }
+        }
+    }
+
+    @inline(never)
+    fn returned(_ cell: Int) {
+        book.withLock { $0.leases[cell] = none }
+    }
+
+    fn forget(_ cell: Int) {
+        if tracks {
+            returned(cell)
+        }
+    }
+
+    fn outstanding() -> OutstandingLease[>..] {
+        var leases = book.withLock { (book: inout PoolBook) -> OutstandingLease[>..] in
+            var all: OutstandingLease[>..] = []
+            for (_, lease) in book.leases {
+                all.append(lease)
+            }
+            return all
+        }
+        leases.sort { $0.number < $1.number }
+        return leases
+    }
+
+    var idleCount: Int {
+        get {
+            return book.withLock { (book: inout PoolBook) -> Int in
+                var count = book.stack.count
+                for place in book.places {
+                    if Int.atomicLoad(place, 0) != 0 {
+                        count += 1
+                    }
+                }
+                return count
+            }
+        }
+    }
+
+    // A thread's place, empty, in the book.
+    fn addPlace() -> Int {
+        unsafe {
+            let place = RawPtr<Int>.allocate(count: 1)
+            place.initialize(to: 0)
+            book.withLock { $0.places.append(place.address) }
+            return place.address
+        }
+    }
+
+    // A thread ends: its place out of the book, and its cell to the stack.
+    fn retire(_ place: Int) {
+        let cell = book.withLock { (book: inout PoolBook) -> Int in
+            var i = 0
+            while i < book.places.count {
+                if book.places[i] == place {
+                    book.places[i] = book.places[book.places.count - 1]
+                    _ = book.places.removeLast()
+                    break
+                }
+                i += 1
+            }
+            return Int.atomicExchange(place, 0, 0)
+        }
+        unsafe {
+            RawPtr<Int>(address: place).deallocate()
+        }
+        if cell != 0 {
+            push(cell)
+        }
+    }
+
+    // The stack's cells let go.
+    fn trim() {
+        let cells = book.withLock { (book: inout PoolBook) -> Int[>..] in
+            let all = book.stack
+            book.stack.removeAll(keepingCapacity: true)
+            return all
+        }
+        for cell in cells {
+            destroy(cell)
+        }
+    }
+
+    // The pool is gone: every cell let go, the threads' among them; their
+    // places stay theirs until they end.
+    fn close() {
+        let cells = book.withLock { (book: inout PoolBook) -> Int[>..] in
+            book.closed = true
+            var all = book.stack
+            book.stack = []
+            for place in book.places {
+                let cell = Int.atomicExchange(place, 0, 0)
+                if cell != 0 {
+                    all.append(cell)
+                }
+            }
+            return all
+        }
+        for cell in cells {
+            destroy(cell)
+        }
+    }
+}

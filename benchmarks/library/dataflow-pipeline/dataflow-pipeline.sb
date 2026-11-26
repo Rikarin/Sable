@@ -1,0 +1,36 @@
+module DataflowPipelineBench
+
+// A three-stage dataflow pipeline: a hundred thousand numbers sent to a
+// TransformBlock, batched by a hundred in a BatchBlock, and summed by an
+// ActionBlock; every block bounded, so the producer waits on the consumer.
+// The .NET port is the same pipeline over bounded channels, as TPL Dataflow
+// is not in .NET's standard library.
+
+import Sable.Concurrency
+import Sable.Testing
+
+fn run() async -> String {
+    let parse = TransformBlock<Int, Int>(capacity: 1000) { $0 * 3 + 1 }
+    let batch = BatchBlock<Int>(size: 100, capacity: 1000)
+    let total = Atomic(0)
+    let save = ActionBlock<Int[>..]>(capacity: 10) { rows in
+        var sum = 0
+        for row in rows {
+            sum += row
+        }
+        total.add(sum)
+    }
+    parse.link(to: batch, propagateCompletion: true)
+    batch.link(to: save, propagateCompletion: true)
+    for i in 0..<100_000 {
+        _ = await parse.send(i)
+    }
+    parse.complete()
+    try! await save.completion()
+    return "\(total.load())"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
+}

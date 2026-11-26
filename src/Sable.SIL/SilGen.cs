@@ -2280,7 +2280,9 @@ public sealed partial class SilGen {
                     return existing;
                 }
 
-                var enumType = new EnumType(name);
+                // An optional move-only value is move-only too: a copy of it,
+                // destroyed, would run the value's deinit.
+                var enumType = new EnumType(name) { IsNoncopyable = IsMoveOnly(wrapped) };
                 enumType.Cases.Add(("Some", wrapped));
                 enumType.Cases.Add(("None", null));
                 return _module.AddType(enumType);
@@ -2579,7 +2581,7 @@ public sealed partial class SilGen {
 
                 // 'Void?' — what 'try?' makes of a call that returns nothing —
                 // has nothing to carry: whether there was a value is all of it.
-                var enumType = Begin(type, new EnumType(name));
+                var enumType = Begin(type, new EnumType(name) { IsNoncopyable = IsMoveOnly(wrapped) });
                 enumType.Cases.Add(("Some", wrapped == SilType.Unit ? null : wrapped));
                 enumType.Cases.Add(("None", null));
                 return HoldsItself(enumType) ? null : enumType;

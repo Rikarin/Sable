@@ -18,17 +18,12 @@ union Raced<T> {
 /// so the wait for it to notice is part of the call, as Swift's is. What
 /// the body throws, this throws.
 ///
+/// The overload that takes a clock shows the timeout itself, on a
+/// `TestClock`.
+///
 /// ```sable
 /// let quick = try! await withTimeout(Duration.seconds(5)) { 42 }
 /// assert(quick == 42)
-/// do {
-///     _ = try await withTimeout(Duration.milliseconds(10)) {
-///         try await Task.sleep(nanoseconds: 10_000_000_000)
-///     }
-///     assert(false)
-/// } catch let error as TimeoutError {
-///     assert(error.duration == Duration.milliseconds(10))
-/// } catch { assert(false) }
 /// ```
 public fn withTimeout<T: Sendable>(_ duration: Duration, _ body: @Sendable async () throws -> T) async throws -> T {
     // On this clock the runtime's own timer does: the body alone is a task.
@@ -88,9 +83,10 @@ public fn withTimeout<T: Sendable, C: Clock>(_ duration: Duration, clock: C, _ b
 /// `select!`, .NET's `WhenAny` over work started for it.
 ///
 /// ```sable
+/// let never = Channel<Int>()
 /// let first = try! await race({ 1 }, {
-///     try await Task.sleep(nanoseconds: 10_000_000_000)
-///     return 2
+///     // Waits for a value that never comes, until it is cancelled.
+///     return await never.receive() ?? 2
 /// })
 /// assert(first == 1)
 /// ```
@@ -156,16 +152,17 @@ public fn whenAny<T: Sendable>(_ tasks: Task<T>[>..]) async -> Finished<T> {
 /// `Task.WhenEach`, for 'for await'.
 ///
 /// ```sable
-/// let slow = Task.spawn {
-///     try? await Task.sleep(nanoseconds: 50_000_000)
-///     return 1
-/// }
+/// let gate = Channel<Int>()
+/// let slow = Task.spawn { await gate.receive() ?? 0 }
 /// let fast = Task.spawn { 2 }
 /// var order: Int[>..] = []
 /// for await done in whenEach([slow, fast]) {
 ///     order.append(done.value)
+///     if order.count == 1 {
+///         await gate.send(1)   // the slow one finishes only now
+///     }
 /// }
-/// assert(order.count == 2 && order[0] == 2)
+/// assert(order == [2, 1])
 /// ```
 public fn whenEach<T: Sendable>(_ tasks: Task<T>[>..]) -> Channel<Finished<T>> {
     let finished = Channel<Finished<T>>()

@@ -149,6 +149,21 @@ public sealed class ExampleProgramTests {
         );
 
     [Fact]
+    public void ThePipelineHoldsABoundedNumberAndPassesAFaultOn() =>
+        Assert.Equal(
+            """
+            while the store is stuck, the pipeline took 274 of 2000 lines
+            bounded: true
+            saved 2000 records in 80 batches
+            batcher: BadLine(line: "garbage")
+            store: BadLine(line: "garbage")
+            some sends were refused: true
+
+            """,
+            Run("08-pipeline.sb")
+        );
+
+    [Fact]
     public void TheEchoServerTalksToItself() =>
         Assert.Equal("hello\n100 of 100 heard themselves\nechoed 995 bytes\n", Run("05-echo-server.sb"));
 

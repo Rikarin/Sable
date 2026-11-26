@@ -1,0 +1,100 @@
+module PoolStress
+
+import Sable.Concurrency
+import Sable.Text
+
+// Object pools and async pools, rented and given back from tasks on every
+// worker and from threads of the program's own, for ThreadSanitizer
+// (tools/tsan/run.sh): objects passed between threads' places and the
+// shared stack, threads ending with an object in their place, pools let go
+// with objects in other threads' places, waiters handed objects and room.
+
+final class Busy {
+    let gone: Atomic<Int>
+    let held: Atomic<Bool>
+    var uses: Int = 0
+    init(_ gone: Atomic<Int>) {
+        self.gone = gone
+        held = Atomic(false)
+    }
+    deinit { gone.add(1) }
+}
+
+@main
+fn main() async {
+    let gone = Atomic(0)
+    let clashes = Atomic(0)
+    let total = Atomic(0)
+    for round in 0..<10 {
+        let builders = ObjectPool<TextBuilder>(capacity: 4, create: { TextBuilder(capacity: 64) })
+        let objects = ObjectPool<Busy>(capacity: 2, create: { Busy(gone) }, recycle: { busy in busy.uses < 50 })
+        let tasks = (0..<16).map { n in
+            Task.spawn {
+                for i in 0..<200 {
+                    let line = builders.with { builder in
+                        builder.append(n)
+                        builder.append(" ")
+                        builder.append(i)
+                        return builder.build()
+                    }
+                    total.add(line.utf8Count)
+                    let lease = objects.rent()
+                    if lease.value.held.exchange(true) {
+                        clashes.add(1)
+                    }
+                    lease.value.uses += 1
+                    lease.value.held.store(false)
+                    if i % 10 == 0 {
+                        await Task.yield()
+                    }
+                }
+            }
+        }
+        let threads = (0..<4).map { n in
+            Thread.spawn {
+                for i in 0..<100 {
+                    objects.with { busy in
+                        if busy.held.exchange(true) {
+                            clashes.add(1)
+                        }
+                        busy.uses += n + i
+                        busy.held.store(false)
+                    }
+                }
+            }
+        }
+        for task in tasks {
+            await task.value
+        }
+        for thread in threads {
+            thread.join()
+        }
+        total.add(objects.idleCount + round)
+
+        let connections = AsyncPool<Busy>(maximumCount: 3, create: { Busy(gone) })
+        let renters = (0..<12).map { n in
+            Task.spawn {
+                for _ in 0..<30 {
+                    try! await connections.with { busy in
+                        if busy.held.exchange(true) {
+                            clashes.add(1)
+                        }
+                        await Task.yield()
+                        busy.uses += n
+                        busy.held.store(false)
+                    }
+                }
+            }
+        }
+        let quitter = Task.spawn {
+            _ = try? await connections.rent()
+        }
+        quitter.cancel()
+        _ = await quitter.value
+        for renter in renters {
+            await renter.value
+        }
+        connections.close()
+    }
+    print(clashes.load() == 0 && total.load() > 0 && gone.load() > 0)
+}

@@ -29,7 +29,7 @@ module Sable.Text
 /// assert(builder.build() == "[ab|3|")
 /// assert(builder.count == 6)
 /// ```
-public class TextBuilder: TextWriter {
+public class TextBuilder: TextWriter, Resettable {
     // The text: the pieces in order, then the tail, a string being written
     // that becomes a piece when it is full.
     var pieces: String[>..] = []
@@ -236,7 +236,15 @@ public class TextBuilder: TextWriter {
     // ---- Reading -----------------------------------------------------------
 
     /// The text built: the pieces joined once, and kept joined.
+    ///
+    /// A short text — no more than 4 KiB, all in the buffer — is copied out,
+    /// and the buffer kept for what is appended next, or for the builder's
+    /// next use once it is cleared; a longer one becomes the text, with no
+    /// copy.
     public fn build() -> String {
+        if pieces.isEmpty && tail.count <= 4096 {
+            return tail.copied()
+        }
         let text = whole()
         return text
     }
@@ -344,6 +352,11 @@ public class TextBuilder: TextWriter {
         tail.truncate(to: 0)
         scalars = 0
         bytes = 0
+    }
+
+    /// As `clear()`: empty, its room kept, for an object pool to hand on.
+    public fn reset() {
+        clear()
     }
 
     // ---- Pieces ------------------------------------------------------------

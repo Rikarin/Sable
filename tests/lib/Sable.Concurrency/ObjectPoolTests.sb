@@ -1,0 +1,319 @@
+module ObjectPoolTests
+
+// ObjectPool, Lease and PoolPolicy (Sable.Concurrency), tested with '@test':
+// run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import ConcurrencySupport
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Text
+
+// An object that counts how many of it were made and are gone, and says
+// whether two holders had it at once.
+final class Scratch: Resettable {
+    let gone: Atomic<Int>
+    let busy: Atomic<Bool>
+    var lines: String[>..] = []
+    var resets: Int = 0
+
+    init(_ gone: Atomic<Int>) {
+        self.gone = gone
+        busy = Atomic(false)
+    }
+
+    deinit {
+        gone.add(1)
+    }
+
+    fn reset() {
+        lines.removeAll(keepingCapacity: true)
+        resets += 1
+    }
+}
+
+// A pool of Scratch, and its counts of objects made and gone.
+struct Counted {
+    let made: Atomic<Int>
+    let gone: Atomic<Int>
+    let pool: ObjectPool<Scratch>
+
+    init(capacity: Int = 4, tracksLeases: Bool = false) {
+        let made = Atomic(0)
+        let gone = Atomic(0)
+        self.made = made
+        self.gone = gone
+        pool = ObjectPool<Scratch>(capacity: capacity, create: {
+            made.add(1)
+            return Scratch(gone)
+        }, tracksLeases: tracksLeases)
+    }
+}
+
+@test
+fn withLendsAnObjectAndResetsItAfter() {
+    let counted = Counted()
+    let lines = counted.pool.with { scratch in
+        scratch.lines.append("one")
+        return scratch.lines.count
+    }
+    assertEqual(lines, 1)
+    let after = counted.pool.with { scratch in (scratch.lines.count, scratch.resets) }
+    expect(after.0 == 0 && after.1 == 1)
+    assertEqual(counted.made.load(), 1)
+}
+
+@test
+fn aLeaseGoesBackAsItGoes() {
+    let counted = Counted()
+    if true {
+        let lease = counted.pool.rent()
+        lease.value.lines.append("held")
+        assertEqual(counted.pool.idleCount, 0)
+    }
+    assertEqual(counted.pool.idleCount, 1)
+    let again = counted.pool.rent()
+    expect(again.value.lines.isEmpty)
+    assertEqual(counted.made.load(), 1)
+}
+
+@test
+fn twoLeasesAtOnceAreTwoObjects() {
+    let counted = Counted()
+    let first = counted.pool.rent()
+    let second = counted.pool.rent()
+    expect(first.value !== second.value)
+    assertEqual(counted.made.load(), 2)
+}
+
+@test
+fn aValueTypeIsChangedWhereItIs() {
+    let pool = ObjectPool<Int[>..]>(capacity: 2, create: { [] }, recycle: { list in
+        list.removeAll(keepingCapacity: true)
+        return true
+    })
+    var lease = pool.rent()
+    lease.withValue { list in
+        list.reserveCapacity(100)
+        list.append(1)
+    }
+    expect(lease.value == [1])
+    lease.value = [2, 3]
+    expect(lease.value == [2, 3])
+}
+
+@test
+fn aValueTypeKeepsItsRoomThroughThePool() {
+    let pool = ObjectPool<Int[>..]>(capacity: 2, create: { [] }, recycle: { list in
+        list.removeAll(keepingCapacity: true)
+        return true
+    })
+    pool.with { $0.reserveCapacity(500) }
+    expect(pool.with { $0.isEmpty && $0.capacity >= 500 })
+}
+
+@test
+fn aRecyclingThatRefusesDropsTheObject() {
+    let made = Atomic(0)
+    let pool = ObjectPool<Int[>..]>(capacity: 4, create: {
+        made.add(1)
+        return []
+    }, recycle: { list in
+        let small = list.count <= 2
+        list.removeAll(keepingCapacity: true)
+        return small
+    })
+    pool.with { $0.append(contentsOf: [1, 2, 3]) }
+    assertEqual(pool.idleCount, 0)
+    pool.with { $0.append(1) }
+    assertEqual(pool.idleCount, 1)
+    assertEqual(made.load(), 2)
+}
+
+@test
+fn itKeepsNoMoreThanItsCapacityBesidesTheThreads() {
+    let counted = Counted(capacity: 2)
+    var held = 0
+    if true {
+        let a = counted.pool.rent()
+        let b = counted.pool.rent()
+        let c = counted.pool.rent()
+        let d = counted.pool.rent()
+        held = 4
+    }
+    // One in this thread's place, two on the stack; the fourth let go.
+    assertEqual(held, 4)
+    assertEqual(counted.pool.idleCount, 3)
+    assertEqual(counted.gone.load(), 1)
+}
+
+@test
+fn aPoolOfNoCapacityKeepsOnlyTheThreadsOwn() {
+    let counted = Counted(capacity: 0)
+    if true {
+        let a = counted.pool.rent()
+        let b = counted.pool.rent()
+    }
+    assertEqual(counted.pool.idleCount, 1)
+    assertEqual(counted.gone.load(), 1)
+}
+
+@test
+fn keepTakesTheObjectForGood() {
+    let counted = Counted(tracksLeases: true)
+    let lease = counted.pool.rent()
+    let scratch = counted.pool.keep(move lease)
+    scratch.lines.append("mine")
+    assertEqual(counted.pool.idleCount, 0)
+    expect(counted.pool.outstandingLeases.isEmpty)
+    let next = counted.pool.rent()
+    expect(next.value !== scratch)
+}
+
+@test
+fn aTrackingPoolListsTheLeasesNotGivenBack() {
+    let counted = Counted(tracksLeases: true)
+    let first = counted.pool.rent()
+    if true {
+        let brief = counted.pool.rent()
+    }
+    let third = counted.pool.rent()
+    let outstanding = counted.pool.outstandingLeases
+    assertEqual(outstanding.count, 2)
+    expect(outstanding[0].number == 1 && outstanding[1].number == 3)
+}
+
+@test
+fn aPoolThatDoesNotTrackListsNone() {
+    let counted = Counted()
+    let lease = counted.pool.rent()
+    expect(counted.pool.outstandingLeases.isEmpty)
+}
+
+@test
+fn trimLetsEveryObjectGo() {
+    let counted = Counted()
+    if true {
+        let a = counted.pool.rent()
+        let b = counted.pool.rent()
+    }
+    assertEqual(counted.pool.idleCount, 2)
+    counted.pool.trim()
+    assertEqual(counted.pool.idleCount, 0)
+    assertEqual(counted.gone.load(), 2)
+}
+
+@test
+fn thePoolLetGoLetsItsObjectsGo() {
+    let gone = Atomic(0)
+    if true {
+        let pool = ObjectPool<Scratch>(capacity: 4, create: { Scratch(gone) })
+        if true {
+            let a = pool.rent()
+            let b = pool.rent()
+        }
+    }
+    assertEqual(gone.load(), 2)
+}
+
+@test
+fn anObjectComesBackWhenTheClosureThrows() {
+    let counted = Counted()
+    expectThrows(Broken.Down) {
+        try counted.pool.with { scratch in
+            scratch.lines.append("x")
+            throw Broken.Down
+        }
+    }
+    assertEqual(counted.pool.idleCount, 1)
+    expect(counted.pool.with { $0.lines.isEmpty })
+}
+
+@test
+fn withAsyncLendsAnObjectAcrossSuspensions() async {
+    let counted = Counted()
+    let count = await counted.pool.withAsync { scratch in
+        scratch.lines.append("before")
+        await Task.yield()
+        scratch.lines.append("after")
+        return scratch.lines.count
+    }
+    assertEqual(count, 2)
+    assertEqual(counted.pool.idleCount, 1)
+}
+
+struct Lists: PoolPolicy {
+    fn create() -> Int[>..] {
+        return [0]
+    }
+
+    fn recycle(_ list: inout Int[>..]) -> Bool {
+        list = [0]
+        return true
+    }
+}
+
+@test
+fn aPolicyMakesAndRecyclesTheObjects() {
+    let pool = ObjectPool<Int[>..]>(capacity: 2, policy: Lists())
+    pool.with { $0.append(1) }
+    expect(pool.with { $0 } == [0])
+}
+
+@test
+fn aTextBuilderIsResetForTheNextRent() {
+    let pool = ObjectPool<TextBuilder>(capacity: 2, create: { TextBuilder(capacity: 64) })
+    let first = pool.with { builder in
+        builder.append("a = ")
+        builder.append(1)
+        return builder.build()
+    }
+    let second = pool.with { builder in
+        builder.append("b")
+        return builder.build()
+    }
+    expect(first == "a = 1" && second == "b")
+}
+
+@test
+fn tasksOnEveryThreadNeverShareAnObject() async {
+    let counted = Counted(capacity: 8)
+    let pool = counted.pool
+    let clashes = Atomic(0)
+    let tasks = (0..<16).map { n in
+        Task.spawn {
+            for i in 0..<200 {
+                pool.with { scratch in
+                    if scratch.busy.exchange(true) {
+                        clashes.add(1)
+                    }
+                    scratch.lines.append("\(n) \(i)")
+                    if scratch.lines.count != 1 {
+                        clashes.add(1)
+                    }
+                    scratch.busy.store(false)
+                }
+            }
+        }
+    }
+    for task in tasks {
+        await task.value
+    }
+    assertEqual(clashes.load(), 0)
+    expect(counted.made.load() <= 16)
+}
+
+@test
+fn aThreadsObjectGoesBackAsItEnds() {
+    let counted = Counted()
+    let pool = counted.pool
+    let thread = Thread.spawn {
+        pool.with { $0.lines.append("on a thread") }
+    }
+    thread.join()
+    // The thread's place gave its object to the stack as the thread ended.
+    assertEqual(pool.idleCount, 1)
+    assertEqual(counted.gone.load(), 0)
+    pool.with { $0.lines.append("here") }
+    assertEqual(counted.made.load(), 1)
+}

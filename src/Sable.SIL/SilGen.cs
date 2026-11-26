@@ -11589,6 +11589,17 @@ public sealed partial class SilGen {
                 // So is an optional or a tuple of them, laid out at run time.
                 if (genericShape is not null && i < callee.Parameters.Length && SilType.IsIndirect(type.Parameters[arguments.Count])) {
                     var given = Substitute(WithAssociatedTypes(callee, bound), callee.Parameters[i].Type);
+                    // A 'consuming' one is handed it, as a specialised callee is (#342).
+                    if (type.IsOwned(arguments.Count)) {
+                        if (GenericOwnedArgument(call.Arguments[i], given, type.Parameters[arguments.Count]) is not { } handed) {
+                            return null;
+                        }
+
+                        arguments.Add(Hold(handed));
+                        owned.Add(handed);
+                        continue;
+                    }
+
                     if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows, inPlace) is not { } genericArgument) {
                         return null;
                     }

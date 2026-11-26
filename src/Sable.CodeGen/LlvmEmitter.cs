@@ -3428,16 +3428,21 @@ public sealed partial class LlvmEmitter {
 
                 // An opaque value read: copied by its value witness into a buffer
                 // of its own, or moved there, leaving the storage empty.
+                // Out of a slot of a type known here — what a caller hands a
+                // 'consuming' parameter of unspecialised code — sized by it.
                 case LoadInst { Type: var opaqueLoad } load when Held(opaqueLoad): {
-                    var buffer = OpaqueBuffer(opaqueLoad);
+                    var sized = load.Address is BuiltinInst { Name: "opaque_cast", Operands: [{ Type: AddressType { Pointee: var known } }] } && !SilType.MentionsOpaque(known)
+                        ? known
+                        : opaqueLoad;
+                    var buffer = OpaqueBuffer(sized);
                     _names[load] = buffer;
                     if (load.Kind == LoadKind.Take) {
-                        OpaqueMove(opaqueLoad, buffer, Name(load.Address));
-                        if (!SilType.IsBitwise(opaqueLoad)) {
-                            Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(opaqueLoad)}, i1 false)");
+                        OpaqueMove(sized, buffer, Name(load.Address));
+                        if (!SilType.IsBitwise(sized)) {
+                            Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(sized)}, i1 false)");
                         }
                     } else {
-                        OpaqueWitness(opaqueLoad, CopyWitness, buffer, Name(load.Address));
+                        OpaqueWitness(sized, CopyWitness, buffer, Name(load.Address));
                     }
 
                     return;

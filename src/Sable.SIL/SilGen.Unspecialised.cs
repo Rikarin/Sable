@@ -2314,9 +2314,12 @@ public sealed partial class SilGen {
         }
 
         // An initialiser borrows what it is given, as any function compiled
-        // once does, and one that consumes a parameter: its callers pass
-        // values of a type parameter where they are.
-        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) || symbol.Parameters.Any(static p => p.Modifier == ParameterModifier.Consuming) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
+        // once does; a 'consuming' parameter is the callee's, as it is
+        // specialised (#342).
+        var selfCount = HasSelf(symbol) ? 1 : 0;
+        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) || !symbol.Parameters.Any(static p => p.Modifier == ParameterModifier.Consuming)
+            ? default
+            : signature.Owned.Select((o, i) => o && i >= selfCount && symbol.Parameters[i - selfCount].Modifier == ParameterModifier.Consuming).Concat(hidden.Select(static _ => false)).ToImmutableArray();
         var type = new FunctionType([..signature.Parameters, ..hidden], result, thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);
@@ -4027,6 +4030,28 @@ public sealed partial class SilGen {
 
             borrows.Add(borrowed);
             return GenericLent(borrowed, type, expected, borrows);
+        }
+
+        /// <summary>
+        ///     An argument for a <c>consuming</c> parameter of a type
+        ///     parameter's type, to an unspecialised callee, which owns it: a
+        ///     value of its own, moved where the callee takes it from, and not
+        ///     destroyed here.
+        /// </summary>
+        SilValue? GenericOwnedArgument(BoundExpression argument, TypeSymbol given, SilType expected) {
+            if (Expression(argument) is not { } value) {
+                return null;
+            }
+
+            var handed = Owned(value);
+            if (IsOpaqueHere(given) || SilType.IsIndirect(handed.Type)) {
+                return SilType.SameErasingOpaque(handed.Type, expected) ? handed : Emit(new BuiltinInst("opaque_take_as", expected, handed));
+            }
+
+            // Taken out of the slot by the call, which the slot's destroy then knows.
+            var slot = NewSlot(handed.Type);
+            Emit(new StoreInst(handed, slot, StoreKind.Init));
+            return Emit(new LoadInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot)), LoadKind.Take));
         }
 
         /// <summary>

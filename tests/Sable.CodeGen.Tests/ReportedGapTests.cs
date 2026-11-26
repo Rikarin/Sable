@@ -1,3 +1,5 @@
+using Sable.SIL;
+
 namespace Sable.CodeGen.Tests;
 
 /// <summary>Gaps of the compiler reported while writing the library (#340–#349), natively and in the interpreter.</summary>
@@ -200,4 +202,93 @@ public sealed class ReportedGapTests {
                 print(Value().make("e"))
             }
             """).Stdout);
+
+    /// <summary>A value moved into a 'consuming T' parameter is the callee's, compiled once or specialised, optimised or not (#342).</summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AValueMovedIntoAConsumingParameterIsNotCopied(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        const string expected = """
+            kept 500
+            [1, 2, 3]
+            [1, 2]
+            gone a
+            1
+            1
+            gone c
+            c
+            gone d
+            d
+            gone e
+            e
+            text
+            7
+            end b
+            gone b
+
+            """;
+        const string source = """
+            module ConsumingMove
+
+            final class Tracked {
+                let name: String
+
+                init(_ name: String) {
+                    self.name = name
+                }
+
+                deinit {
+                    print("gone \(name)")
+                }
+            }
+
+            fn reset<T>(_ value: consuming T, _ change: (inout T) -> Void) -> T {
+                var kept = move value
+                change(&kept)
+                return kept
+            }
+
+            fn dropped<T>(_ value: consuming T) -> Int {
+                return 1
+            }
+
+            fn kept<T>(_ value: consuming T) -> T {
+                return value
+            }
+
+            fn passOn<T>(_ value: consuming T) -> T {
+                return kept(move value)
+            }
+
+            fn twice<T>(_ value: T) -> T {
+                return kept(value)
+            }
+
+            @main
+            fn main() {
+                var list: Int[>..] = []
+                list.reserveCapacity(500)
+                list.append(1)
+                let back = reset(move list) { $0.removeAll(keepingCapacity: true) }
+                print("kept \(back.capacity >= 500 ? 500 : back.capacity)")
+                let copied: Int[>..] = [1, 2]
+                print(reset(copied) { $0.append(3) })
+                print(copied)
+                print(dropped(Tracked("a")))
+                let b = Tracked("b")
+                print(dropped(b))
+                print(kept(Tracked("c")).name)
+                print(passOn(Tracked("d")).name)
+                print(twice(Tracked("e")).name)
+                print(kept("text"))
+                print(kept(7))
+                print("end \(b.name)")
+            }
+            """;
+        Assert.Equal(expected, Programs.AssertAgree(source).Stdout);
+        if (Programs.CanBuild) {
+            Assert.Equal(expected, Programs.BuildAndRun(source, optimise: false).Stdout);
+        }
+    }
 }

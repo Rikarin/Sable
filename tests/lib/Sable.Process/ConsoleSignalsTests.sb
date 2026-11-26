@@ -1,0 +1,57 @@
+module ConsoleSignalsTests
+
+// Console's signals (Sable.Process): Ctrl+C and the window resized, tested
+// with '@test' by the program sending them to itself, as a terminal would
+// send them: run with
+//     tools/stdlib-coverage.sh Sable.Process
+// Their coming from a terminal's keys is Sable.IO's ConsoleTests', under a
+// pseudoterminal.
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+
+#if !os(windows)
+
+@test
+fn anInterruptComesToWhoListensForIt() async {
+    let interrupts = try! Console.interrupts()
+    expect(Signals.raise(.Interrupt))
+    var iterator = interrupts.makeAsyncIterator()
+    expect(await iterator.next()! == Signal.Interrupt)
+}
+
+@test
+fn anInterruptRunsTheHandler() async {
+    let seen = Atomic<Int>(0)
+    let registration = try! Console.onInterrupt {
+        _ = seen.add(1)
+    }
+    // The handler's task listens from its start: sent until it has heard one.
+    var tries = 0
+    while seen.load() == 0 && tries < 500 {
+        Signals.raise(.Interrupt)
+        await Task.yield()
+        tries += 1
+    }
+    registration.cancel()
+    expect(seen.load() >= 1)
+}
+
+@test
+fn aResizeComesToWhoListensForIt() async {
+    let resizes = try! Console.resizes()
+    expect(Signals.raise(.WindowChange))
+    var iterator = resizes.makeAsyncIterator()
+    expect(await iterator.next()! == Signal.WindowChange)
+}
+
+#else
+
+@test
+fn resizesAreUnsupported() {
+    expect((try? Console.resizes()) == none)
+}
+
+#endif

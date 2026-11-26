@@ -2073,6 +2073,32 @@ public sealed partial class LlvmEmitter {
 
         string? _accessState;
 
+        /// <summary>The instruction after the one being written, in its block, or null after the last.</summary>
+        SilInstruction? _next;
+
+        /// <summary>Instructions an earlier one has written already, as part of its own.</summary>
+        readonly HashSet<SilInstruction> _folded = [];
+
+        /// <summary>
+        ///     The <c>share_into_at</c> that follows a change to an array in an
+        ///     object's field, of that field: taken, to be written where the
+        ///     runtime changed the array — after an appended element is stored,
+        ///     as sharing the buffer walks its elements. Changed in
+        ///     place, the buffer is the one the field held, which is shared if
+        ///     the object is — what a shared object reaches is — and in place
+        ///     means it is not: there is nothing to share.
+        /// </summary>
+        Action? ShareAfterSlowPath(SilValue slot) {
+            if (_next is not BuiltinInst { Name: "share_into_at", Operands: [var owner, var at] } share || !ReferenceEquals(at, slot) || owner.Type is AddressType) {
+                return null;
+            }
+
+            _folded.Add(share);
+            var ownerName = Name(owner);
+            var slotName = Name(slot);
+            return () => ShareInto(ownerName, () => Share(Shareable(share), ShareValue(share, slotName)), mayBeNull: false);
+        }
+
         /// <summary>
         ///     The running thread's accesses in progress (runtime/exclusivity.c),
         ///     found once, where the function starts — a function runs on one
@@ -2089,6 +2115,30 @@ public sealed partial class LlvmEmitter {
 
             return _accessState;
         }
+
+        /// <summary>
+        ///     Whether an index was worked out from the count of the array at
+        ///     the address — a ring's mask, <c>count - 1</c> — by integer
+        ///     arithmetic: then the count is read once for both, if it is
+        ///     read in the same words (<see cref="MutableElement" />).
+        /// </summary>
+        static bool FromCount(SilValue index, SilValue address, int depth) =>
+            depth < 4
+            && index switch {
+                BuiltinInst { Name: "array_count", Operands: [var read] } when read is LoadBorrowInst or LoadInst { Kind: not LoadKind.Take } =>
+                    SameAddress(((SilInstruction)read).Operands[0], address),
+                BuiltinInst { Type: var type } arithmetic when type == SilType.Int && IntegerArithmetic.Any(arithmetic.Name.StartsWith) =>
+                    arithmetic.Operands.Any(o => FromCount(o, address, depth + 1)),
+                _ => false,
+            };
+
+        static readonly string[] IntegerArithmetic = ["add_", "sub_", "mul_", "and_", "or_", "xor_", "shl_", "shr_", "wrapping_"];
+
+        /// <summary>The same storage: the same address, or the same field of the same object or of the same storage.</summary>
+        static bool SameAddress(SilValue first, SilValue second) =>
+            ReferenceEquals(first, second)
+            || first is RefElementAddrInst a && second is RefElementAddrInst b && a.Field == b.Field && ReferenceEquals(a.Reference, b.Reference)
+            || first is StructElementAddrInst c && second is StructElementAddrInst d && c.Field == d.Field && SameAddress(c.Address, d.Address);
 
         (string Key, string Cell)? _threadLocalCache;
 
@@ -2942,8 +2992,11 @@ public sealed partial class LlvmEmitter {
                 _out = new StringBuilder();
                 _bodies[block] = _out;
                 _currentLabel = _labels[block];
-                foreach (var instruction in block.Instructions) {
-                    Instruction(instruction);
+                for (var i = 0; i < block.Instructions.Count; i++) {
+                    _next = i + 1 < block.Instructions.Count ? block.Instructions[i + 1] : null;
+                    if (!_folded.Remove(block.Instructions[i])) {
+                        Instruction(block.Instructions[i]);
+                    }
                 }
             }
 
@@ -6509,9 +6562,19 @@ public sealed partial class LlvmEmitter {
 
                 case "array_append": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var element = AppendSlot(operands[0], arrayType);
-                    ShareIntoArray(operands[0], arrayType.Element, operands[1]);
-                    StoreElement(arrayType.Element, operands[1], element);
+                    void Place(string at) {
+                        ShareIntoArray(operands[0], arrayType.Element, operands[1]);
+                        StoreElement(arrayType.Element, operands[1], at);
+                    }
+
+                    // The buffer shared on the runtime's path, once the element
+                    // is there: sharing a buffer walks its elements.
+                    if (ShareAfterSlowPath(builtin.Operands[0]) is { } share) {
+                        AppendSlot(operands[0], arrayType, Place, share);
+                        return;
+                    }
+
+                    Place(AppendSlot(operands[0], arrayType));
                     return;
                 }
 
@@ -6605,7 +6668,7 @@ public sealed partial class LlvmEmitter {
                 case "array_set": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var elementType = Type(arrayType.Element);
-                    var element = MutableElement(operands[0], operands[1], arrayType);
+                    var element = MutableElement(operands[0], operands[1], arrayType, ShareAfterSlowPath(builtin.Operands[0]), counted: FromCount(builtin.Operands[1], builtin.Operands[0], 0));
                     ShareIntoArray(operands[0], arrayType.Element, operands[2]);
                     if (arrayType.Element is var replaced && Held(replaced)) {
                         OpaqueWitness(replaced, AssignWithTakeWitness, element, operands[2]);
@@ -6744,7 +6807,7 @@ public sealed partial class LlvmEmitter {
                 // destroys one, and no one reads a hole.
                 case "array_take": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var element = MutableElement(operands[0], operands[1], arrayType);
+                    var element = MutableElement(operands[0], operands[1], arrayType, ShareAfterSlowPath(builtin.Operands[0]), counted: FromCount(builtin.Operands[1], builtin.Operands[0], 0));
                     if (arrayType.Element is var taken && Held(taken)) {
                         var buffer = OpaqueBuffer(taken);
                         _names[builtin] = buffer;
@@ -6775,7 +6838,7 @@ public sealed partial class LlvmEmitter {
 
                 case "array_remove_last": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var element = LastSlot(operands[0], arrayType);
+                    var element = LastSlot(operands[0], arrayType, ShareAfterSlowPath(builtin.Operands[0]));
                     if (arrayType.Element is var removed && Held(removed)) {
                         var buffer = OpaqueBuffer(removed);
                         _names[builtin] = buffer;
@@ -7989,17 +8052,32 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>An array's count: none for the empty array, which is null; else read from its header.</summary>
         string Count(string array) {
-            var isNull = Fresh();
-            var safe = Fresh();
+            var safe = Headed(array);
             var field = Fresh();
             var stored = Fresh();
+            var isNull = Fresh();
             var count = Fresh();
-            Line($"{isNull} = icmp eq ptr {array}, null");
-            Line($"{safe} = select i1 {isNull}, ptr @sable_empty_array_count, ptr {array}");
             Line($"{field} = getelementptr inbounds %SableArrayHeader, ptr {safe}, i32 0, i32 1");
             Line($"{stored} = load i64, ptr {field}, !tbaa {TbaaHeader}");
+            // Said again, so that LLVM knows the empty array's count is 0 without reading it.
+            Line($"{isNull} = icmp eq ptr {array}, null");
             Line($"{count} = select i1 {isNull}, i64 0, i64 {stored}");
             return count;
+        }
+
+        /// <summary>
+        ///     An array's header to read, without a branch: its own, or for the
+        ///     empty array, which is null, a constant one whose count, capacity
+        ///     and strong count are 0 — which no fast path takes. The same
+        ///     words wherever an array is asked of, so that LLVM reads a count
+        ///     once for a test and a change of it (#179).
+        /// </summary>
+        string Headed(string array) {
+            var isNull = Fresh();
+            var safe = Fresh();
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            Line($"{safe} = select i1 {isNull}, ptr @sable_empty_array_count, ptr {array}");
+            return safe;
         }
 
         /// <summary>
@@ -8007,7 +8085,14 @@ public sealed partial class LlvmEmitter {
         ///     reference to a buffer with room left, through the runtime —
         ///     which copies or grows it — otherwise.
         /// </summary>
-        string AppendSlot(string slot, ArrayType arrayType) {
+        string AppendSlot(string slot, ArrayType arrayType) => AppendSlot(slot, arrayType, null, null);
+
+        /// <summary>
+        ///     The same, with what <paramref name="place" /> does with the room
+        ///     done on each path, and <paramref name="afterGrowing" /> after it on
+        ///     the runtime's: the room is then not returned.
+        /// </summary>
+        string AppendSlot(string slot, ArrayType arrayType, Action<string>? place, Action? afterGrowing) {
             var array = Fresh();
             var isNull = Fresh();
             Line($"{array} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
@@ -8043,14 +8128,21 @@ public sealed partial class LlvmEmitter {
             Line($"{direct} = {ElementAt(arrayType.Element, elements, count)}");
             Line($"{grown} = add nuw i64 {count}, 1");
             Line($"store i64 {grown}, ptr {countField}, !tbaa {TbaaHeader}");
+            place?.Invoke(direct);
             Line($"br label %{done}");
 
             Continue(slow);
             var called = Fresh();
             Line($"{called} = call ptr @sable_array_append_slot(ptr {slot}, ptr {ArrayMetadataOf(arrayType)})");
+            place?.Invoke(called);
+            afterGrowing?.Invoke();
             Line($"br label %{done}");
 
             Continue(done);
+            if (place is not null) {
+                return "";
+            }
+
             var element = Fresh();
             Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{slow} ]");
             return element;
@@ -8063,7 +8155,7 @@ public sealed partial class LlvmEmitter {
         ///     it, or traps — otherwise. A stack's pop is then a few
         ///     instructions, as an append is.
         /// </summary>
-        string LastSlot(string slot, ArrayType arrayType) {
+        string LastSlot(string slot, ArrayType arrayType, Action? share = null) {
             var array = Fresh();
             var isNull = Fresh();
             Line($"{array} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
@@ -8101,11 +8193,13 @@ public sealed partial class LlvmEmitter {
             var called = Fresh();
             SiteForRuntime();
             Line($"{called} = call ptr @sable_array_remove_last(ptr {slot}, ptr {ArrayMetadataOf(arrayType)})");
+            share?.Invoke();
+            var from = _currentLabel;
             Line($"br label %{done}");
 
             Continue(done);
             var element = Fresh();
-            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{slow} ]");
+            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{from} ]");
             return element;
         }
 
@@ -8225,26 +8319,38 @@ public sealed partial class LlvmEmitter {
         /// <summary>
         ///     An element's address to write: in place when the array is the
         ///     only reference to its buffer and the index is in range, the
-        ///     runtime's copy-on-write otherwise.
+        ///     runtime's copy-on-write otherwise. <paramref name="counted" />:
+        ///     the count read as <c>array_count</c> reads it, through the
+        ///     empty array's constant header rather than after a branch on
+        ///     null — for a set or a take whose index was made from the count
+        ///     (<see cref="FromCount" />), so that LLVM reads it once. Anywhere
+        ///     else the branch is the cheaper.
         /// </summary>
-        string MutableElement(string slot, string index, ArrayType arrayType) {
-            var array = Fresh();
-            var isNull = Fresh();
-            Line($"{array} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
-            Line($"{isNull} = icmp eq ptr {array}, null");
-            var check = NewLabel("unique");
+        string MutableElement(string slot, string index, ArrayType arrayType, Action? share = null, bool counted = false) {
+            var loaded = Fresh();
+            Line($"{loaded} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
             var fast = NewLabel("inplace");
             var slow = NewLabel("cow");
             var done = NewLabel("element");
-            Line($"br i1 {isNull}, label %{slow}, label %{check}");
+            var array = loaded;
+            string count;
+            if (counted) {
+                array = Headed(loaded);
+                count = Count(loaded);
+            } else {
+                var isNull = Fresh();
+                var check = NewLabel("unique");
+                var countField = Fresh();
+                count = Fresh();
+                Line($"{isNull} = icmp eq ptr {loaded}, null");
+                Line($"br i1 {isNull}, label %{slow}, label %{check}");
+                Continue(check);
+                Line($"{countField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 1");
+                Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
+            }
 
-            Continue(check);
-            var countField = Fresh();
-            var count = Fresh();
             var strongField = Fresh();
             var inRange = Fresh();
-            Line($"{countField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 1");
-            Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{inRange} = icmp ult i64 {index}, {count}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
             BranchIfSole(inRange, strongField, fast, slow, shared: true);
@@ -8262,11 +8368,13 @@ public sealed partial class LlvmEmitter {
             var copied = Fresh();
             SiteForRuntime();
             Line($"{copied} = call ptr @sable_array_mutable_element(ptr {slot}, ptr {ArrayMetadataOf(arrayType)}, i64 {index})");
+            share?.Invoke();
+            var from = _currentLabel;
             Line($"br label %{done}");
 
             Continue(done);
             var element = Fresh();
-            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {copied}, %{slow} ]");
+            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {copied}, %{from} ]");
             return element;
         }
 

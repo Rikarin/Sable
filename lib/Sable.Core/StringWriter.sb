@@ -94,9 +94,14 @@ public struct StringWriter {
     public mutating fn append(utf8 text: String, from start: Int, to end: Int) {
         let length = end - start
         self.makeRoom(length)
-        // A short run, of a text with eight bytes to read, as a word.
-        if length >= 0 && length <= 8 && start >= 0 && start <= text.utf8Count - 8 {
-            buffer.store(word: text.utf8Word(start), at: count)
+        // A short run as a word or two, read from the text as windows that
+        // stay in it, and written whole: the room past the end takes what
+        // lies beyond the run, and is written over next.
+        if length > 0 && length <= 16 && start >= 0 && end <= text.utf8Count {
+            buffer.store(word: text.utf8Window(start), at: count)
+            if length > 8 {
+                buffer.store(word: text.utf8Window(start + 8), at: count + 8)
+            }
         } else {
             buffer.store(utf8: text, from: start, to: end, at: count)
         }
@@ -170,6 +175,16 @@ public struct StringWriter {
             let copy = StringBuffer.allocate(capacity: count)
             RawMemory.copy(to: copy.address, from: buffer.address, count)
             return copy.finish(count: count)
+        }
+    }
+
+    /// The same, of so many scalars, which the caller has counted: they are
+    /// not counted again.
+    package fn copied(scalars: Int) -> String {
+        unsafe {
+            let copy = StringBuffer.allocate(capacity: count)
+            RawMemory.copy(to: copy.address, from: buffer.address, count)
+            return copy.finish(count: count, scalars: scalars)
         }
     }
 

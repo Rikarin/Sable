@@ -3856,6 +3856,14 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_destroy_uncounted(ptr {Name(destroy.Value)})");
                     return;
 
+                // A closure whose context is such an object: the context so destroyed.
+                case DestroyValueInst { Uncounted: true, Value.Type: ThickFunctionType } destroy: {
+                    var context = Fresh();
+                    Line($"{context} = extractvalue {{ ptr, ptr }} {Name(destroy.Value)}, 1");
+                    Line($"call void @sable_destroy_uncounted(ptr {context})");
+                    return;
+                }
+
                 case DestroyValueInst destroy:
                     Own(false, destroy.Value.Type, Name(destroy.Value));
                     return;

@@ -92,6 +92,14 @@ public struct StringBuffer {
         return StringBuffer.take(address, count, -1)
     }
 
+    /// The same of bytes whose scalars the caller has counted.
+    package unsafe fn finish(count: Int, scalars: Int) -> String {
+        if !(count >= 0 && count <= capacity && scalars >= 0 && scalars <= count) {
+            stringIndexOutOfRange()
+        }
+        return StringBuffer.take(address, count, scalars)
+    }
+
     /// The same of bytes that are all ASCII, which are then not counted.
     public unsafe fn finish(asciiCount count: Int) -> String {
         if !(count >= 0 && count <= capacity) {

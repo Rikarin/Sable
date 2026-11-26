@@ -108,6 +108,7 @@ public final class ObjectPool<T> {
 
     /// What the closure makes of an object lent to it, which comes back,
     /// recycled, as the closure returns or throws.
+    @inline(always)
     public fn with<R, E: Error>(_ body: (inout T) throws(E) -> R) throws(E) -> R {
         let place = self.place()
         let cell = take(place)

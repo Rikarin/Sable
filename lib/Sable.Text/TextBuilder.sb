@@ -169,14 +169,19 @@ public class TextBuilder: TextWriter, Resettable {
         var rest = U32(value)
         var word: U64 = 0
         var digits = 0
-        while true {
-            let next = rest / 10
-            word = word << 8 | U64(0x30 + (rest - next * 10))
-            digits += 1
+        // Two digits a step, the lower first, each in front of those after
+        // it: half as many divisions one after the other.
+        while rest >= 10 {
+            let next = rest / 100
+            let pair = rest - next * 100
+            let tens = pair / 10
+            word = word << 16 | U64(0x30 + pair - tens * 10) << 8 | U64(0x30 + tens)
+            digits += 2
             rest = next
-            if rest == 0 {
-                break
-            }
+        }
+        if rest != 0 || digits == 0 {
+            word = word << 8 | U64(0x30 + rest)
+            digits += 1
         }
         if zeros {
             while digits < 8 {
@@ -243,7 +248,7 @@ public class TextBuilder: TextWriter, Resettable {
     /// copy.
     public fn build() -> String {
         if pieces.isEmpty && tail.count <= 4096 {
-            return tail.copied()
+            return tail.copied(scalars: scalars)
         }
         let text = whole()
         return text

@@ -121,6 +121,18 @@ public sealed class PromoteToStack : ISilPass {
             }
         }
 
+        // A closure made with such an object as its context, never copied
+        // (a copy is one of the object's holders, which it would then not
+        // be among): its destroy is the context's, as it was made.
+        var closures = holders.OfType<PartialApplyInst>().Where(c => c.Context is { } context && only.Contains(context)).ToList();
+        foreach (var closure in closures) {
+            foreach (var user in uses.Of(closure)) {
+                if (user is DestroyValueInst destroy) {
+                    destroy.Uncounted = true;
+                }
+            }
+        }
+
         foreach (var holder in only) {
             foreach (var user in uses.Of(holder)) {
                 switch (user) {

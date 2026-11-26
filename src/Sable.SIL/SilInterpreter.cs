@@ -547,7 +547,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return;
 
             case (ThickFunctionType, ClosureValue closure):
-                Release(SilType.Object, closure.Context, depth);
+                Release(SilType.Object, closure.Context, depth, uncounted);
                 return;
 
             case (WeakStorageType, WeakEntry entry):

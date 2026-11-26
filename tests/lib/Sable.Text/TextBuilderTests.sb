@@ -152,6 +152,37 @@ fn eachWayOfAppending() {
     assertEqual("[\(TextBuilder("hi"):>4)]", "[  hi]")
 }
 
+// Integers written two digits at a time: each count of digits, odd and
+// even, and the eight-digit words' edges.
+@test(arguments: [0, 7, 9, 10, 42, 99, 100, 101, 999, 1000, 12345, 99999, 100000, 1234567, 9999999, 10000000, 99999999, 100000000, 100000001, 1234567890123, 9007199254740993, Int.max, -1, -10, -100, -99999999, -100000000, Int.min])
+fn integersAsInterpolationWritesThem(_ value: Int) {
+    let builder = TextBuilder(capacity: 4)
+    builder.append(value)
+    assertEqual(builder.build(), "\(value)")
+    assertEqual(builder.utf8Count, "\(value)".utf8Count)
+}
+
+// Text appended in short runs, of each length to past two words, read as
+// windows of the text, after an odd start so that the writes are unaligned;
+// and the scalars a build reports, counted as they went.
+@test
+fn shortRunsOfEachLength() {
+    let text = "abcdefghijklmnopqrstuvwxyz"
+    var expected = "é"
+    let builder = TextBuilder("é")
+    for length in 1...18 {
+        let run = text.slice(from: 0, to: length)
+        builder.append(run)
+        expected += run
+    }
+    builder.append("ж😀")
+    expected += "ж😀"
+    let built = builder.build()
+    assertEqual(built, expected)
+    assertEqual(built.count, expected.count)
+    assertEqual(built.utf8Count, expected.utf8Count)
+}
+
 @test
 fn editsAtTheEdgesAndEmptiness() {
     let builder = TextBuilder()

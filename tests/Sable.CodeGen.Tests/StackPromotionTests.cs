@@ -255,6 +255,54 @@ public sealed class StackPromotionTests {
     }
 
     /// <summary>
+    ///     A closure whose context is in the frame, given to a callee that
+    ///     keeps it no longer than the call, and never copied: its destroy is
+    ///     the context's, uncounted, so a call of it in a loop neither
+    ///     retains nor releases (#246) — and what the context holds is still
+    ///     released, once, as it goes.
+    /// </summary>
+    [Fact]
+    public void AClosureWhoseContextNothingCopiesIsNotCounted() {
+        var source = Program(
+            """
+            class Box {
+                var value: Int
+                init(_ value: Int) {
+                    self.value = value
+                }
+                deinit {
+                    print("bye \(value)")
+                }
+            }
+
+            @inline(never)
+            fn apply(_ x: Int, _ body: (Int) -> Int) -> Int {
+                return body(x)
+            }
+            """,
+            """
+                var sum = 0
+                for i in 0..<1000 {
+                    sum = sum + apply(i) { $0 + i }
+                }
+                print(sum)
+                let box = Box(7)
+                print(apply(1) { $0 + box.value })
+            """
+        );
+        Assert.Equal("999000\n8\nbye 7\n", AssertAgree(source).Stdout);
+
+        var sil = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true).Sil!;
+        Assert.Contains(sil.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions),
+            static i => i is DestroyValueInst { Uncounted: true, Value: PartialApplyInst });
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            // The box's, captured, and the printed lines': none of the loop's thousand closures.
+            Assert.Matches(@"retains 1, releases [0-9]\b", stats);
+        }
+    }
+
+    /// <summary>
     ///     A loop body of several blocks — an 'if' in it, a local assigned
     ///     another object in one branch — makes its objects and array in
     ///     the frame too, when each is gone on every path back to where it

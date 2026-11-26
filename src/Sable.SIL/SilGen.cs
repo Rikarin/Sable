@@ -9222,8 +9222,12 @@ public sealed partial class SilGen {
                     : negate ? Emit(new BuiltinInst("not_Bool", SilType.Bool, compared)) : compared;
             }
 
+            // A protocol extension's, Comparable's '>=' of a type with only '<': Self is the operands' type.
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
-                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner) : TypeSubstitution.Empty,
+                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner)
+                    : OwnerOf(callee)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self } && owner is not TypeParameterSymbol
+                        ? new(new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = owner })
+                        : TypeSubstitution.Empty,
             };
             if (Expression(call) is not { } result) {
                 return null;

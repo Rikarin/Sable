@@ -2816,6 +2816,13 @@ public sealed partial class SilGen {
         // type does with it — an enum's '==' compares cases — and no call of
         // a function the type may not have.
         if (requirement is { FunctionKind: FunctionKind.Operator, Parameters: [var left, var right] } && OperatorKindOf(requirement.Name) is { } kind) {
+            // '>', '<=', '>=' and '!=' bound with a method are derived from it
+            // ('<' the other way round); as requirements of their own
+            // (Comparable's), they are that method, applied (#348).
+            if (kind is BinaryOperatorKind.NotEqual or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual) {
+                kind = BinaryOperatorKind.UserDefined;
+            }
+
             call = new BoundBinaryOperator(syntax, requirement.ReturnType, kind, new BoundParameterAccess(syntax, left), new BoundParameterAccess(syntax, right), requirement);
         }
 

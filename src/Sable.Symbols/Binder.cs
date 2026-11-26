@@ -10031,7 +10031,13 @@ public sealed partial class Binder {
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
             // A literal operand takes the parameter's type, as an argument does: 'v * 2' on a SIMD<F32, 4>.
-            if (FindUserOperator(symbol, left.Type, right.Type, leftLiteral: left is BoundLiteral, rightLiteral: right is BoundLiteral) is { } own) {
+            // Comparable's '>', '<=' and '>=' of a type that declares only '<'
+            // are its extension's defaults, which say what follows from '<' —
+            // as the derivation below does, with no call of the default.
+            if (FindUserOperator(symbol, left.Type, right.Type, leftLiteral: left is BoundLiteral, rightLiteral: right is BoundLiteral) is { } own
+                && !(kind is BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual
+                     && own.Method.ContainingSymbol is ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } }
+                     && left.Type is not TypeParameterSymbol)) {
                 (left, right) = UserOperands(own, left, right);
                 return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type, own.Owner), BinaryOperatorKind.UserDefined, left, right, own.Method);
             }

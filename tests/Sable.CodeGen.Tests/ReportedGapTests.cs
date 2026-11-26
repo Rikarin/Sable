@@ -496,4 +496,70 @@ public sealed class ReportedGapTests {
                 print(t[2, 0, 2])
             }
             """).Stdout);
+
+    /// <summary>
+    ///     '>', '<=' and '>=' are Comparable's own, defaulted from '<': generic code compares a NaN as
+    ///     concrete code does, compiled once or specialised; Math's min and max prefer a number to a NaN (#348).
+    /// </summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void GenericCodeComparesANaNAsConcreteCodeDoes(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal(
+            """
+            false false false false
+            false false false false
+            false false false false
+            false false false false
+            true false true false
+            false false true true
+            false true false true
+            true false true false
+            true
+            1.0 1.0 1.0 1.0 true
+            7 3 true 1.0 0.5
+            6 2
+            [3.0, 1.0, 2.0, 0.5]
+            0.5 0.5
+
+            """,
+            Programs.AssertAgree("""
+            module NaNOrder
+
+            import Sable.Math
+
+            fn ordered<T: Comparable>(_ a: T, _ b: T) -> String {
+                return "\(a < b) \(a > b) \(a <= b) \(a >= b)"
+            }
+
+            struct Version: Comparable {
+                var major: Int
+
+                operator == (lhs: Version, rhs: Version) -> Bool { return lhs.major == rhs.major }
+                operator < (lhs: Version, rhs: Version) -> Bool { return lhs.major < rhs.major }
+            }
+
+            @main
+            fn main() {
+                let nan = F64.nan
+                print("\(nan < 1.0) \(nan > 1.0) \(nan <= 1.0) \(nan >= 1.0)")
+                print(ordered(nan, 1.0))
+                print(ordered(1.0, nan))
+                print(ordered(F32.nan, 1 as F32))
+                print(ordered(1.0, 2.0))
+                print(ordered(2, 2))
+                print(ordered("b", "a"))
+                print(ordered(Version(major: 1), Version(major: 2)))
+                print(Version(major: 3) >= Version(major: 3))
+                print("\(max(nan, 1.0)) \(max(1.0, nan)) \(min(nan, 1.0)) \(min(1.0, nan)) \(max(nan, nan).isNaN)")
+                print("\(max(3, 7)) \(min(3, 7)) \(clamp(nan, 0.0, 1.0).isNaN) \(clamp(5.0, 0.0, 1.0)) \(clamp(0.5, nan, 1.0))")
+                let xs: F64[>..] = [3.0, nan, 1.0, 2.0, nan, 0.5]
+                let sorted = xs.sorted()
+                print("\(sorted.count) \(sorted.filter { $0.isNaN }.count)")
+                print(sorted.filter { !$0.isNaN })
+                print("\(xs.min()!) \(xs.max()!)")
+            }
+            """).Stdout);
+    }
 }

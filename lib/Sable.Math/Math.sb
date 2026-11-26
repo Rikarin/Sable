@@ -4,17 +4,29 @@ module Sable.Math
 // over the core's Comparable and numeric protocols (BinaryInteger,
 // FloatingPoint), and monomorphised for each type it is used with.
 
-/// The greater of two values.
+/// The greater of two values. A NaN, which equals nothing, not even
+/// itself, gives way to the other, whichever it is, as floating point's
+/// 'maximumNumber' does.
+///
+/// ```sable
+/// assert(max(2, 7) == 7)
+/// assert(max(F64.nan, 1.0) == 1.0 && max(1.0, F64.nan) == 1.0)
+/// ```
 public fn max<T: Comparable>(_ a: T, _ b: T) -> T {
-    return a < b ? b : a
+    return a < b || a != a ? b : a
 }
 
-/// The lesser of two values.
+/// The lesser of two values; of a NaN and a number, the number.
+///
+/// ```sable
+/// assert(min(2, 7) == 2)
+/// assert(min(F64.nan, 1.0) == 1.0 && min(1.0, F64.nan) == 1.0)
+/// ```
 public fn min<T: Comparable>(_ a: T, _ b: T) -> T {
-    return b < a ? b : a
+    return b < a || a != a ? b : a
 }
 
-/// The value, kept within [low, high].
+/// The value, kept within [low, high]; a NaN is kept as it is.
 public fn clamp<T: Comparable>(_ value: T, _ low: T, _ high: T) -> T {
     if value < low {
         return low

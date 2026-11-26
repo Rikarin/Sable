@@ -172,6 +172,35 @@ public sealed class ViewTests {
             """
         );
 
+    // An engine's chunk: a column of bytes, returned into its receiver, seen
+    // as the component it holds and written where it is.
+    [Fact]
+    public void AColumnOfBytesIsWrittenAsItsComponents() =>
+        Prints(
+            "4.0\n[0, 0, 64, 64, 0, 0, 128, 64]\n",
+            """
+                var chunk = Columns { columns: [U8[>..](repeating: 0, count: 16)] }
+                chunk.column(0).reinterpreted(as: Position.self)[1] = Position { x: 3, y: 4 }
+                let positions = chunk.column(0).reinterpreted(as: Position.self)
+                print(positions[1].y)
+                print(chunk.columns[0][8...])
+            """,
+            """
+            struct Position {
+                var x: F32
+                var y: F32
+            }
+
+            struct Columns {
+                var columns: U8[>..][>..]
+
+                mutating fn column(_ k: Int) -> U8[>..]& {
+                    return &self.columns[k]
+                }
+            }
+            """
+        );
+
     [Fact]
     public void AReferenceIntoALocalCannotBeReturned() =>
         Rejects(

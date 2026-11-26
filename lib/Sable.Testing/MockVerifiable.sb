@@ -15,9 +15,9 @@ public protocol MockVerifiable {
 /// several. The test goes on.
 ///
 /// ```sable ignore
-/// verifyInOrder([store.on.open(), gateway.on.charge(), store.on.close()])
+/// verifyInOrder(store.on.open(), gateway.on.charge(), store.on.close())
 /// ```
-public fn verifyInOrder(_ calls: (any MockVerifiable)[:], file: String = #file, line: Int = #line) {
+public fn verifyInOrder(_ calls: any MockVerifiable..., file: String = #file, line: Int = #line) {
     var after = 0
     for (i, call) in calls.enumerated() {
         var next = 0

@@ -368,6 +368,20 @@ public sealed class BindingTests {
         );
     }
 
+    /// <summary>A variadic parameter may have others after it: a label ends its elements, and nothing follows the last (#340).</summary>
+    [Fact]
+    public void AVariadicParameterMayHaveDefaultedOnesAfterIt() {
+        const string extra = "fn f(_ xs: Int..., file: String = #file, line: Int = #line) -> Int { return 0 }";
+        AssertClean("let a = f(1, 2, 3)", extra);
+        AssertClean("let a = f()", extra);
+        AssertClean("let a = f(1, line: 2)", extra);
+        AssertClean("let a = f(file: \"x\")", extra);
+        Assert.Contains(
+            ErrorsIn("let a = g(1, file: \"x\", 2)", "fn g(_ xs: Int..., file: String = #file) { }"),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("it takes 2 arguments, and this passes 3")
+        );
+    }
+
     [Fact]
     public void CallingSomethingUncallableIsReported() =>
         Assert.Contains(

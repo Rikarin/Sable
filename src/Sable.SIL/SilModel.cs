@@ -934,7 +934,7 @@ public abstract class SilInstruction : SilValue {
     /// </summary>
     internal SilInstruction Clone(Func<SilValue, SilValue> value, Func<SilBlock, SilBlock> block) {
         var copy = this is SwitchEnumInst switchEnum
-            ? new SwitchEnumInst(switchEnum.Value, [..switchEnum.Cases.Select(c => (c.Case, block(c.Target)))], switchEnum.Default is { } fallback ? block(fallback) : null)
+            ? new SwitchEnumInst(switchEnum.Value, [..switchEnum.Cases.Select(c => (c.Case, block(c.Target)))], switchEnum.Default is { } fallback ? block(fallback) : null) { Takes = switchEnum.Takes }
             : (SilInstruction)MemberwiseClone();
         copy._operands = [.._operands.Select(value)];
         copy.Block = null!;
@@ -1562,6 +1562,14 @@ public sealed class SwitchEnumInst(SilValue value, List<(int Case, SilBlock Targ
     public SilValue Value => Operands[0];
     public List<(int Case, SilBlock Target)> Cases { get; } = cases;
     public SilBlock? Default { get; internal set; } = defaultTarget;
+
+    /// <summary>
+    ///     <c>switch_enum [take]</c>: the switch consumes the enum, an owned
+    ///     one, and gives each case its payload owned, not borrowed. Its
+    ///     default may stand only for cases that carry nothing to destroy.
+    /// </summary>
+    public bool Takes { get; set; }
+
     public override bool HasResult => false;
     public override bool IsTerminator => true;
     public override string Opcode => "switch_enum";

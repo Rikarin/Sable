@@ -1155,6 +1155,7 @@ public sealed class SilParser {
                 // of a block that dominates this one but comes later in the
                 // text, as promotion leaves them. Its cases are then kept by
                 // name until the function's end, when its type is known.
+                var takes = AcceptFlag("take");
                 var value = Operand(0);
                 var named = new List<(string Case, SilBlock Target)>();
                 SilBlock? fallback = null;
@@ -1170,7 +1171,7 @@ public sealed class SilParser {
                     named.Add((caseName, BlockNamed(Expect(TokenKind.Word, "a block label").Text)));
                 }
 
-                var switched = new SwitchEnumInst(value, [], fallback);
+                var switched = new SwitchEnumInst(value, [], fallback) { Takes = takes };
                 if (value is Placeholder) {
                     _unresolvedCases.Add((switched, named, line));
                 } else {

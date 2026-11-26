@@ -801,7 +801,7 @@ public sealed class ForwardCopies : ISilPass {
     ///     ended before the switch is ended in each case instead.
     /// </summary>
     static bool TryBorrowedElementAcrossSwitch(SilFunction function, SilBlock block, int index, BuiltinInst read, Uses uses) {
-        if (block.Terminator is not SwitchEnumInst switchEnum || !ReferenceEquals(switchEnum.Value, read)) {
+        if (block.Terminator is not SwitchEnumInst { Takes: false } switchEnum || !ReferenceEquals(switchEnum.Value, read)) {
             return false;
         }
 

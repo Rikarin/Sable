@@ -478,7 +478,7 @@ public static class SilPrinter {
 
                     case SwitchEnumInst switchEnum: {
                         var enumType = (EnumType)switchEnum.Value.Type;
-                        builder.Append(' ').Append(Name(switchEnum.Value));
+                        builder.Append(switchEnum.Takes ? " [take] " : " ").Append(Name(switchEnum.Value));
                         foreach (var (caseIndex, target) in switchEnum.Cases) {
                             builder.Append(", case #").Append(enumType.Cases[caseIndex].Name).Append(": ").Append(Label(target));
                         }

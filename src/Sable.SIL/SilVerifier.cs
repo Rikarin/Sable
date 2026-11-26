@@ -373,10 +373,18 @@ public static partial class SilVerifier {
                         return $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take ({string.Join(", ", expected.Select(static t => t.ToString()))})";
                     }
 
-                    // The payload is borrowed from the enum, which the switch does not consume.
-                    if (payload is { IsTrivial: false } && !target.Arguments[0].IsGuaranteed) {
-                        return $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take its payload @guaranteed";
+                    // The payload is borrowed from the enum, which the switch does not consume — unless it takes it.
+                    if (payload is { IsTrivial: false } && target.Arguments[0].IsGuaranteed == switchEnum.Takes) {
+                        return switchEnum.Takes
+                            ? $"switch_enum [take]'s block for #{enumType.Cases[caseIndex].Name} must take its payload owned"
+                            : $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take its payload @guaranteed";
                     }
+                }
+
+                // What a taking switch's default stands for has nothing to destroy.
+                if (switchEnum.Takes && switchEnum.Default is not null
+                    && enumType.Cases.Where((_, i) => !seen.Contains(i)).FirstOrDefault(static c => c.Payload is { IsTrivial: false }) is { Name: { } carried }) {
+                    return $"switch_enum [take]'s default stands for #{carried}, whose payload it would leak";
                 }
 
                 if (switchEnum.Default is { } fallback && fallback.Arguments.Count > 0) {
@@ -593,6 +601,9 @@ public static partial class SilVerifier {
 
             case StructInst or TupleInst or EnumInst or ReturnInst or ThrowInst or DestroyValueInst:
                 return Enumerable.Range(0, instruction.Operands.Count);
+
+            case SwitchEnumInst { Takes: true }:
+                return [0];
 
             case PartialApplyInst { Context: not null }:
                 return [1];

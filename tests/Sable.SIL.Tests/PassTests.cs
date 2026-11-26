@@ -64,6 +64,47 @@ public sealed class PassTests {
         Assert.Equal(390L, new SilInterpreter(module).Run("M.probe"));
     }
 
+    /// <summary>
+    ///     'if let' of an optional a call gave, whose payload is kept: the
+    ///     switch takes the optional apart, and the payload is kept with no
+    ///     copy made of it.
+    /// </summary>
+    [Fact]
+    public void ASwitchOnAnOptionalItOwnsTakesItsPayload() {
+        var module = Lowered(
+            """
+            class Item {
+                let n: Int
+                init(_ n: Int) { self.n = n }
+            }
+
+            @inline(never)
+            fn make(_ n: Int) -> Item? { return n > 0 ? Item(n) : none }
+
+            fn keep(_ n: Int) -> Int {
+                var items: Item[>..] = []
+                if let item = make(n) {
+                    items.append(item)
+                }
+                return items.count
+            }
+
+            fn probe() -> Int { return keep(3) * 10 + keep(0) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var keep = module.Find("M.keep")!;
+        Assert.DoesNotContain(keep.Blocks.SelectMany(static b => b.Instructions), static i => i is CopyValueInst);
+        Assert.Contains(keep.Blocks, static b => b.Terminator is SwitchEnumInst { Takes: true });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(10L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("switch_enum [take]", text);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+    }
+
     /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
     [Fact]
     public void ALocalIsBorrowedAcrossACallThatCanThrow() {

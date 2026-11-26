@@ -249,6 +249,7 @@ public static class MoveChecker {
                 AllocStackInst s => ReferenceEquals(s, slot),
                 StructElementAddrInst element => Reaches(element.Address, slot),
                 TupleElementAddrInst element => Reaches(element.Address, slot),
+                EnumPayloadAddrInst element => Reaches(element.Address, slot),
                 _ => false,
             };
 
@@ -257,7 +258,7 @@ public static class MoveChecker {
             LoadInst { Kind: LoadKind.Take } take when ReferenceEquals(take.Address, variable) => Access.Take,
             DestroyAddrInst destroy when ReferenceEquals(destroy.Address, variable) => Access.Destroy,
             DeallocStackInst => Access.None,
-            StructElementAddrInst or TupleElementAddrInst => Access.None,
+            StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst => Access.None,
             _ when instruction.Operands.Any(o => o.Type is AddressType && Reaches(o, variable)) => Access.Read,
             _ => Access.None,
         };

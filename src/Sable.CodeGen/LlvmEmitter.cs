@@ -119,6 +119,7 @@ public sealed partial class LlvmEmitter {
             RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } } => true,
             StructElementAddrInst { Address.Type: AddressType { Pointee: StructType { IsInline: false } } } element => IsTyped(element.Address),
             TupleElementAddrInst element => IsTyped(element.Address),
+            // A tagged enum's payload area is read whole, as the area's type, or as any case's payload: no type of its own.
             BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } => true,
             _ => false,
         };
@@ -4015,6 +4016,13 @@ public sealed partial class LlvmEmitter {
                     Line($"{name} = getelementptr inbounds {Type(tupleType)}, ptr {Name(element.Address)}, i32 0, i32 {LayoutOf(tupleType).Slots[element.Element]}");
                     return;
                 }
+
+                // A nullable reference and a niche are their payload; a tagged enum has it past the tag, or where its metadata says.
+                case EnumPayloadAddrInst payloadAddress:
+                    _names[payloadAddress] = IsNullable(payloadAddress.EnumType) || Niche(payloadAddress.EnumType) is not null
+                        ? Name(payloadAddress.Address)
+                        : EnumPayloadAt(Name(payloadAddress.Address), payloadAddress.EnumType);
+                    return;
 
                 case EnumInst indirectEnum when Held(indirectEnum.Type):
                     IndirectEnum(indirectEnum);

@@ -407,6 +407,7 @@ public sealed class BorrowLoads : ISilPass {
             SilArgument { Type: AddressType } parameter when parameter.Block == parameter.Block.Function.Entry => parameter,
             StructElementAddrInst element => ExclusiveOf(element.Address),
             TupleElementAddrInst element => ExclusiveOf(element.Address),
+            EnumPayloadAddrInst element => ExclusiveOf(element.Address),
             _ => null,
         };
 
@@ -415,6 +416,7 @@ public sealed class BorrowLoads : ISilPass {
             AllocStackInst slot => slot,
             StructElementAddrInst element => SlotOf(element.Address),
             TupleElementAddrInst element => SlotOf(element.Address),
+            EnumPayloadAddrInst element => SlotOf(element.Address),
             _ => null,
         };
 
@@ -428,6 +430,7 @@ public sealed class BorrowLoads : ISilPass {
             RefElementAddrInst field => KeptBy(field.Reference),
             StructElementAddrInst element => Owner(element.Address),
             TupleElementAddrInst element => Owner(element.Address),
+            EnumPayloadAddrInst element => Owner(element.Address),
             _ => null,
         };
 
@@ -452,7 +455,7 @@ public sealed class BorrowLoads : ISilPass {
             // A stack slot, or an inout parameter, is written only by something given its address.
             foreach (var operand in instruction.Operands) {
                 if (operand.Type is AddressType && SameStorage(ExclusiveOf(operand), slot)
-                    && instruction is not (LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or StructElementAddrInst or TupleElementAddrInst)) {
+                    && instruction is not (LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst)) {
                     return true;
                 }
             }
@@ -478,7 +481,7 @@ public sealed class BorrowLoads : ISilPass {
             LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or EndBorrowInst => false,
             IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or MetadataInst => false,
             StructInst or TupleInst or EnumInst or StructExtractInst or TupleExtractInst => false,
-            StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => false,
+            StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or RefElementAddrInst => false,
             CopyValueInst or UpcastInst or UncheckedRefCastInst or ClassMethodInst => false,
             // An exclusivity marker or check reads where an access is; it writes nothing the program sees.
             BuiltinInst builtin => !SharedStorage.IsMarker(builtin.Name)
@@ -689,7 +692,7 @@ public sealed class ForwardCopies : ISilPass {
         instruction switch {
             IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or MetadataInst => true,
             StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => true,
-            StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => true,
+            StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or RefElementAddrInst => true,
             LoadInst { Kind: LoadKind.Trivial } or LoadBorrowInst or CopyValueInst => true,
             EndBorrowInst ended => root is null || !ReferenceEquals(ended.Borrowed, root),
             StructInst or TupleInst or EnumInst => instruction.Type.IsTrivial,

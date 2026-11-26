@@ -343,6 +343,10 @@ public static partial class SilVerifier {
                                                    || element.Element >= tupleType.Elements.Length:
                 return $"tuple_element_addr {element.Element} of {element.Address.Type}";
 
+            case EnumPayloadAddrInst payloadAddress when payloadAddress.Address.Type is not AddressType { Pointee: EnumType { } enumType }
+                                                          || payloadAddress.Case >= enumType.Cases.Count || enumType.Cases[payloadAddress.Case].Payload is null:
+                return $"enum_payload_addr needs an enum's address and a case with a payload, not {payloadAddress.Address.Type} #{payloadAddress.Case}";
+
             case EnumInst enumInst: {
                 var (name, payload) = enumInst.EnumType.Cases[enumInst.Case];
                 if (payload is null) {
@@ -700,7 +704,7 @@ public static partial class SilVerifier {
                     case StructExtractInst or TupleExtractInst when !instruction.Type.IsTrivial:
                     case UncheckedRefCastInst:
                     case UpcastInst:
-                    case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when Tracked(instruction.Operands[0]):
+                    case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst when Tracked(instruction.Operands[0]):
                     case BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" or "fixed_lend" or "fixed_lend_slice" } when !instruction.Type.IsTrivial && Tracked(instruction.Operands[0]):
                         roots[instruction] = RootOf(instruction.Operands[0]);
                         break;
@@ -799,6 +803,7 @@ public static partial class SilVerifier {
             AllocStackInst slot => slot,
             StructElementAddrInst element => SlotOf(element.Address),
             TupleElementAddrInst element => SlotOf(element.Address),
+            EnumPayloadAddrInst element => SlotOf(element.Address),
             _ => null,
         };
 

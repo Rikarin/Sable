@@ -464,6 +464,10 @@ public static class SilPrinter {
                         builder.Append(' ').Append(Name(element.Address)).Append(", ").Append(element.Element);
                         break;
 
+                    case EnumPayloadAddrInst payloadAddress:
+                        builder.Append(' ').Append(Name(payloadAddress.Address)).Append(", #").Append(payloadAddress.EnumType.Cases[payloadAddress.Case].Name);
+                        break;
+
                     case EnumInst enumInst:
                         builder.Append(" $").Append(enumInst.Type).Append(", #").Append(enumInst.EnumType.Cases[enumInst.Case].Name);
                         if (enumInst.Payload is { } payload) {

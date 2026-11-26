@@ -5847,6 +5847,7 @@ public sealed partial class SilGen {
                 AllocStackInst slot => slot,
                 StructElementAddrInst element => SlotUnder(element.Address),
                 TupleElementAddrInst element => SlotUnder(element.Address),
+                EnumPayloadAddrInst element => SlotUnder(element.Address),
                 _ => null,
             };
 
@@ -7517,6 +7518,9 @@ public sealed partial class SilGen {
                 case BoundLiteral literal:
                     return Literal(literal, literal.Type);
 
+                case BoundPayloadPlace payloadPlace:
+                    return Emit(new LoadInst(PayloadAddress(payloadPlace)));
+
                 case BoundConversion { ConversionKind: ConversionKind.UnionInjection } injection:
                     return Inject(injection);
 
@@ -8285,6 +8289,9 @@ public sealed partial class SilGen {
                     case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
                         return Visit(conversion.Operand);
 
+                    case BoundConversion { IsForceUnwrap: true } unwrap:
+                        return Visit(unwrap.Operand);
+
                     case BoundCall or BoundIndirectCall or BoundUnaryOperator { Operand: BoundCall or BoundIndirectCall } when Sub(place.Type).TypeKind is TypeKind.Class or TypeKind.Actor:
                         return Once(place);
 
@@ -8690,9 +8697,59 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Dereference } dereference:
                     return Expression(dereference.Operand) is { Type: AddressType } referred ? referred : null;
 
+                case BoundPayloadPlace payloadPlace:
+                    return PayloadAddress(payloadPlace);
+
                 default:
                     return null;
             }
+        }
+
+        /// <summary>
+        ///     What an optional in memory holds, where it is, once a switch on
+        ///     it found it there: the receiver of a store through <c>?.</c> that
+        ///     changes it in place (<see cref="ChainedAssignment" />). Its
+        ///     address is made when it is first asked for, after what is stored
+        ///     is evaluated.
+        /// </summary>
+        sealed class BoundPayloadPlace(SyntaxNode syntax, TypeSymbol type, SilValue optional, int @case) : BoundExpression(syntax, type) {
+            public SilValue Optional => optional;
+            public int Case => @case;
+            public SilValue? Address { get; set; }
+            public override bool IsAssignable => true;
+            public override IEnumerable<BoundNode> Children => [];
+        }
+
+        SilValue PayloadAddress(BoundPayloadPlace place) => place.Address ??= Emit(new EnumPayloadAddrInst(place.Optional, place.Case));
+
+        /// <summary>
+        ///     'x!' as a place: what the optional at the address holds, where it
+        ///     is, or a trap when it holds none — 'entries[i]!.value = v'
+        ///     changes the entry's value with no copy of the entry made.
+        /// </summary>
+        SilValue? UnwrappedAddress(BoundConversion unwrap, List<SilValue> borrows) {
+            if (Address(unwrap.Operand, borrows) is not { Type: AddressType { Pointee: EnumType optional } } place) {
+                return null;
+            }
+
+            var some = optional.CaseIndex("Some");
+            if (some < 0 || optional.Cases[some].Payload is not { } payloadType) {
+                return Missing(unwrap, $"storing through '{Describe(unwrap.Syntax)}'");
+            }
+
+            var value = Emit(new LoadInst(place));
+            var present = function.AddBlock();
+            Payload(present, payloadType);
+            var absent = function.AddBlock();
+            Jump(new SwitchEnumInst(value, [(some, present)], absent));
+
+            _current = absent;
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), "unwrapped a none"));
+            Jump(new UnreachableInst());
+
+            _current = present;
+            Destroy(value);
+            return Emit(new EnumPayloadAddrInst(place, some));
         }
 
         /// <summary>
@@ -8810,6 +8867,12 @@ public sealed partial class SilGen {
                 // What a reference that writes refers to: 'r.v = 1', 'c.at(0).bump()'.
                 case BoundConversion { ConversionKind: ConversionKind.Dereference } dereference:
                     return Expression(dereference.Operand) is { Type: AddressType } referred ? referred : Missing(target, $"storing through '{Describe(target.Syntax)}'");
+
+                case BoundConversion { IsForceUnwrap: true } unwrap:
+                    return UnwrappedAddress(unwrap, borrows);
+
+                case BoundPayloadPlace payloadPlace:
+                    return PayloadAddress(payloadPlace);
 
                 // A slice's elements seen as another type's, where they are:
                 // 'xs.reinterpreted(as: U8.self)[0] = 1' (SilGen.Views.cs).
@@ -10343,8 +10406,8 @@ public sealed partial class SilGen {
         /// <summary>
         ///     'a.next?.v = 9': when there is a next, its v is stored, and the
         ///     value evaluated only then; when there is none, nothing is. An
-        ///     object is written where it is. A value is a copy once out of its
-        ///     optional, so the copy is stored, then wrapped and written back.
+        ///     object is written where it is; so is a value, in the optional's
+        ///     payload (<c>enum_payload_addr</c>), with no copy taken out of it.
         ///     Used as a value, it is what was stored, wrapped, or none when
         ///     nothing was — or, where the chain flattens, what was stored.
         /// </summary>
@@ -10385,21 +10448,22 @@ public sealed partial class SilGen {
             Jump(new SwitchEnumInst(value, [(some, present)], absent));
 
             _current = present;
-            var temporary = new LocalSymbol("$chained", Core.Module, null, true);
-            var slot = NewSlot(payload.Type, "$chained");
-            _slots[temporary] = slot;
-            BindLocal(temporary, payload, assignment.Syntax, declaration: true);
-            Destroy(value);
+            BoundExpression through;
+            if (writesBack) {
+                // A value is changed where it is, in the optional's payload.
+                Destroy(value);
+                through = new BoundPayloadPlace(chainedFrom.Syntax, unwrappedType, place!, some);
+            } else {
+                var temporary = new LocalSymbol("$chained", Core.Module, null, true);
+                _slots[temporary] = NewSlot(payload.Type, "$chained");
+                BindLocal(temporary, payload, assignment.Syntax, declaration: true);
+                Destroy(value);
+                through = new BoundLocalAccess(chainedFrom.Syntax, temporary, unwrappedType);
+            }
 
-            var through = new BoundLocalAccess(chainedFrom.Syntax, temporary, unwrappedType);
             var store = new BoundAssignment(assignment.Syntax, new BoundFieldAccess(target.Syntax, through, target.Field, assignment.Value.Type), assignment.Value);
             if ((resultType is null ? Assignment(store) : AssignmentValue(store)) is not { } stored) {
                 return null;
-            }
-
-            if (writesBack) {
-                var updated = Emit(new LoadInst(slot));
-                Emit(new StoreInst(Emit(new EnumInst(optional, some, updated)), place!, StoreKind.Assign));
             }
 
             if (resultType is null) {

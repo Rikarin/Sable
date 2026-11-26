@@ -102,7 +102,7 @@ public sealed class HoistUniqueness : ISilPass {
     /// </summary>
     static bool PartsOnly(SilInstruction address, Uses uses) =>
         address.Type is not AddressType || uses.Of(address).All(user => user switch {
-            StructElementAddrInst or TupleElementAddrInst => PartsOnly(user, uses),
+            StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst => PartsOnly(user, uses),
             StoreInst store => ReferenceEquals(store.Address, address) && !ReferenceEquals(store.Value, address),
             LoadInst { Kind: not LoadKind.Take } => true,
             _ => false,

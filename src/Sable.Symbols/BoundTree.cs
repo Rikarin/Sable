@@ -532,8 +532,16 @@ public sealed class BoundConversion(
     /// <summary><c>x unchecked as U8</c>: a numeric conversion that wraps or truncates rather than trapping.</summary>
     public bool IsUnchecked { get; init; }
 
-    /// <summary>What a reference that writes refers to may be written: <c>r.v = 1</c>, <c>c.at(0).bump()</c>.</summary>
-    public override bool IsAssignable => ConversionKind == ConversionKind.Dereference && IsWritableReference(Operand);
+    /// <summary><c>x!</c>: the optional's value, or a trap.</summary>
+    public bool IsForceUnwrap => ConversionKind == ConversionKind.Explicit && Syntax is PostfixUnaryExpressionSyntax && Operand.Type is OptionalTypeSymbol;
+
+    /// <summary>
+    ///     What a reference that writes refers to may be written: <c>r.v = 1</c>,
+    ///     <c>c.at(0).bump()</c>; and what an optional that may be written holds,
+    ///     where it is: <c>entries[i]!.value = v</c>.
+    /// </summary>
+    public override bool IsAssignable =>
+        ConversionKind == ConversionKind.Dereference ? IsWritableReference(Operand) : IsForceUnwrap && Operand.IsAssignable;
 
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }

@@ -1119,6 +1119,21 @@ public sealed class SilParser {
                 break;
             }
 
+            case "enum_payload_addr": {
+                var address = Defined(Operand(0), opcode, line);
+                Expect(",");
+                var name = Expect(TokenKind.Member, "a case").Text;
+                var addressed = (address.Type as AddressType)?.Pointee as EnumType
+                    ?? throw new SilParseException("enum_payload_addr needs an enum's address", line);
+                var index = addressed.CaseIndex(name);
+                if (index < 0) {
+                    throw new SilParseException($"{addressed.Name} has no case #{name}", line);
+                }
+
+                instruction = new EnumPayloadAddrInst(address, index);
+                break;
+            }
+
             case "enum": {
                 if (ParseType() is not EnumType enumType) {
                     throw new SilParseException("enum needs an enum type", line);

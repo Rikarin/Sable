@@ -173,10 +173,8 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         let at = place(key, hash)
         if slots[at] >= 0 {
             let index = position(at)
-            var entry = entries[index]!
-            let old = entry.value
-            entry.value = value
-            entries[index] = entry
+            let old = entries[index]!.value
+            entries[index]!.value = value
             return old
         }
         add(at, key, value, hash)
@@ -546,15 +544,10 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         live = live + 1
     }
 
-    /// The value in the slot replaced by what `change` makes of it. The
-    /// entry is taken out of the array while `change` runs, so the value it
-    /// is given is referred to from nowhere else.
+    /// The value in the slot replaced by what `change` makes of it, where
+    /// it is in the array, which nothing else refers to the value from.
     mutating fn changeValue(_ at: Int, _ change: (inout Value) -> Void) {
-        let index = position(at)
-        var entry = entries[index]!
-        entries[index] = none
-        change(&entry.value)
-        entries[index] = entry
+        change(&entries[position(at)]!.value)
     }
 
     /// One of another dictionary's entries merged in, at the slot `place`
@@ -565,10 +558,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             return
         }
         let index = position(at)
-        var mine = entries[index]!
-        entries[index] = none
-        mine.value = combine(mine.value, entry.value)
-        entries[index] = mine
+        entries[index]!.value = combine(entries[index]!.value, entry.value)
     }
 
     /// Room for the next entry. Removed entries are dropped first; the table

@@ -820,7 +820,7 @@ public sealed class Simplify : ISilPass {
         && (instruction.Type.IsTrivial || SilVerifier.OwnershipOf(instruction) != Ownership.Owned)
         && instruction switch {
             IntegerLiteralInst or FloatLiteralInst or FunctionRefInst or GlobalAddrInst or ClassMethodInst => true,
-            RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst => true,
+            RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst => true,
             StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => true,
             StructInst or TupleInst or EnumInst => instruction.Type.IsTrivial,
             LoadInst { Kind: LoadKind.Trivial } => true,

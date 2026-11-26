@@ -1087,6 +1087,27 @@ public sealed class TupleElementAddrInst(SilValue address, int element) : SilIns
     public override string Opcode => "tuple_element_addr";
 }
 
+/// <summary>
+///     <c>enum_payload_addr %0, #Some</c>: the address of the payload of an
+///     enum in memory, which holds that case — a switch on it said so — for
+///     a change of the payload where it is, as a field's is changed through
+///     <c>struct_element_addr</c>: <c>entries[i]?.value = v</c>, with no copy
+///     of the payload taken out and written back. Nothing may store another
+///     case into the enum while the address is used.
+/// </summary>
+public sealed class EnumPayloadAddrInst(SilValue address, int @case) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public int Case { get; } = @case;
+    public EnumType EnumType => (EnumType)((AddressType)Address.Type).Pointee;
+
+    public override SilType Type =>
+        Address.Type is AddressType { Pointee: EnumType enumType } && Case < enumType.Cases.Count && enumType.Cases[Case].Payload is { } payload
+            ? SilType.Address(payload)
+            : SilType.Unit;
+
+    public override string Opcode => "enum_payload_addr";
+}
+
 /// <summary><c>enum $Shape, #Circle, %0</c>, or without a payload for a case that has none.</summary>
 public sealed class EnumInst(EnumType type, int @case, SilValue? payload) : SilInstruction(payload is null ? [] : [payload]) {
     public EnumType EnumType { get; } = type;
@@ -1389,6 +1410,7 @@ public static class SharedStorage {
             RefElementAddrInst or GlobalAddrInst => true,
             StructElementAddrInst element => Contains(element.Address),
             TupleElementAddrInst element => Contains(element.Address),
+            EnumPayloadAddrInst element => Contains(element.Address),
             _ => false,
         };
 
@@ -1426,6 +1448,7 @@ public static class SharedStorage {
             RefElementAddrInst { Reference.Type: ClassType type } field => type.LetFields.Contains(field.Field),
             StructElementAddrInst element => IsImmutable(element.Address),
             TupleElementAddrInst element => IsImmutable(element.Address),
+            EnumPayloadAddrInst element => IsImmutable(element.Address),
             _ => false,
         };
 

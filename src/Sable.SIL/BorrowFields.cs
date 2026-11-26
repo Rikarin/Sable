@@ -182,6 +182,7 @@ public sealed class BorrowFields : ISilPass {
             AllocStackInst => true,
             StructElementAddrInst element => LocalSlot(element.Address),
             TupleElementAddrInst element => LocalSlot(element.Address),
+            EnumPayloadAddrInst element => LocalSlot(element.Address),
             _ => false,
         };
 

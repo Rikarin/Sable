@@ -213,7 +213,7 @@ public static partial class SilVerifier {
                     case RefElementAddrInst element when aliases.Contains(element.Reference):
                         fieldOf[element] = element.Field;
                         break;
-                    case StructElementAddrInst or TupleElementAddrInst when fieldOf.TryGetValue(instruction.Operands[0], out var inside):
+                    case StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst when fieldOf.TryGetValue(instruction.Operands[0], out var inside):
                         fieldOf[instruction] = inside;
                         break;
                 }
@@ -295,7 +295,7 @@ public static partial class SilVerifier {
 
                 // Naming the object, or a field's address, uses neither.
                 case UpcastInst or CopyValueInst or UncheckedRefCastInst or BuiltinInst { Name: "opaque_borrow_as" } when aliases.Contains(instruction):
-                case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when fieldOf.ContainsKey(instruction):
+                case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst when fieldOf.ContainsKey(instruction):
                 case BuiltinInst { Name: "access_begin_read" or "access_begin_modify" or "access_end" or "access_check_read" or "access_check_modify" }:
                 // Destroying it destroys what is stored; an empty field is
                 // nothing to destroy. One whose initialiser threw is marked

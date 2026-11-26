@@ -158,7 +158,7 @@ public static class AsyncLowering {
                     return false;
                 }
 
-                if (instruction is RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or PartialApplyInst or CopyValueInst or UncheckedRefCastInst or UpcastInst or LoadBorrowInst) {
+                if (instruction is RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or PartialApplyInst or CopyValueInst or UncheckedRefCastInst or UpcastInst or LoadBorrowInst) {
                     held.Add(instruction);
                 }
 

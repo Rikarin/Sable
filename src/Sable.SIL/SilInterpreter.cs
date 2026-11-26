@@ -728,6 +728,32 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
     }
 
+    /// <summary>
+    ///     The payload of an enum at another address, which holds the case:
+    ///     writing it replaces the enum with the case carrying what is written.
+    /// </summary>
+    sealed class EnumPayload(IReference parent, int @case) : IReference {
+        public IReference Parent => parent;
+        public int Case => @case;
+
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+
+        public object? Peek() =>
+            parent.Peek() switch {
+                EnumValue held when held.Case == @case => held.Payload,
+                null => null,
+                _ => throw new SilTrap("enum_payload_addr of an enum that holds another case"),
+            };
+
+        public void Set(object? value) {
+            if (parent.Peek() is EnumValue held && held.Case != @case) {
+                throw new SilTrap("enum_payload_addr of an enum that holds another case");
+            }
+
+            parent.Set(new EnumValue(@case, value));
+        }
+    }
+
     /// <summary>An element of an array, passed inout: the array is the only reference to its elements.</summary>
     sealed class ArrayElement(HeapArray array, int index) : IReference {
         public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
@@ -797,6 +823,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 var path = StorageOf(element.Parent);
                 path.Add(element.Index);
                 return path;
+            case EnumPayload payload:
+                var held = StorageOf(payload.Parent);
+                held.Add(payload.Case);
+                return held;
             default:
                 return [address];
         }
@@ -1259,6 +1289,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         values[element] = new Element((IReference)Get(element.Address)!, element.Element, tupleType.Elements.Length);
                         break;
                     }
+
+                    case EnumPayloadAddrInst payloadAddress:
+                        values[payloadAddress] = new EnumPayload((IReference)Get(payloadAddress.Address)!, payloadAddress.Case);
+                        break;
 
                     case EnumInst enumInst:
                         values[enumInst] = new EnumValue(enumInst.Case, enumInst.Payload is { } payload ? Get(payload) : null);

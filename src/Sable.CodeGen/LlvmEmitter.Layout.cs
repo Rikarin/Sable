@@ -123,6 +123,8 @@ public sealed partial class LlvmEmitter {
                 AlignmentAt(ObjectLayout(classType).Offsets[element.Field + 3], HeapAlign),
             TupleElementAddrInst { Address.Type: AddressType { Pointee: TupleType tuple } } element =>
                 AlignmentAt(LayoutOf(tuple).Offsets[element.Element], AddressAlign(element.Address)),
+            EnumPayloadAddrInst { Address.Type: AddressType { Pointee: EnumType enumType } } payload when !SilType.IsIndirect(enumType) =>
+                AlignmentAt(TypeLayout.PayloadOffset(enumType), AddressAlign(payload.Address)),
             { Type: AddressType { Pointee: var pointee } } => Align(pointee),
             _ => 1,
         };

@@ -446,6 +446,11 @@ public static class SilPrinter {
                             .Append(((StructType)extract.Value.Type).Fields[extract.Field].Name);
                         break;
 
+                    case StructTakeInst take:
+                        builder.Append(" [take] ").Append(Name(take.Value)).Append(", #")
+                            .Append(((StructType)take.Value.Type).Fields[take.Field].Name);
+                        break;
+
                     case StructElementAddrInst element:
                         builder.Append(' ').Append(Name(element.Address)).Append(", #")
                             .Append(((StructType)((AddressType)element.Address.Type).Pointee).Fields[element.Field].Name);

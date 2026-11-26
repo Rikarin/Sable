@@ -1083,6 +1083,7 @@ public sealed class SilParser {
             }
 
             case "struct_extract" or "struct_element_addr": {
+                var takes = opcode == "struct_extract" && AcceptFlag("take");
                 var value = Defined(Operand(0), opcode, line);
                 Expect(",");
                 var field = Expect(TokenKind.Member, "a field").Text;
@@ -1094,7 +1095,7 @@ public sealed class SilParser {
                 }
 
                 instruction = opcode == "struct_extract"
-                    ? new StructExtractInst(value, index)
+                    ? takes ? new StructTakeInst(value, index) : new StructExtractInst(value, index)
                     : new StructElementAddrInst(value, index);
                 break;
             }

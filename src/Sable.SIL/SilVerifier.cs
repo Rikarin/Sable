@@ -327,6 +327,9 @@ public static partial class SilVerifier {
             case StructExtractInst extract when extract.Value.Type is not StructType:
                 return $"struct_extract needs a struct, not {extract.Value.Type}";
 
+            case StructTakeInst take when !StructTakeInst.CanTake(take.Value.Type, take.Field):
+                return $"struct_extract [take] needs a struct with no deinit whose other fields are trivial, not {take.Value.Type}";
+
             case StructElementAddrInst element when element.Address.Type is not AddressType { Pointee: StructType }:
                 return $"struct_element_addr needs a struct's address, not {element.Address.Type}";
 
@@ -605,7 +608,7 @@ public static partial class SilVerifier {
             case StructInst or TupleInst or EnumInst or ReturnInst or ThrowInst or DestroyValueInst:
                 return Enumerable.Range(0, instruction.Operands.Count);
 
-            case SwitchEnumInst { Takes: true } or OwnedUpcastInst:
+            case SwitchEnumInst { Takes: true } or OwnedUpcastInst or StructTakeInst:
                 return [0];
 
             case PartialApplyInst { Context: not null }:

@@ -3991,6 +3991,13 @@ public sealed partial class LlvmEmitter {
                     _names[instruction] = "zeroinitializer";
                     return;
 
+                case StructTakeInst take: {
+                    var name = Fresh();
+                    _names[take] = name;
+                    Line($"{name} = extractvalue {Type(take.Value.Type)} {Name(take.Value)}, {FieldSlot((StructType)take.Value.Type, take.Field)}");
+                    return;
+                }
+
                 case StructExtractInst extract: {
                     var name = Fresh();
                     _names[extract] = name;

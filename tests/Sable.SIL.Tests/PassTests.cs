@@ -152,6 +152,51 @@ public sealed class PassTests {
         Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
     }
 
+    /// <summary>
+    ///     The bytes of a digest a call gave, kept, are taken out of it: the
+    ///     struct's one field to destroy, with no copy of it.
+    /// </summary>
+    [Fact]
+    public void TheOneFieldKeptOfAStructACallGaveIsTakenOut() {
+        var module = Lowered(
+            """
+            struct Digest {
+                let bytes: U8[>..]
+                let size: Int
+            }
+
+            @inline(never)
+            fn digest(_ n: Int) -> Digest {
+                var bytes: U8[>..] = []
+                for i in 0..<n {
+                    bytes.append(U8(i))
+                }
+                return Digest { bytes: bytes, size: n }
+            }
+
+            fn keep(_ n: Int) -> Int {
+                var kept: (U8[>..])[>..] = []
+                kept.append(digest(n).bytes)
+                kept.append(digest(n + 1).bytes)
+                return kept[0].count + kept[1].count
+            }
+
+            fn probe() -> Int { return keep(3) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var keep = module.Find("M.keep")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.Contains(keep, static i => i is StructTakeInst);
+        Assert.DoesNotContain(keep, static i => i is CopyValueInst { Value: StructExtractInst });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(7L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("struct_extract [take]", text);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+    }
+
     /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
     [Fact]
     public void ALocalIsBorrowedAcrossACallThatCanThrow() {

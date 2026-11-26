@@ -1274,6 +1274,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         values[extract] = ((object?[])Get(extract.Value)!)[extract.Field];
                         break;
 
+                    case StructTakeInst take:
+                        values[take] = ((object?[])Get(take.Value)!)[take.Field];
+                        break;
+
                     case TupleExtractInst extract:
                         values[extract] = ((object?[])Get(extract.Value)!)[extract.Element];
                         break;

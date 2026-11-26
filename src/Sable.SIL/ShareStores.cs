@@ -207,7 +207,7 @@ static class ShareStores {
 
                         // A part of what holds it, or what holds that.
                         case LoadInst or LoadBorrowInst or CopyValueInst or UncheckedRefCastInst or UpcastInst or PartialApplyInst or StructInst or TupleInst or EnumInst
-                            or StructExtractInst or TupleExtractInst or RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst
+                            or StructExtractInst or StructTakeInst or OwnedUpcastInst or TupleExtractInst or RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst
                             or BuiltinInst { Name: "opaque_cast" or "opaque_address" or "opaque_borrow_as" }:
                             Holds(use);
                             break;

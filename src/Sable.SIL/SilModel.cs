@@ -1056,6 +1056,28 @@ public sealed class StructExtractInst(SilValue value, int field) : SilInstructio
     public override string Opcode => "struct_extract";
 }
 
+/// <summary>
+///     <c>struct_extract [take] %0, #bytes</c>: the one field of an owned
+///     struct that needs destroying, taken out of it — the struct, which has
+///     no deinit and only trivial fields besides, is consumed. What
+///     <c>copy_value</c> of a <c>struct_extract</c>, then
+///     <c>destroy_value</c> of the struct, comes to (<see cref="OwnUpcasts" />):
+///     a digest's bytes kept from the digest a function gave.
+/// </summary>
+public sealed class StructTakeInst(SilValue value, int field) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public int Field { get; } = field;
+    public override SilType Type => ((StructType)Value.Type).Fields[Field].Type;
+    public override string Opcode => "struct_extract";
+
+    /// <summary>Whether a field can be taken out of a struct of the type: the only one with anything to destroy, of a struct with no deinit, held as a value.</summary>
+    public static bool CanTake(SilType type, int field) =>
+        type is StructType { Deinit: null, IsInline: false, IsNoncopyable: false } structType
+        && !SilType.IsIndirect(structType) && !SilType.IsInMemory(structType)
+        && field < structType.Fields.Count
+        && structType.Fields.Select(static (f, i) => (f, i)).All(p => p.i == field || p.f.Type.IsTrivial);
+}
+
 /// <summary><c>struct_element_addr %0, #x</c>: the address of one field of a struct in memory.</summary>
 public sealed class StructElementAddrInst(SilValue address, int field) : SilInstruction(address) {
     public SilValue Address => Operands[0];

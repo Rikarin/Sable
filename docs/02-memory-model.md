@@ -387,9 +387,9 @@ Borrowed wholesale from Goose, because the taxonomy is correct:
 
 | Type | Meaning | Resizable | Stable refs |
 |---|---|---|---|
-| `T[k]` | fixed size `k`, known at compile time | no | yes |
+| `T[k]` | fixed size `k`, known at compile time; elements inline | no | yes |
 | `T[]` | size fixed at construction | no | yes |
-| `T[..k]` | inline capacity `k`, grows and shrinks within it | within cap | yes |
+| `T[..k]` | inline capacity `k`, grows and shrinks within it; elements inline | within cap | yes |
 | `T[..]` | inline capacity, inferred | within cap | yes |
 | `T[>..]` | **grow-only** — the common case | yes | yes |
 | `T[>..<]` | grow and shrink — stacks, queues, heaps | yes | no |
@@ -414,6 +414,50 @@ would). An index or a range is checked
 against the slice's own count and traps outside it, whatever lies beyond in
 the buffer. An array field of an `@inline_layout` struct is bytes in its block,
 laid out for the block, so passing one as a slice copies its elements out once.
+
+### Inline arrays
+
+`T[k]` and `T[..k]` have no buffer: their elements are where the array is — in
+a local, which is the frame's, in a struct's field, in a union's payload, a
+class's field, a closure's capture, an async function's frame, a global.
+`T[k]` is laid out as `k` elements one after another, `[k x T]`; `T[..k]` as
+its count, an Int, then room for `k`, of which the first count are elements.
+So `SmallVec<Int, 8>` and `ArrayVec<Int, 8>`, each built on an `Element[..N]`,
+cost no allocation while they are within their room. An inline array is a
+value as a struct is: copying one copies its elements (retaining what they
+refer to), destroying it destroys them, and there is no copy on write because
+nothing is shared. Its size is part of its type, and generic code that holds
+one of a type parameter's elements is specialised, as code over a value
+parameter is.
+
+A value of one is never moved around whole if it need not be. It is passed
+as a struct too large for registers is: the caller's storage, borrowed, for
+the call (§2.3's passing rules), and a function gives one back by writing it
+where its caller says. Read in place, a variable's array is borrowed, not
+copied; an element is read, written or passed inout where it is.
+
+Viewed as a slice, an inline array **lends itself**. A slice of one —
+`total(xs)` of a `total(_: Int[:])`, `xs.contains(element: 3)`, `xs[1..<3]`
+passed to a call — is a view of its storage, with nothing copied, where the
+compiler proves the view cannot outlive the use: every value that comes to
+hold it is given to calls that keep nothing of that argument, or to builtins
+that only read it, and the array it views lives, unchanged, through all of
+them. That is a borrow that cannot escape its frame, checked by the escape
+summaries the compiler keeps for every function (§2.2's "Escape-based
+promotion"), not by anything written. A write through such a view copies the
+run first, as one through a shared buffer does: the array lent to read is
+never changed. A `mutating` member of `T[:]` — `sort()`, `reverse()`,
+`swapAt` — is lent the array whole, under an access for the call, so it
+changes the elements where they are; whatever the callee leaves in the view's
+place is stored back over them after (of the same count, or a trap). Where
+the proof fails — a slice stored, returned, captured, given to a callee that
+keeps it — the view is the elements copied into a buffer of their own, as
+`toArray()` always is: correct, and one allocation. (Within a build compiled
+in units, a call into another unit's generic code it cannot see the body of
+is taken to keep what it is given.)
+
+An inline array takes at most 64 KiB (S7004): it is copied whole, and held on
+a stack that may be 256 KiB. The heap's kinds hold any number.
 
 `String` is `U8[>..]` with a UTF-8 invariant. `List<T>` in the standard library
 (Sable.Collections) is the growable array that also inserts and removes

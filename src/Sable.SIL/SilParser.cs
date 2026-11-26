@@ -872,6 +872,17 @@ public sealed class SilParser {
             return new InlineArrayType(element, capacity);
         }
 
+        // '@fixed_array(Int, 4)', 'Int[4]'; '@bounded_array(Int, 4)', 'Int[..4]'.
+        if (Current is { Kind: TokenKind.Global, Text: "fixed_array" or "bounded_array" } fixedArray) {
+            Next();
+            Expect("(");
+            var fixedElement = ParseTypeBody();
+            Expect(",");
+            var fixedCount = Count("a count");
+            Expect(")");
+            return new FixedArrayType(fixedElement, fixedCount, fixedArray.Text == "bounded_array");
+        }
+
         // '@simd(F32, 4)': four F32 lanes.
         if (Current is { Kind: TokenKind.Global, Text: "simd" }) {
             Next();

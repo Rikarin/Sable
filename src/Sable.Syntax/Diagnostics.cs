@@ -306,6 +306,7 @@ public enum ErrorCode {
     ERR_UnknownBuiltin = 7001,
     ERR_BuiltinSignatureMismatch = 7002,
     ERR_EndlessInstantiation = 7003,
+    ERR_InlineArrayTooLarge = 7004,
 }
 
 public enum DiagnosticSeverity {

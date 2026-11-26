@@ -1411,8 +1411,11 @@ through its `Sequence` conformance like any other type's. There is one hashed
 map; `Sable.Collections.HashMap` is gone, and `Set` (a value, with union,
 intersection and the subset tests, which use the hashes it keeps) is a
 dictionary to nothing underneath.
-`InlineArray<T, N>` is the built-in `T[N]` by that name, and `SmallVec<T, N>`
-keeps `N` elements inline in a `T[..N]` before it moves to the heap.
+`InlineArray<T, N>` is the built-in `T[N]` by that name, `ArrayVec<T, N>` holds
+up to `N` in a `T[..N]` and no more, and `SmallVec<T, N>` keeps `N` elements
+inline in a `T[..N]` before it moves to the heap. Inline arrays' elements are
+where the value is (docs/02 §2.5), so none of the three allocates within its
+room (`benchmarks/library/small-vec`).
 
 - **Layout.** An array of entries (key, value, the key's full hash) in the
   order keys were added, none where one was removed, and beside it an index:

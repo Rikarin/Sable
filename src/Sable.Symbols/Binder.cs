@@ -8014,6 +8014,15 @@ public sealed partial class Binder {
             );
         }
 
+        // 'T[k]' holds exactly k, where it is.
+        if (expectedType is ArrayTypeSymbol { ArrayKind: ArrayKind.Fixed, Capacity: { } count } sized && elements.Length != count) {
+            _diagnostics.Error(
+                ErrorCode.ERR_TypeMismatch,
+                syntax.Span,
+                $"'{sized.ToDisplayString()}' holds exactly {count} elements, and this literal has {elements.Length}"
+            );
+        }
+
         // '[Int.self, String.self]': types of several, so Types.
         if (expectedElement is null && elements.Length > 1 && elements.Any(e => !e.Type.Equals(elements[0].Type))
             && elements.All(e => e.Type is MetatypeTypeSymbol || e.Type.Equals(Core.Type))) {

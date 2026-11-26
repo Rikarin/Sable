@@ -63,6 +63,14 @@ public sealed partial class SilGen {
         ///     borrows; anything else as it is.
         /// </summary>
         SilValue AsSliceReceiver(SilValue receiver, SilType wanted, List<SilValue> borrows) {
+            // An inline array (#304), whose borrow among the call's ends after
+            // the slice's: lent where it is, where nothing keeps the slice.
+            if (receiver.Type is FixedArrayType inline && wanted is SliceType) {
+                var view = Hold(Emit(new BuiltinInst("slice_of", new SliceType(inline.Element), receiver)));
+                borrows.Add(view);
+                return view;
+            }
+
             if (receiver.Type is not ArrayType arrayType || wanted is not SliceType) {
                 return receiver;
             }
@@ -89,6 +97,10 @@ public sealed partial class SilGen {
             if (wanted is not AddressType { Pointee: SliceType sliceType }
                 || place.Type is AddressType { Pointee: SliceType }) {
                 return place;
+            }
+
+            if (place.Type is AddressType { Pointee: FixedArrayType }) {
+                return LendForChange(place, wanted, borrows);
             }
 
             if (place.Type is not AddressType { Pointee: ArrayType arrayType }) {
@@ -119,6 +131,28 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     The place of an inline array (#304) lent whole as a slice to
+        ///     change — to a mutating member of <c>Element[:]</c>, or as an
+        ///     inout slice — in a slot of the call's own: the array lends
+        ///     itself (docs/02 §2.5), the slice a view of its storage where
+        ///     nothing keeps it longer than the call (LendInlineArrays), so
+        ///     a write through it changes the array where it is; after the
+        ///     call, what is in the slot is given back (<c>fixed_restore</c>),
+        ///     nothing to do for the view, and stored over the array's
+        ///     elements for anything the callee put in its place, of the same
+        ///     count or a trap. The access to the array spans the call.
+        /// </summary>
+        SilValue LendForChange(SilValue place, SilType wanted, List<SilValue> borrows) {
+            var element = ((FixedArrayType)((AddressType)place.Type).Pointee).Element;
+            var sliceType = new SliceType(element);
+            var view = NewSlot(sliceType, "$slice");
+            borrows.Add(new DeferredStep(() => Emit(new StoreInst(Builtin("fixed_lend_mut_copy", sliceType, place), view, StoreKind.Init))));
+            borrows.Add(new WriteBack(() => Builtin("fixed_restore", SilType.Unit, place, Emit(new LoadInst(view, LoadKind.Take)))));
+            BeginAccess(place, modify: true, borrows);
+            return view.Type == wanted || wanted is not AddressType ? view : Emit(new BuiltinInst("opaque_cast", wanted, view));
+        }
+
+        /// <summary>
         ///     Where an inout argument is, its access begun among the call's:
         ///     its own place, or, for an array where a slice of it is wanted,
         ///     the array viewed whole.
@@ -144,7 +178,12 @@ public sealed partial class SilGen {
         ///     that comes back has the array's count, or the call traps.
         /// </summary>
         SilValue? WholeArrayInout(BoundConversion view, List<SilValue> borrows) {
-            if (Address(view.Operand, borrows) is not { Type: AddressType { Pointee: ArrayType arrayType } } place) {
+            var operand = Address(view.Operand, borrows);
+            if (operand is { Type: AddressType { Pointee: FixedArrayType } } inlinePlace && LowerType(view.Type) is { } wantedSlice) {
+                return LendForChange(inlinePlace, wantedSlice, borrows);
+            }
+
+            if (operand is not { Type: AddressType { Pointee: ArrayType arrayType } } place) {
                 return Missing(view, $"'{Describe(view.Syntax)}' as a slice to change");
             }
 

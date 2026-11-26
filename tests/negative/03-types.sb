@@ -100,3 +100,8 @@ fn aBoundedArrayLiteralFits() {
     let fits: Int[..2] = [1, 2]
     let over: Int[..2] = [1, 2, 3]      //! S3004 holds at most 2 elements
 }
+
+fn aFixedArrayLiteralIsExact() {
+    let fits: Int[2] = [1, 2]
+    let short: Int[3] = [1, 2]          //! S3004 holds exactly 3 elements
+}

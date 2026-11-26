@@ -52,10 +52,12 @@ public sealed class BorrowFields : ISilPass {
                 }
             }
 
-            if (!fits || store?.Value is not CopyValueInst copy || uses.Of(copy).Count != 1 || !FieldOfParameter(copy.Value, function)) {
+            if (!fits || store?.Value is not CopyValueInst copy || uses.Of(copy).Count != 1 || !FieldOfParameter(copy.Value, function)
+                || EndsBeforeStore(copy.Value, store, uses) is not { } ends) {
                 continue;
             }
 
+            EndAfter(ends, store);
             slot.Unmanaged = true;
             store.SetOperand(0, copy.Value);
             copy.Block.Instructions.Remove(copy);
@@ -63,6 +65,82 @@ public sealed class BorrowFields : ISilPass {
                 destroy.Block.Instructions.Remove(destroy);
             }
         }
+    }
+
+    /// <summary>
+    ///     Whether the borrows a copied value comes from can cover the store
+    ///     that will now take the value itself: each <c>load_borrow</c> it is
+    ///     borrowed from, through payloads, fields and casts, either ends
+    ///     after the store, or ends in the store's block before it — where the
+    ///     copy outlived the borrow, as the value now will not — and is then
+    ///     to be moved after the store (the ends given); no end on a way to
+    ///     the store from another block. Null when that cannot be so.
+    /// </summary>
+    internal static List<EndBorrowInst>? EndsBeforeStore(SilValue value, StoreInst store, Uses uses) {
+        var block = store.Block;
+        var at = block.Instructions.IndexOf(store);
+        var early = new List<EndBorrowInst>();
+        for (var depth = 0; depth < 16; depth++) {
+            switch (value) {
+                case SilArgument argument when argument.Block == argument.Block.Function.Entry:
+                    return early;
+                case SilArgument { IsGuaranteed: true } payload:
+                    if (payload.Block.Function.Blocks.Select(static b => b.Terminator).OfType<SwitchEnumInst>()
+                            .Where(s => s.Cases.Any(c => c.Target == payload.Block)).ToList() is not [var switched]) {
+                        return null;
+                    }
+
+                    value = switched.Value;
+                    continue;
+                case StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst:
+                    value = ((SilInstruction)value).Operands[0];
+                    continue;
+                case LoadBorrowInst borrow:
+                    foreach (var end in uses.Of(borrow).OfType<EndBorrowInst>()) {
+                        if (end.Block == block) {
+                            if (block.Instructions.IndexOf(end) < at) {
+                                early.Add(end);
+                            }
+                        } else if (Reaches(end.Block, block)) {
+                            return null;
+                        }
+                    }
+
+                    // What the slot borrows from stays alive: a lent parameter's field, another slot.
+                    return early;
+                default:
+                    return null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Moves borrows' ends that came before a store to just after it.</summary>
+    internal static void EndAfter(List<EndBorrowInst> ends, StoreInst store) {
+        foreach (var end in ends) {
+            end.Block.Instructions.Remove(end);
+            store.Block.Instructions.Insert(store.Block.Instructions.IndexOf(store) + 1, end);
+        }
+    }
+
+    /// <summary>True when <paramref name="to" /> can be reached from <paramref name="from" />.</summary>
+    static bool Reaches(SilBlock from, SilBlock to) {
+        var seen = new HashSet<SilBlock>();
+        var pending = new Stack<SilBlock>([from]);
+        while (pending.TryPop(out var next)) {
+            if (next == to) {
+                return true;
+            }
+
+            if (seen.Add(next)) {
+                foreach (var successor in next.Successors) {
+                    pending.Push(successor);
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>A class reference, or an optional one: one pointer, kept alive by whatever holds it.</summary>

@@ -1082,6 +1082,55 @@ public sealed class PassTests {
     }
 
     /// <summary>
+    ///     <c>let cells = self.cells!</c>, the field of a lent object, held
+    ///     unretained: the slot is stored with the payload itself, so the
+    ///     borrow of the field it comes from, which ended before the store
+    ///     when a copy was stored, ends after it now (CI's
+    ///     <c>MetricSeries.exponential</c>).
+    /// </summary>
+    [Fact]
+    public void AFieldsPayloadHeldUnretainedIsStoredWhileItIsBorrowed() {
+        var module = Lowered(
+            """
+            final class Cells {
+                let base: Int[>..]
+                init(count: Int) { base = Int[>..](repeating: 1, count: count) }
+                fn load(_ i: Int) -> Int { return base[i] }
+            }
+            final class Series {
+                let cells: Cells?
+                init(_ on: Bool) { cells = on ? Cells(count: 8) : none }
+                fn total(_ limit: Int) -> Int {
+                    let cells = self.cells!
+                    var seen: Int[>..] = []
+                    for c in 0..<8 {
+                        let n = cells.load(c)
+                        if n == 0 {
+                            continue
+                        }
+                        seen.append(n)
+                    }
+                    if seen.isEmpty {
+                        return 0
+                    }
+                    var t = 0
+                    for (i, v) in seen.enumerated() {
+                        t += i < limit ? v : 0
+                    }
+                    return t
+                }
+            }
+            fn run(_ limit: Int) -> Int { return Series(true).total(limit) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.Contains(Instructions(module.Find("M.Series.total")!).OfType<AllocStackInst>(), static s => s.Unmanaged);
+        Assert.Equal(5L, new SilInterpreter(module).Run("M.run", 5L));
+    }
+
+    /// <summary>
     ///     A <c>let</c> in a loop that borrows what stays put is held in an
     ///     unmanaged slot, stored each turn and never destroyed: the slot owns
     ///     nothing, so the store of the next turn, <c>[init]</c> as the slot

@@ -72,7 +72,9 @@ public sealed class BorrowWalks : ISilPass {
             slot.Unmanaged = true;
             foreach (var user in uses.Of(slot).ToList()) {
                 switch (user) {
+                    // The value itself stored, within the borrows it comes from.
                     case StoreInst { Value: CopyValueInst copy } store:
+                        BorrowFields.EndAfter(BorrowFields.EndsBeforeStore(copy.Value, store, uses)!, store);
                         store.SetOperand(0, copy.Value);
                         copy.Block.Instructions.Remove(copy);
                         break;
@@ -120,7 +122,8 @@ public sealed class BorrowWalks : ISilPass {
             // An empty case holds no object.
             EnumInst { Payload: null } empty => uses.Of(empty).Count == 1,
             _ when slot.Unmanaged => Rooted(store.Value, slots, function),
-            CopyValueInst copy => uses.Of(copy).Count == 1 && copy.Block == store.Block && Rooted(copy.Value, slots, function),
+            CopyValueInst copy => uses.Of(copy).Count == 1 && copy.Block == store.Block && Rooted(copy.Value, slots, function)
+                && BorrowFields.EndsBeforeStore(copy.Value, store, uses) is not null,
             LoadInst { Kind: LoadKind.Copy, Address: RefElementAddrInst field } load =>
                 uses.Of(load).Count == 1 && load.Block == store.Block && Rooted(field.Reference, slots, function),
             _ => false,

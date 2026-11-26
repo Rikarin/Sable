@@ -390,7 +390,7 @@ public sealed class Inliner : ISilPass {
     ///     passes do not look across: a dictionary's lookup, inlined, copies
     ///     the dictionary its call only borrowed.
     /// </summary>
-    static bool Loops(SilFunction function) {
+    internal static bool Loops(SilFunction function) {
         var order = SilVerifier.ReversePostorder(function);
         var position = order.Select(static (b, i) => (b, i)).ToDictionary(static p => p.b, static p => p.i);
         return order.Any(block => block.Successors.Any(next => position[next] <= position[block]));

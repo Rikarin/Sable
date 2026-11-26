@@ -47,11 +47,13 @@ public static class SilPassManager {
     ///     blocks; then small callees are inlined, then the '@autoclosure'
     ///     closures they call or drop (<see cref="InlineClosures" />), and the chain of blocks each call leaves
     ///     merged, so that the passes after see the callee's body in the
-    ///     caller's; what is left is tidied last. An unoptimised build keeps
+    ///     caller's; a loop too big to inline that is given a closure with no
+    ///     context is called as a copy made for that code
+    ///     (<see cref="SpecialiseClosures" />); what is left is tidied last. An unoptimised build keeps
     ///     its calls, so that a trap's backtrace names every frame.
     /// </remarks>
     public static IReadOnlyList<ISilPass> Optimising { get; } = [
-        new Specialise(), new Devirtualise(), new SpeculativeDevirtualise(), new BorrowLoads(), new Inliner(), new InlineClosures(), new Simplify(), ..Default, new VersionLoops(), new Simplify(),
+        new Specialise(), new Devirtualise(), new SpeculativeDevirtualise(), new BorrowLoads(), new Inliner(), new InlineClosures(), new Simplify(), new SpecialiseClosures(), ..Default, new VersionLoops(), new Simplify(),
     ];
 
     /// <summary>

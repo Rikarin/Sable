@@ -773,6 +773,94 @@ public sealed class PassTests {
         Assert.DoesNotContain(SilPassManager.ForLevel("s"), static p => p is SpeculativeDevirtualise);
     }
 
+    /// <summary>Calls whose callee is a function value: what a closure's call is until its code is known.</summary>
+    static int Indirect(SilFunction function) =>
+        Instructions(function).Count(static i => i is ApplyInst or TryApplyInst && i.Operands[0].Type is ThickFunctionType);
+
+    /// <summary>
+    ///     A loop given a closure with no context calls a copy of itself made
+    ///     for that code, which calls it directly and inlines it; one given
+    ///     the same code elsewhere calls the same copy; a closure with a
+    ///     context is still called through.
+    /// </summary>
+    [Fact]
+    public void ALoopGivenAClosureIsCopiedForItsCode() {
+        var module = Lowered(
+            """
+            fn sumOf(_ n: Int, _ f: (Int) -> Int) -> Int {
+                var total = 0
+                var i = 0
+                while i < n {
+                    total += f(i)
+                    i += 1
+                }
+                return total
+            }
+            fn double(_ x: Int) -> Int { return x * 2 }
+            fn literal() -> Int { return sumOf(10) { $0 * 3 } }
+            fn named() -> Int { return sumOf(4, double) + sumOf(5, double) }
+            fn captured(_ k: Int) -> Int { return sumOf(3) { $0 * k } }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var copies = module.Functions.Where(static f => f.Name.StartsWith("M.sumOf$closures$", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, copies.Count);
+        Assert.All(copies, static c => Assert.Equal(0, Indirect(c)));
+        Assert.Equal(1, Indirect(module.Find("M.sumOf")!));
+        Assert.Equal(135L, new SilInterpreter(module).Run("M.literal"));
+        Assert.Equal(32L, new SilInterpreter(module).Run("M.named"));
+        Assert.Equal(15L, new SilInterpreter(module).Run("M.captured", 5L));
+        Assert.DoesNotContain(SilPassManager.ForLevel("s"), static p => p is SpecialiseClosures);
+    }
+
+    /// <summary>
+    ///     A closure that does not throw, given where one that throws is
+    ///     wanted, is a conversion thunk's: specialised for its code, it needs
+    ///     no box, and the loop's copy calls it inlined. One that does throw
+    ///     still throws through the loop.
+    /// </summary>
+    [Fact]
+    public void AConversionOfAClosureWithNoContextIsUnboxed() {
+        var source =
+            """
+            enum Odd: Error { Found }
+            fn fold(_ n: Int, _ f: (Int, Int) throws -> Int) rethrows -> Int {
+                var total = 0
+                var i = 0
+                while i < n {
+                    total = try f(total, i)
+                    i += 1
+                }
+                return total
+            }
+            fn added() -> Int { return fold(5) { $0 + $1 } }
+            fn thrown() -> Int {
+                do {
+                    return try fold(5) { a, b in
+                        if b == 3 {
+                            throw Odd.Found
+                        }
+                        return a + b
+                    }
+                } catch {
+                    return -1
+                }
+            }
+            """;
+        var module = Lowered(source);
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.Empty(Instructions(module.Find("M.added")!).OfType<AllocRefInst>());
+        var copies = module.Functions.Where(static f => f.Name.StartsWith("M.fold$closures$", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(copies);
+        Assert.All(copies, static c => Assert.Equal(0, Indirect(c)));
+        Assert.Equal(10L, new SilInterpreter(module).Run("M.added"));
+        Assert.Equal(-1L, new SilInterpreter(module).Run("M.thrown"));
+    }
+
     /// <summary>Constants fold, and the branches they decide go with what they skip.</summary>
     [Fact]
     public void ConstantsFoldAndDecidedBranchesGo() {

@@ -56,9 +56,9 @@ public final class TerminalRun {
     public var output: String => String.fromUtf8Lossy(bytes)
 
     /// Reads what the test writes until it has written the text: whether it
-    /// did within ten seconds.
-    public fn waitFor(_ text: String) -> Bool {
-        let until = Runtime.monotonicNanoseconds() + 10_000_000_000
+    /// did within so many milliseconds, ten seconds unless said.
+    public fn waitFor(_ text: String, milliseconds: Int = 10_000) -> Bool {
+        let until = Runtime.monotonicNanoseconds() + milliseconds * 1_000_000
         while Runtime.monotonicNanoseconds() < until {
             if output.contains(text) {
                 return true

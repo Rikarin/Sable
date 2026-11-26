@@ -408,6 +408,11 @@ public sealed class PromoteToStack : ISilPass {
                 pending.Push(user);
                 return false;
 
+            // The same value or place, seen as unspecialised code's (#297).
+            case BuiltinInst { Name: "opaque_cast" or "opaque_borrow_as" } seenAs when ReferenceEquals(seenAs.Operands[0], value):
+                pending.Push(user);
+                return false;
+
             // A local slot: what is loaded from it is followed; anything else
             // given the slot's address may keep what it holds.
             // An inout parameter's is the same, in the callee.

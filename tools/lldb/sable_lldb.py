@@ -24,6 +24,8 @@ in a suffix saying what kind of thing it is:
     M.Holder<T>     -> M.Holder<T>$generic    a struct of unspecialised code's: its fields
     T, T?, (T, Int) -> SableValue$dynamic     in unspecialised code: $address (where it is), $metadata (its type's)
     @inline_layout  -> S$inline               $block -> header, length, capacity, fields (the fixed-size ones, packed)
+    T[k]            -> T[k]                   a C array of k, where the value is (lldb's own)
+    T[..k]          -> T[..k]$bounded         count, elements (a C array of k, the first count of them elements)
 
 The formatters match those names by regular expression, so they work with
 any lldb that runs Python (no recognizer functions needed), and they read
@@ -677,6 +679,52 @@ class SliceProvider(ListProvider):
 def slice_summary(valobj, internal_dict):
     _, _, count, marker = _slice_run(valobj)
     return marker or "count = %d" % count
+
+
+class BoundedProvider(object):
+    """A bounded inline array's elements as children, [0] to [count - 1], where it is."""
+
+    def __init__(self, valobj, internal_dict):
+        self.valobj = valobj
+        self.elements = None
+        self.count = 0
+
+    def update(self):
+        raw = _raw(self.valobj)
+        self.elements = raw.GetChildMemberWithName("elements")
+        room = self.elements.GetNumChildren() if self.elements.IsValid() else 0
+        count = raw.GetChildMemberWithName("count").GetValueAsSigned(0)
+        # Storage not written yet may say anything: no more than the room.
+        self.count = count if 0 <= count <= room else 0
+        return False
+
+    def num_children(self, max_children=None):
+        return self.count
+
+    def has_children(self):
+        return True
+
+    def get_child_index(self, name):
+        try:
+            return int(name.lstrip("[").rstrip("]"))
+        except ValueError:
+            return -1
+
+    def get_child_at_index(self, index):
+        if index < 0 or index >= self.count:
+            return None
+        element = self.elements.GetChildAtIndex(index)
+        return self.valobj.CreateValueFromData("[%d]" % index, element.GetData(), element.GetType())
+
+    def get_type_name(self):
+        return _type_name(self.valobj)
+
+
+def bounded_summary(valobj, internal_dict):
+    raw = _raw(valobj)
+    count = raw.GetChildMemberWithName("count").GetValueAsSigned(0)
+    room = raw.GetChildMemberWithName("elements").GetNumChildren()
+    return "count = %d" % count if 0 <= count <= room else "<invalid count: %d>" % count
 
 
 def list_summary(valobj, internal_dict):
@@ -1364,6 +1412,7 @@ def _register(debugger, module):
         ("\\$list$", "list_summary", "-e"),
         (DICTIONARY, "dictionary_summary", "-e"),
         ("\\$slice$", "slice_summary", "-e"),
+        ("\\$bounded$", "bounded_summary", "-e"),
         ("\\$union$", "union_summary", ""),
         ("\\$optional$", "optional_summary", ""),
         ("\\$ref$", "object_summary", "-e"),
@@ -1377,6 +1426,7 @@ def _register(debugger, module):
         ("\\$list$", "ListProvider"),
         (DICTIONARY, "DictionaryProvider"),
         ("\\$slice$", "SliceProvider"),
+        ("\\$bounded$", "BoundedProvider"),
         ("\\$union$", "UnionProvider"),
         ("\\$optional$", "OptionalProvider"),
         ("\\$ref$", "ObjectProvider"),

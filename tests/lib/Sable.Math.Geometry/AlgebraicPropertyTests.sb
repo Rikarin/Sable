@@ -114,13 +114,13 @@ fn turningKeepsLengthsAndComposesAsMatricesDo() {
 @test
 fn interpolationIsOfLengthOneAndMeetsBothEnds() {
     forAll(rotations, rotations, scalars(0, 1)) { (a, b, t) in
-        expect(a.slerp(to: b, 0).sameRotation(as: a, tolerance: tolerance))
-        expect(a.slerp(to: b, 1).sameRotation(as: b, tolerance: tolerance))
-        expect(nearEqual(a.slerp(to: b, t).length, 1, tolerance: 0.00001))
-        expect(nearEqual(a.nlerp(to: b, t).length, 1, tolerance: 0.00001))
+        expect(a.slerp(to: b, by: 0).sameRotation(as: a, tolerance: tolerance))
+        expect(a.slerp(to: b, by: 1).sameRotation(as: b, tolerance: tolerance))
+        expect(nearEqual(a.slerp(to: b, by: t).length, 1, tolerance: 0.00001))
+        expect(nearEqual(a.nlerp(to: b, by: t).length, 1, tolerance: 0.00001))
         // At a steady speed: the angle from the start is so much of the whole.
         let whole = (a.conjugate * b).angle
-        let part = (a.conjugate * a.slerp(to: b, t)).angle
+        let part = (a.conjugate * a.slerp(to: b, by: t)).angle
         expect((part - whole * t).abs() < 0.003)
     }
 }
@@ -146,7 +146,7 @@ fn aTransformMovesPointsAsItsMatrixDoes() {
         parent.scale = Vector3(repeating: b.scale.x)
         expect((a * parent).matrix.nearEqual(a.matrix * parent.matrix, tolerance: 0.01))
         expect((parent * parent.inverted()).transformPosition(v).nearEqual(v, tolerance: 0.01))
-        expect(a.lerp(to: b, 0).nearEqual(a, tolerance: tolerance))
+        expect(a.lerp(to: b, by: 0).nearEqual(a, tolerance: tolerance))
         expect(b.adding(a.difference(from: b), weight: 1).transformPosition(v).nearEqual(a.transformPosition(v), tolerance: 0.01))
         expect(b.adding(a, weight: 0).nearEqual(b, tolerance: tolerance))
     }

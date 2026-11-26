@@ -595,10 +595,30 @@ public sealed partial class SilInterpreter {
 
     static bool IsRawScalar(SilType type) =>
         SilType.IntegerInfo(type) is not null || type == SilType.F64 || type == SilType.F32 || type == SilType.F16
-        || type == SilType.BF16 || type == SilType.Bool || type == SilType.Char;
+        || type == SilType.BF16 || type == SilType.Bool || type == SilType.Char || IsRawVector(type);
+
+    /// <summary>
+    ///     A vector of numbers whose lanes lie one after another with nothing
+    ///     between or after: its bytes are theirs, so it is read from bytes and
+    ///     written as them, as natively (a hash's or a codec's stripe of input).
+    /// </summary>
+    static bool IsRawVector(SilType type) =>
+        type is VectorType { Element: var element, Count: var count }
+        && element != SilType.Bool && IsRawScalar(element)
+        && TypeLayout.Size(type) == count * TypeLayout.Size(element);
 
     /// <summary>A scalar's bytes, little endian, as natively; null for any other value.</summary>
     static byte[]? Encode(SilType type, object? value) {
+        if (IsRawVector(type) && type is VectorType vector && value is SimdValue simd) {
+            var size = TypeLayout.Size(vector.Element);
+            var bytes = new byte[vector.Count * size];
+            for (var i = 0; i < vector.Count; i++) {
+                Encode(vector.Element, simd.Lanes[i])!.CopyTo(bytes, i * size);
+            }
+
+            return bytes;
+        }
+
         if (SilType.IntegerInfo(type) is var (bits, _)) {
             var bytes = new byte[bits / 8];
             var unsigned = Wrapped(Big(value), bits, false);
@@ -622,6 +642,16 @@ public sealed partial class SilInterpreter {
 
     /// <summary>A scalar read from its bytes.</summary>
     static object Decode(SilType type, ReadOnlySpan<byte> bytes) {
+        if (type is VectorType vector) {
+            var size = TypeLayout.Size(vector.Element);
+            var lanes = new object?[vector.Count];
+            for (var i = 0; i < vector.Count; i++) {
+                lanes[i] = Decode(vector.Element, bytes.Slice(i * size, size));
+            }
+
+            return new SimdValue(lanes);
+        }
+
         if (SilType.IntegerInfo(type) is var (bits, signed)) {
             var unsigned = new BigInteger(bytes, isUnsigned: true, isBigEndian: false);
             return NarrowBig(Wrapped(unsigned, bits, signed), type);

@@ -1,0 +1,94 @@
+module NamedSemaphoreTests
+
+// NamedSemaphore (Sable.IO.Ipc): run with
+//     tools/stdlib-coverage.sh Sable.IO.Ipc
+
+import Sable.IO
+import Sable.IO.Ipc
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+fn unique() -> String {
+    return "sbs\(Process.id())x\(Int.random(in: 0..<1 << 30))"
+}
+
+@test
+fn itCountsWhatMayBeTaken() throws {
+    let name = unique()
+    let made = try NamedSemaphore.create(name: name, initialCount: 2)
+    assertEqual(made.name, name)
+    let other = try NamedSemaphore.open(name: name)
+    expect(try other.tryWait())
+    expect(try made.tryWait())
+    expect(!(try other.tryWait()))
+    try made.release(2)
+    expect(try other.tryWait())
+    expect(try other.tryWait())
+    expect(!(try made.tryWait()))
+    other.close()
+    made.close()
+}
+
+@test
+fn aWaiterWakesOnceOneIsReleased() async throws {
+    let semaphore = try NamedSemaphore.create(name: unique(), initialCount: 0)
+    let waiting = Task.spawn { () -> Bool in
+        try! await semaphore.wait()
+        return true
+    }
+    try? await Task.sleep(for: Duration.milliseconds(5))
+    try semaphore.release()
+    expect(await waiting.value)
+    semaphore.close()
+}
+
+@test
+fn aWaitWithALimitSaysWhetherItTookOne() async throws {
+    let semaphore = try NamedSemaphore.create(name: unique(), initialCount: 1)
+    expect(try await semaphore.wait(timeout: Duration.milliseconds(5)))
+    expect(!(try await semaphore.wait(timeout: Duration.milliseconds(5))))
+    semaphore.close()
+}
+
+@test
+fn aCancelledWaitThrowsCancelled() async throws {
+    let semaphore = try NamedSemaphore.create(name: unique(), initialCount: 0)
+    let waiting = Task.spawn { () -> String in
+        do {
+            try await semaphore.wait()
+            return "took one"
+        } catch {
+            return error.description()
+        }
+    }
+    waiting.cancel()
+    assertEqual(await waiting.value, IoError.Cancelled.description())
+    semaphore.close()
+}
+
+@test
+fn aNameIsMadeOnceAndAClosedOneIsNotUsed() throws {
+    let name = unique()
+    expectThrows(saying: IoError.NotFound(path: name).description()) {
+        _ = try NamedSemaphore.open(name: name)
+    }
+    let made = try NamedSemaphore.create(name: name, initialCount: 0)
+    expectThrows(saying: IoError.AlreadyExists(path: name).description()) {
+        _ = try NamedSemaphore.create(name: name, initialCount: 0)
+    }
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        try made.release(0)
+    }
+    made.close()
+    made.close()
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        _ = try made.tryWait()
+    }
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        try made.release()
+    }
+    expectThrows(saying: IoError.InvalidInput(path: "sbneg").description()) {
+        _ = try NamedSemaphore.create(name: "sbneg", initialCount: -1)
+    }
+}

@@ -619,8 +619,14 @@ public sealed partial class SilGen {
     ///     such arrays: what unspecialised code holds as an array of opaque
     ///     values, with the array's metadata made at run time from its element's.
     /// </summary>
+    /// <remarks>
+    ///     Not an inline array, <c>T[k]</c> or <c>T[..k]</c> (#304): its
+    ///     elements are where it is, laid out for their type, so code that
+    ///     holds one is copied for each, as code generic over a value is.
+    /// </remarks>
     internal static bool IsArrayOf(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
-        type is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice, ElementType: var element }
+        type is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice, ElementType: var element } array
+        && array is not { ArrayKind: ArrayKind.Fixed, Capacity: not null } and not { CapacityParameter: not null }
         && element is not MetatypeTypeSymbol && IsHeld(element, parameters);
 
     /// <summary>

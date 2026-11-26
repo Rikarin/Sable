@@ -1,0 +1,89 @@
+module Sable.Net
+
+/// An ICMP or ICMPv6 message: its type, its code, the four bytes after its
+/// checksum (an echo's identifier and sequence number), and its body. Built
+/// to be sent (`bytes`), and parsed from what came (`parse`).
+///
+/// ```sable
+/// let request = IcmpMessage.echoRequest(.V4, identifier: 0x1234, sequence: 7, payload: [1, 2])
+/// let bytes = request.bytes()
+/// assert(bytes.count == 10 && bytes[0] == 8 && InternetChecksum.of(bytes) == 0)
+/// let parsed = IcmpMessage.parse(bytes)!
+/// assert(parsed.identifier == 0x1234 && parsed.sequence == 7 && parsed.body == [1, 2])
+/// ```
+@derive(Equatable, Debug)
+public struct IcmpMessage {
+    /// Its type: 8 an echo request, 0 its reply, 11 time exceeded, 3
+    /// unreachable (IPv4); 128, 129, 3 and 1 (IPv6).
+    public let type: Int
+
+    /// Its code, which says more of its type.
+    public let code: Int
+
+    /// The four bytes after its checksum, as one big-endian number.
+    public let rest: Int
+
+    /// What follows: an echo's payload, or an error's datagram, as much of
+    /// it as came back.
+    public let body: U8[>..]
+
+    public init(type: Int, code: Int, rest: Int, body: U8[>..]) {
+        self.type = type
+        self.code = code
+        self.rest = rest
+        self.body = body
+    }
+
+    /// An echo request (ping) of the family's.
+    public static fn echoRequest(_ family: IpFamily, identifier: Int, sequence: Int, payload: U8[>..]) -> IcmpMessage {
+        return IcmpMessage(type: family == .V4 ? 8 : 128, code: 0, rest: (identifier & 0xFFFF) << 16 | (sequence & 0xFFFF), body: payload)
+    }
+
+    /// An echo's identifier: the high half of `rest`.
+    public var identifier: Int => rest >> 16 & 0xFFFF
+
+    /// An echo's sequence number: the low half of `rest`.
+    public var sequence: Int => rest & 0xFFFF
+
+    /// The message as it is sent, its checksum ICMP's: over its own bytes.
+    /// ICMPv6's covers a pseudo-header as well (`bytes(source:destination:)`),
+    /// which an ICMPv6 socket of the system's computes itself, whatever is
+    /// here.
+    public fn bytes() -> U8[>..] {
+        var all = header()
+        all.append(contentsOf: body)
+        let checksum = InternetChecksum.of(all)
+        all[2] = U8(checksum >> 8)
+        all[3] = U8(checksum & 0xFF)
+        return all
+    }
+
+    /// The ICMPv6 message as it is sent, its checksum over IPv6's
+    /// pseudo-header of the two addresses (RFC 4443).
+    public fn bytes(source: IpAddress, destination: IpAddress) -> U8[>..] {
+        var all = header()
+        all.append(contentsOf: body)
+        var pseudo = source.bytes
+        pseudo.append(contentsOf: destination.bytes)
+        let length = all.count
+        pseudo.append(contentsOf: [U8(length >> 24 & 0xFF), U8(length >> 16 & 0xFF), U8(length >> 8 & 0xFF), U8(length & 0xFF), 0, 0, 0, 58])
+        let checksum = InternetChecksum.finish(InternetChecksum.sum(all, InternetChecksum.sum(pseudo, 0)))
+        all[2] = U8(checksum >> 8)
+        all[3] = U8(checksum & 0xFF)
+        return all
+    }
+
+    fn header() -> U8[>..] {
+        return [U8(type & 0xFF), U8(code & 0xFF), 0, 0, U8(rest >> 24 & 0xFF), U8(rest >> 16 & 0xFF), U8(rest >> 8 & 0xFF), U8(rest & 0xFF)]
+    }
+
+    /// The message the bytes are; none for fewer than its header's eight.
+    /// Its checksum is not looked at: the system has.
+    public static fn parse(_ bytes: U8[:]) -> IcmpMessage? {
+        if bytes.count < 8 {
+            return none
+        }
+        let rest = Int(bytes[4]) << 24 | Int(bytes[5]) << 16 | Int(bytes[6]) << 8 | Int(bytes[7])
+        return IcmpMessage(type: Int(bytes[0]), code: Int(bytes[1]), rest: rest, body: bytes[8...].toArray())
+    }
+}

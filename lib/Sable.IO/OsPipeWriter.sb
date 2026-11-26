@@ -1,0 +1,43 @@
+module Sable.IO
+
+/// The end of an operating system pipe (`OsPipe`, `Fifo`) that this program
+/// writes. A write suspends the task while the pipe is full, not its
+/// thread. Deeply immutable, so Sendable. Closed as it goes, or by
+/// `close()`: the reader then reads to its end.
+@immutable
+public final class OsPipeWriter: AsyncWriter, Sendable {
+    let handle: Int
+
+    init(handle: Int) {
+        self.handle = handle
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// Every one of the bytes written, waiting while the reader is slow to
+    /// read them. A reader that has gone throws Disconnected; a task
+    /// cancelled, Cancelled, some of them written perhaps.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        var from = 0
+        while from < bytes.count {
+            let written = Runtime.writeSocket(handle, bytes[from...])
+            if Runtime.socketStatus() == 0 {
+                from += written
+            } else {
+                try await waitForOsPipe(handle, writable: true)
+            }
+        }
+    }
+
+    /// The text written, as UTF-8.
+    public fn write(_ text: String) async throws(IoError) {
+        try await write(text.utf8.toArray())
+    }
+
+    /// Nothing more is written: the reader reads to its end.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

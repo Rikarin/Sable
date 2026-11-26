@@ -1,0 +1,130 @@
+module Sable.Math
+
+// Interpolation, periodic values and angles, of any float, F16 and BF16 too.
+// Linear interpolation itself is the floats' own method, 'a.lerp(to: b, by: t)',
+// as it is the vectors'. None of these traps: a NaN gives a NaN.
+
+/// The number held within 0...1; NaN for a NaN. Other bounds are `clamp`'s.
+///
+/// ```sable
+/// assert(saturate(1.5) == 1.0)
+/// assert(saturate(-0.5 as F32) == 0.0)
+/// ```
+public fn saturate<T: FloatingPoint>(_ value: T) -> T => clamp(value, T.zero, T.one)
+
+/// How far along the way between two numbers the value is, 0 at 'from' and 1
+/// at 'to': what `lerp` would need to give it, and not held within 0...1. Zero
+/// where the two are the same.
+///
+/// ```sable
+/// assert(inverseLerp(12.5, from: 10.0, to: 20.0) == 0.25)
+/// assert(inverseLerp(5.0, from: 10.0, to: 20.0) == -0.5)
+/// ```
+public fn inverseLerp<T: FloatingPoint>(_ value: T, from: T, to: T) -> T {
+    return from == to ? T.zero : (value - from) / (to - from)
+}
+
+/// The value where it is as far between one pair of numbers as it was between
+/// another. Neither pair has to be in order, and the value may be outside
+/// them; where the first two are the same, the result is the second's first.
+///
+/// ```sable
+/// assert(remap(5.0, from: (0.0, 10.0), to: (100.0, 200.0)) == 150.0)
+/// assert(remap(0.25, from: (0.0, 1.0), to: (4.0, 0.0)) == 3.0)
+/// ```
+public fn remap<T: FloatingPoint>(_ value: T, from: (T, T), to: (T, T)) -> T {
+    return to.0.lerp(to: to.1, by: inverseLerp(value, from: from.0, to: from.1))
+}
+
+/// How far along the way between two numbers the value is, held within 0...1
+/// and eased so that it starts and ends with no speed: 3t² - 2t³.
+///
+/// ```sable
+/// assert(smoothStep(0.25) == 0.15625)
+/// assert(smoothStep(15.0, from: 10.0, to: 20.0) == 0.5)
+/// ```
+public fn smoothStep<T: FloatingPoint>(_ value: T, from: T = T.zero, to: T = T.one) -> T {
+    let t = saturate(inverseLerp(value, from: from, to: to))
+    return t * t * (T.converting(3) - t * T.converting(2))
+}
+
+/// How far along the way between two numbers the value is, held within 0...1
+/// and eased so that it starts and ends with neither speed nor acceleration:
+/// 6t⁵ - 15t⁴ + 10t³.
+///
+/// ```sable
+/// assert(smootherStep(0.25) == 0.103515625)
+/// assert(smootherStep(15.0, from: 10.0, to: 20.0) == 0.5)
+/// ```
+public fn smootherStep<T: FloatingPoint>(_ value: T, from: T = T.zero, to: T = T.one) -> T {
+    let t = saturate(inverseLerp(value, from: from, to: to))
+    return t * t * t * (t * (t * T.converting(6) - T.converting(15)) + T.converting(10))
+}
+
+/// The number wrapped into [0, length), as a clock's hand or a tiled texture's
+/// coordinate is: for a negative number too, unlike the remainder. Zero where
+/// the length is not above zero, and NaN for an infinity. An integer's is
+/// `remEuclid`.
+///
+/// ```sable
+/// assert(wrap(7.5, length: 5.0) == 2.5)
+/// assert(wrap(-1.0, length: 5.0) == 4.0)
+/// ```
+public fn wrap<T: FloatingPoint>(_ value: T, length: T) -> T {
+    if length <= T.zero {
+        return T.zero
+    }
+    let remainder = value.truncatingRemainder(dividingBy: length)
+    let wrapped = remainder < T.zero ? remainder + length : remainder
+    // Just under zero is the length itself, once rounded.
+    return wrapped == length ? T.zero : wrapped
+}
+
+/// The number going forth to the length and back to zero, over and over: in
+/// 0...length. Zero where the length is not above zero, and NaN for an infinity.
+///
+/// ```sable
+/// assert(pingPong(3.0, length: 5.0) == 3.0)
+/// assert(pingPong(7.0, length: 5.0) == 3.0)
+/// assert(pingPong(-1.0, length: 5.0) == 1.0)
+/// ```
+public fn pingPong<T: FloatingPoint>(_ value: T, length: T) -> T {
+    return length <= T.zero ? T.zero : length - (wrap(value, length: length + length) - length).abs()
+}
+
+/// The angle in radians, wrapped into (-π, π].
+///
+/// ```sable
+/// assert(wrapAngle(1.0) == 1.0)
+/// assert(wrapAngle(F64.pi) == F64.pi)
+/// assert(wrapAngle(-F64.pi) == F64.pi)
+/// ```
+public fn wrapAngle<T: FloatingPoint>(_ radians: T) -> T {
+    let wrapped = radians.remainder(dividingBy: T.tau)
+    return wrapped <= -T.pi ? wrapped + T.tau : wrapped
+}
+
+/// The shortest turn from one angle to another, in radians, in (-π, π]:
+/// 'from + deltaAngle(from: from, to: to)' is the same direction as 'to'.
+///
+/// ```sable
+/// assert(deltaAngle(from: 0.0, to: 1.0) == 1.0)
+/// assert((deltaAngle(from: 3.0, to: -3.0) - (F64.tau - 6.0)).abs() < 1e-12)
+/// ```
+public fn deltaAngle<T: FloatingPoint>(from: T, to: T) -> T => wrapAngle(to - from)
+
+/// The number moved toward another by at most a step, never past it. A
+/// negative step moves away.
+///
+/// ```sable
+/// assert(moveTowards(0.0, target: 10.0, by: 3.0) == 3.0)
+/// assert(moveTowards(9.0, target: 10.0, by: 3.0) == 10.0)
+/// assert(moveTowards(0.0, target: -10.0, by: 3.0) == -3.0)
+/// ```
+public fn moveTowards<T: FloatingPoint>(_ value: T, target: T, by step: T) -> T {
+    let distance = target - value
+    if value == target || distance.abs() <= step {
+        return target
+    }
+    return distance < T.zero ? value - step : value + step
+}

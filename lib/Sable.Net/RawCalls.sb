@@ -1,0 +1,35 @@
+module Sable.Net
+
+// What RawSocket, Ping, NetworkChange and NetworkStatistics call in the
+// runtime (runtime/ipc.c), past the builtins the other sockets use.
+
+@extern("c", "sable_net_raw")
+fn openRawSocket(_ family: Int, _ protocolNumber: Int, _ raw: Bool) -> Int
+
+@extern("c", "sable_net_icmp_error")
+unsafe fn takeIcmpError(_ socket: Int, _ into: RawPtr<Int>, _ bytes: RawPtr<U8>, _ size: Int) -> Int
+
+@extern("c", "sable_net_ping")
+unsafe fn pingBySystem(_ family: Int, _ high: Int, _ low: Int, _ scope: Int, _ timeout: Int, _ hops: Int, _ dontFragment: Bool, _ bytes: RawPtr<U8>,
+    _ size: Int, _ into: RawPtr<Int>) -> Bool
+
+@extern("c", "sable_net_changes_open")
+fn openChanges() -> Int
+
+@extern("c", "sable_net_changes_event")
+fn changesEvent(_ watch: Int) -> Int
+
+@extern("c", "sable_net_changes_drain")
+fn drainChanges(_ watch: Int)
+
+@extern("c", "sable_net_changes_close")
+fn closeChanges(_ watch: Int)
+
+@extern("c", "sable_net_connections")
+fn listConnections(_ protocolNumber: Int) -> Int
+
+@extern("c", "sable_net_connection")
+fn connectionPart(_ row: Int, _ part: Int) -> Int
+
+@extern("c", "sable_net_counters")
+unsafe fn protocolCounters(_ protocolNumber: Int, _ counters: RawPtr<Int>) -> Bool

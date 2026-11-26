@@ -1,12 +1,18 @@
 module Sable.Net
 
 /// An address of an interface's, and its network.
+@derive(Equatable, Hashable, Debug)
 public struct InterfaceAddress {
     /// The address.
     public let address: IpAddress
 
     /// How many of its bits are its network's.
     public let prefixLength: Int
+
+    public init(address: IpAddress, prefixLength: Int) {
+        self.address = address
+        self.prefixLength = prefixLength
+    }
 
     /// The network it is in.
     public var network: IpNetwork => IpNetwork(containing: address, prefixLength: prefixLength)

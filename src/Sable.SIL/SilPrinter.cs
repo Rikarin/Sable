@@ -224,6 +224,7 @@ public static class SilPrinter {
             TupleType tuple => tuple.Elements,
             ArrayType array => [array.Element],
             SliceType slice => [slice.Element],
+            FixedArrayType fixedArray => [fixedArray.Element],
             WeakStorageType weak => [weak.Optional],
             UnownedStorageType unowned => [unowned.Referent],
             _ => [],

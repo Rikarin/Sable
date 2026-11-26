@@ -16,5 +16,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <!-- TensorPrimitives, for tensor-primitives: a NuGet package, not in the box. -->
     <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
+    <!-- Crc32, Crc64, Adler32 and the xxHashes, for hashing: a NuGet package too. -->
+    <PackageReference Include="System.IO.Hashing" Version="11.0.0" />
   </ItemGroup>
 </Project>

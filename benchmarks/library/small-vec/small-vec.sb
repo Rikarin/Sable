@@ -1,0 +1,50 @@
+module SmallVecBench
+
+import Sable.Collections
+import Sable.Testing
+
+// A million short lists, one to eight Ints each, made, grown, changed and
+// read: in a SmallVec<Int, 8>, an ArrayVec<Int, 8> and an
+// InlineArray<Int, 8>. Each keeps its elements inline (#27, #304), so
+// within its room none of this allocates: '0 allocations / iter'.
+
+fn run() -> String {
+    var total = 0
+    for i in 0..<1000000 {
+        let n = i % 8 + 1
+        var small = SmallVec<Int, 8>()
+        var bounded = ArrayVec<Int, 8>()
+        var fixed: InlineArray<Int, 8> = [0, 0, 0, 0, 0, 0, 0, 0]
+        for k in 0..<n {
+            small.append(i + k)
+            bounded.append(i - k)
+            fixed[k] = i * k
+        }
+
+        if n < 8 {
+            small.insert(n, at: 0)
+        }
+        _ = bounded.swapRemove(at: 0)
+        fixed.swapAt(0, n - 1)
+        for x in small {
+            total = total &+ x
+        }
+
+        for x in bounded {
+            total = total &+ x
+        }
+
+        if fixed.contains(element: i) {
+            total = total &+ 1
+        }
+
+        total = total &+ fixed[0] &+ small.count &+ bounded.count
+    }
+
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
+}

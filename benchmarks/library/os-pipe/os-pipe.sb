@@ -1,0 +1,36 @@
+module OsPipeBench
+
+import Sable.IO
+import Sable.Testing
+
+// An operating system pipe within one program: sixty-four million bytes
+// written to one end by a task and read from the other by another.
+
+fn run() async throws -> String {
+    let (reader, writer) = try OsPipe.create()
+    let writing = Task.spawn {
+        let bytes = U8[>..](repeating: 42, count: 64000)
+        for _ in 0..<1000 {
+            try! await writer.write(bytes)
+        }
+        writer.close()
+    }
+    var count = 0
+    var total = 0
+    while true {
+        let bytes = try await reader.read(upTo: 65536)
+        if bytes.isEmpty {
+            break
+        }
+        count += bytes.count
+        // One byte of the page: the bytes are there, and nothing else is timed.
+        total += Int(bytes[bytes.count / 2] - 42)
+    }
+    await writing.value
+    return "\(count) \(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { try! await run() })
+}

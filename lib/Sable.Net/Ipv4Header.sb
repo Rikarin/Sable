@@ -1,0 +1,95 @@
+module Sable.Net
+
+/// An IPv4 header (RFC 791), parsed from what a raw socket received, or
+/// built for one that sends its own (`RawSocket.setHeaderIncluded`). Its
+/// options are kept as bytes.
+///
+/// ```sable
+/// let header = Ipv4Header(ipProtocol: .icmp, source: .v4Loopback, destination: .v4Loopback, payloadLength: 8, timeToLive: 1)
+/// let bytes = header.bytes()
+/// assert(bytes.count == 20 && bytes[0] == 0x45 && bytes[8] == 1 && InternetChecksum.of(bytes) == 0)
+/// let parsed = Ipv4Header.parse(bytes)!
+/// assert(parsed.totalLength == 28 && parsed.source == IpAddress.v4Loopback)
+/// ```
+@derive(Equatable, Debug)
+public struct Ipv4Header {
+    /// Differentiated services and congestion's bits: what was the type of
+    /// service.
+    public var typeOfService: Int = 0
+    /// The datagram's whole length, this header's included.
+    public var totalLength: Int
+    /// What its fragments share.
+    public var identification: Int = 0
+    /// Whether it may not be broken up on the way.
+    public var dontFragment: Bool = false
+    /// Whether more fragments follow this one.
+    public var moreFragments: Bool = false
+    /// Where this fragment's bytes go, in eights.
+    public var fragmentOffset: Int = 0
+    /// How many routers it may yet pass.
+    public var timeToLive: Int = 64
+    /// What it carries.
+    public var ipProtocol: IpProtocol
+    /// Its checksum, as it came; `bytes` computes it.
+    public var checksum: Int = 0
+    /// Who sent it.
+    public var source: IpAddress
+    /// Whom it is for.
+    public var destination: IpAddress
+    /// Its options, a multiple of four bytes, as they are.
+    public var options: U8[>..] = []
+
+    /// A header for a payload of the length.
+    public init(ipProtocol: IpProtocol, source: IpAddress, destination: IpAddress, payloadLength: Int, timeToLive: Int = 64) {
+        self.ipProtocol = ipProtocol
+        self.source = source
+        self.destination = destination
+        self.totalLength = 20 + payloadLength
+        self.timeToLive = timeToLive
+    }
+
+    /// How many bytes it is: 20 and its options.
+    public var headerLength: Int => 20 + options.count
+
+    /// The header as it is sent, its checksum computed.
+    public fn bytes() -> U8[>..] {
+        let words = headerLength / 4
+        let flags = (dontFragment ? 0x4000 : 0) | (moreFragments ? 0x2000 : 0) | (fragmentOffset & 0x1FFF)
+        var all: U8[>..] = [U8(0x40 | (words & 0xF)), U8(typeOfService & 0xFF), U8(totalLength >> 8 & 0xFF), U8(totalLength & 0xFF),
+            U8(identification >> 8 & 0xFF), U8(identification & 0xFF), U8(flags >> 8), U8(flags & 0xFF), U8(timeToLive & 0xFF),
+            U8(ipProtocol.number), 0, 0]
+        all.append(contentsOf: source.bytes)
+        all.append(contentsOf: destination.bytes)
+        all.append(contentsOf: options)
+        let sum = InternetChecksum.of(all)
+        all[10] = U8(sum >> 8)
+        all[11] = U8(sum & 0xFF)
+        return all
+    }
+
+    /// The header the bytes begin with; none for what is not IPv4's, or is
+    /// shorter than its header says.
+    public static fn parse(_ bytes: U8[:]) -> Ipv4Header? {
+        if bytes.count < 20 || bytes[0] >> 4 != 4 {
+            return none
+        }
+        let length = Int(bytes[0] & 0xF) * 4
+        if length < 20 || bytes.count < length {
+            return none
+        }
+        let source = IpAddress(bytes[12], bytes[13], bytes[14], bytes[15])
+        let destination = IpAddress(bytes[16], bytes[17], bytes[18], bytes[19])
+        var header = Ipv4Header(ipProtocol: IpProtocol(number: Int(bytes[9])), source: source, destination: destination, payloadLength: 0)
+        let flags = Int(bytes[6]) << 8 | Int(bytes[7])
+        header.typeOfService = Int(bytes[1])
+        header.totalLength = Int(bytes[2]) << 8 | Int(bytes[3])
+        header.identification = Int(bytes[4]) << 8 | Int(bytes[5])
+        header.dontFragment = (flags & 0x4000) != 0
+        header.moreFragments = (flags & 0x2000) != 0
+        header.fragmentOffset = flags & 0x1FFF
+        header.timeToLive = Int(bytes[8])
+        header.checksum = Int(bytes[10]) << 8 | Int(bytes[11])
+        header.options = bytes[20..<length].toArray()
+        return header
+    }
+}

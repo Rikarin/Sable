@@ -1,0 +1,11 @@
+module Sable.IO.Ports
+
+/// How either end of a serial line says to wait.
+public enum FlowControl {
+    /// It does not.
+    None
+    /// By the RTS and CTS lines: hardware's.
+    RtsCts
+    /// By the XON and XOFF characters in the data: software's.
+    XonXoff
+}

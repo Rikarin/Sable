@@ -1,0 +1,73 @@
+module Sable.IO.Hashing
+
+/// A 32-bit cyclic redundancy check: IEEE 802.3's by default, the checksum of
+/// gzip, zip and PNG, or Castagnoli's (CRC-32C). Eight bytes a step by
+/// tables, and where the processor multiplies without carries (x86-64's
+/// PCLMULQDQ, AArch64's PMULL) sixty-four, folded.
+///
+/// ```sable
+/// assert(Crc32.hash("123456789".utf8Bytes()) == 0xCBF43926)
+/// assert(Crc32.hash("123456789".utf8Bytes(), polynomial: .Castagnoli) == 0xE3069283)
+/// var crc = Crc32()
+/// crc.update(utf8: "12345")
+/// crc.update(utf8: "6789")
+/// assert(crc.value == 0xCBF43926)
+/// assert(crc.hashBytes() == [0x26, 0x39, 0xF4, 0xCB])
+/// ```
+public struct Crc32: NonCryptographicHash {
+    var state: U32
+    let kind: Int
+
+    /// Which CRC-32 it is.
+    public let polynomial: Crc32Polynomial
+
+    /// IEEE 802.3's, with nothing given yet.
+    public init() {
+        self.init(.Ieee)
+    }
+
+    /// The polynomial's, with nothing given yet.
+    public init(_ polynomial: Crc32Polynomial) {
+        self.polynomial = polynomial
+        kind = polynomial == .Ieee ? crc32Kind : crc32cKind
+        state = 0xFFFF_FFFF
+    }
+
+    /// Four bytes.
+    public static var hashByteCount: Int => 4
+
+    /// The CRC of every byte given so far.
+    public var value: U32 => ~state
+
+    /// The CRC of the bytes, at once.
+    public static fn hash(_ bytes: U8[:], polynomial: Crc32Polynomial = .Ieee) -> U32 {
+        var crc = Crc32(polynomial)
+        crc.update(bytes)
+        return crc.value
+    }
+
+    public mutating fn update(_ bytes: U8[:]) {
+        let kind = self.kind
+        let before = state unchecked as U64
+        let after = bytes.withPointer { (start: RawPtr<U8>) -> U64 in
+            unsafe {
+                return crcAdvance(kind, before, start.address, bytes.count)
+            }
+        }
+        state = after unchecked as U32
+    }
+
+    /// The bytes at an address, after those already given: for the library's
+    /// codecs, which work in memory of their own.
+    package unsafe mutating fn update(at address: Int, count: Int) {
+        state = crcAdvance(kind, state unchecked as U64, address, count) unchecked as U32
+    }
+
+    public mutating fn reset() {
+        state = 0xFFFF_FFFF
+    }
+
+    /// The CRC as four bytes, the least significant first, as gzip and zip
+    /// store it.
+    public fn hashBytes() -> U8[>..] => value.littleEndianBytes()
+}

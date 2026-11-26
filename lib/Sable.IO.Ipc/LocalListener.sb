@@ -1,0 +1,185 @@
+module Sable.IO.Ipc
+
+import Sable.IO
+import Sable.Net
+
+/// A server of local streams, by a name that programs on this machine
+/// connect to (`LocalStream.connect`): a Unix domain socket on macOS and
+/// Linux, a named pipe (`\\.\pipe\name`) on Windows. .NET's
+/// `NamedPipeServerStream`, Rust's `interprocess` local sockets.
+///
+/// By default only this user's programs may connect (`LocalAccess`). The
+/// name is up to 64 letters, digits, '.', '_' and '-'. Deeply immutable, so
+/// Sendable; one task at a time accepts.
+///
+/// ```sable
+/// fn echo() async throws(IoError) {
+///     let server = try LocalListener.bind(name: "sable-echo-example")
+///     let serving = Task.spawn { () -> Bool in
+///         let connection = try! await server.accept()
+///         try! await connection.write(try! await connection.read(upTo: 5))
+///         return true
+///     }
+///     let client = try await LocalStream.connect(name: "sable-echo-example")
+///     try await client.write("hello".utf8.toArray())
+///     assert(String.fromUtf8Lossy(try await client.read(upTo: 5)) == "hello")
+///     assert(await serving.value)
+/// }
+/// ```
+@immutable
+public final class LocalListener: Sendable {
+    /// The name it was bound by.
+    public let name: String
+
+    /// Where it is: the socket's path, or the named pipe's.
+    public let path: String
+
+    /// Who may connect.
+    public let access: LocalAccess
+
+    /// Whether, on Windows, what each write sends is read as one message.
+    public let messages: Bool
+
+    let unix: UnixListener?
+    // Windows: the instance of the pipe a client connects to next.
+    let instance: Atomic<Int>
+
+    init(name: String, path: String, access: LocalAccess, messages: Bool, unix: UnixListener?, instance: Int) {
+        self.name = name
+        self.path = path
+        self.access = access
+        self.messages = messages
+        self.unix = unix
+        self.instance = Atomic<Int>(instance)
+    }
+
+    deinit {
+        close()
+    }
+
+    /// Listening by the name: AddressInUse while another server has it. A
+    /// socket's file left by a server that ended is taken over. `messages`
+    /// keeps each write whole for its reader, which Windows' named pipes
+    /// alone do: elsewhere it throws Unsupported.
+    public static fn bind(name: String, access: LocalAccess = .CurrentUserOnly, messages: Bool = false) throws(IoError) -> LocalListener {
+        try checkName(name, most: 64)
+        #if os(windows)
+        let flags = (access == .CurrentUserOnly ? 1 : 0) + (messages ? 2 : 0)
+        let handle = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
+            unsafe {
+                return localListen(at, count, flags, true)
+            }
+        }
+        if handle == 0 {
+            throw IoError.lastSystemError(name)
+        }
+        return LocalListener(name: name, path: "\\\\.\\pipe\\\(name)", access: access, messages: messages, unix: none, instance: handle)
+        #else
+        if messages {
+            throw IoError.Unsupported(what: "a local stream of messages")
+        }
+        let path = try LocalListener.socketPath(name, access)
+        var listener: UnixListener? = none
+        do {
+            listener = try UnixListener.bind(path)
+        } catch .AddressInUse(_) {
+            if !LocalListener.isLeftOver(path) {
+                throw IoError.AddressInUse(address: name)
+            }
+            listener = try UnixListener.bind(path, replacing: true)
+        }
+        if access == .AnyUser {
+            try File.setPermissions(path, FilePermissions(mode: 0o666))
+        }
+        return LocalListener(name: name, path: path, access: access, messages: false, unix: listener, instance: 0)
+        #endif
+    }
+
+    // Where a name's socket is.
+    static fn socketPath(_ name: String, _ access: LocalAccess) throws(IoError) -> String {
+        return "\(try localDirectory(anyUser: access == .AnyUser))/\(name).socket"
+    }
+
+    // Whether the socket at the path is one no server listens by any more.
+    static fn isLeftOver(_ path: String) -> Bool {
+        let probe = Runtime.connect(1, 0, 0, 0, 0, path)
+        if probe != 0 {
+            Runtime.closeSocket(probe)
+            return false
+        }
+        return Runtime.socketError() == 2
+    }
+
+    /// The next client, waiting until one connects. A task cancelled while
+    /// it waits throws Cancelled. Of a listener for this user alone, a
+    /// client of another user is let go of, not given.
+    public fn accept() async throws(IoError) -> LocalStream {
+        #if os(windows)
+        while true {
+            let handle = instance.load()
+            if handle == 0 {
+                throw IoError.Disconnected
+            }
+            let result = localAccept(handle)
+            if result == 0 {
+                // The next client connects to another instance, made first.
+                let flags = (access == .CurrentUserOnly ? 1 : 0) + (messages ? 2 : 0)
+                let next = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
+                    unsafe {
+                        return localListen(at, count, flags, false)
+                    }
+                }
+                if next == 0 {
+                    throw IoError.lastSystemError(name)
+                }
+                if !instance.compareExchange(expected: handle, desired: next).exchanged {
+                    Runtime.closeSocket(next)
+                }
+                let writer = localWriter(handle)
+                if writer == 0 {
+                    Runtime.closeSocket(handle)
+                    throw IoError.lastSystemError(name)
+                }
+                return LocalStream(unix: none, reader: handle, writer: writer, server: true)
+            }
+            if result == 2 {
+                throw IoError.lastSystemError(name)
+            }
+            if Task.isCancelled {
+                throw IoError.Cancelled
+            }
+            await Runtime.waitForSocket(handle, writable: false)
+        }
+        #else
+        while true {
+            let connection = try await unix!.accept()
+            if access == .AnyUser {
+                return LocalStream(unix: connection, reader: 0, writer: 0, server: true)
+            }
+            let peer = try connection.peerCredentials()
+            if peer.userId == PeerCredentials.currentUserId {
+                return LocalStream(unix: connection, reader: 0, writer: 0, server: true)
+            }
+            connection.close()
+        }
+        #endif
+    }
+
+    /// Stops listening: a task waiting in 'accept' wakes and throws. The
+    /// socket's file is removed.
+    public fn close() {
+        #if os(windows)
+        let handle = instance.exchange(0)
+        if handle != 0 {
+            Runtime.closeSocket(handle)
+        }
+        #else
+        if let listener = unix {
+            if instance.exchange(-1) == 0 {
+                try? File.remove(path)
+            }
+            listener.close()
+        }
+        #endif
+    }
+}

@@ -98,9 +98,9 @@ fn roundingIsByComponent() {
 
 @test
 fn itIsInterpolatedInALine() {
-    assertEqual(a.lerp(to: b, 0), a)
-    assertEqual(Vector2.zero.lerp(to: Vector2.one * 4, 0.5), Vector2.one * 2)
-    assertEqual(Vector2.zero.lerp(to: Vector2.one, 2), Vector2.one * 2)
+    assertEqual(a.lerp(to: b, by: 0), a)
+    assertEqual(Vector2.zero.lerp(to: Vector2.one * 4, by: 0.5), Vector2.one * 2)
+    assertEqual(Vector2.zero.lerp(to: Vector2.one, by: 2), Vector2.one * 2)
 }
 
 @test

@@ -1,0 +1,99 @@
+module HashingConformance
+
+// Answers what run.py asks of Sable.IO.Hashing: a request a line, the hash's
+// name, its seed (decimal), how many bytes of xxHash's sanity buffer, and how
+// many a piece to give it in (0: at once). The answer is the hash in hex.
+
+import Sable.IO
+import Sable.IO.Hashing
+
+/// xxHash's sanity buffer (tests/sanity_test.c): each byte the top of a
+/// product, multiplied on by PRIME64 a byte.
+fn sanityBuffer(_ count: Int) -> U8[>..] {
+    var bytes = U8[>..](repeating: 0, count: count)
+    var generator: U64 = 2654435761
+    var i = 0
+    while i < count {
+        bytes[i] = U8(generator >> 56)
+        generator = generator &* 11400714785074694797
+        i += 1
+    }
+    return bytes
+}
+
+fn fed<H: NonCryptographicHash>(_ hash: inout H, _ bytes: U8[>..], _ piece: Int) {
+    var at = 0
+    var size = piece
+    while at < bytes.count {
+        let end = at + size < bytes.count ? at + size : bytes.count
+        hash.update(bytes[at..<end])
+        at = end
+        size = size * 7 % 293 + 1
+    }
+}
+
+fn answer(_ name: String, _ seed: U64, _ bytes: U8[>..], _ piece: Int) -> String {
+    if piece == 0 {
+        return match name {
+            case "xxh32"     => "\(XxHash32.hash(bytes, seed: seed unchecked as U32):x)"
+            case "xxh64"     => "\(XxHash64.hash(bytes, seed: seed):x)"
+            case "xxh3"      => "\(XxHash3.hash(bytes, seed: seed):x)"
+            case "xxh128"    => "\(XxHash128.hash(bytes, seed: seed):x)"
+            case "crc32"     => "\(Crc32.hash(bytes):x)"
+            case "crc32c"    => "\(Crc32.hash(bytes, polynomial: .Castagnoli):x)"
+            case "crc64"     => "\(Crc64.hash(bytes):x)"
+            case "crc64nvme" => "\(Crc64.hash(bytes, polynomial: .Nvme):x)"
+            case _           => "\(Adler32.hash(bytes):x)"
+        }
+    }
+    switch name {
+        case "xxh32":
+            var hash = XxHash32(seed: seed unchecked as U32)
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "xxh64":
+            var hash = XxHash64(seed: seed)
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "xxh3":
+            var hash = XxHash3(seed: seed)
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "xxh128":
+            var hash = XxHash128(seed: seed)
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "crc32":
+            var hash = Crc32()
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "crc32c":
+            var hash = Crc32(.Castagnoli)
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "crc64":
+            var hash = Crc64()
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        case "crc64nvme":
+            var hash = Crc64(.Nvme)
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+        default:
+            var hash = Adler32()
+            fed(&hash, bytes, piece)
+            return "\(hash.value:x)"
+    }
+}
+
+@main
+fn main() {
+    let buffer = sanityBuffer(70_000)
+    while let line = Console.readLine() {
+        let parts = line.split(separator: ' ').map { String($0) }
+        let seed = try! U64.parse(parts[1])
+        let count = try! Int.parse(parts[2])
+        let piece = try! Int.parse(parts[3])
+        print(answer(parts[0], seed, buffer[0..<count].toArray(), piece))
+    }
+}

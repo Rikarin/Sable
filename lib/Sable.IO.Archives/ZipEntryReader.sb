@@ -2,6 +2,7 @@ module Sable.IO.Archives
 
 import Sable.IO
 import Sable.IO.Compression
+import Sable.IO.Hashing
 
 /// A zip entry's bytes, decompressed as they are read. At their end, that they
 /// are as many as the archive says, and have the CRC-32 it says, is checked.

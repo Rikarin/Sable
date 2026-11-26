@@ -1,5 +1,7 @@
 module Sable.Process
 
+import Sable.IO
+
 /// What one of a child's standard streams is: Rust's `Stdio`.
 public union Stdio {
     /// This program's own.
@@ -11,6 +13,21 @@ public union Stdio {
     /// The file: read from its start, or made and emptied to be written.
     /// Output and errors to one file are written to it in order.
     File(path: String)
+    /// An end of an operating system pipe (`OsPipe.toChild`, `fromChild`,
+    /// `betweenChildren`): the child has a copy of it, and this program
+    /// closes its own once the child is started, or the pipe's other end
+    /// never reads to its end.
+    Pipe(end: PipeEnd)
+
+    // platform.h's STDIO_ kinds; a pipe's end is one, its handle the path.
+    var isPipe: Bool {
+        get {
+            return match self {
+                case .Pipe(_) => true
+                case _        => false
+            }
+        }
+    }
 
     // platform.h's STDIO_ kinds.
     var kind: Int {
@@ -20,6 +37,7 @@ public union Stdio {
                 case .Null    => 1
                 case .Piped   => 2
                 case .File(_) => 3
+                case .Pipe(_) => 3
             }
         }
     }
@@ -28,6 +46,7 @@ public union Stdio {
         get {
             return match self {
                 case .File(let path) => path
+                case .Pipe(let end)  => "\(end.handle)"
                 case _               => ""
             }
         }

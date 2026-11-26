@@ -1,0 +1,122 @@
+module HashingSupport
+
+// What Sable.IO.Hashing's tests are written with: xxHash's sanity buffer, and
+// each hash of its first so many bytes, as xxHash's own code (Python's xxhash
+// 3.7), zlib (Adler-32) and a CRC computed a bit at a time from the CRC
+// catalogue's parameters (tools/conformance/hashing/run.py) give them.
+// tools/conformance/hashing runs every length to 4160.
+
+import Sable.IO.Hashing
+import Sable.Testing
+
+/// xxHash's sanity buffer (tests/sanity_test.c): each byte the top of a
+/// product, multiplied on by PRIME64 a byte.
+public fn sanityBuffer(_ count: Int) -> U8[>..] {
+    var bytes = U8[>..](repeating: 0, count: count)
+    var generator: U64 = 2654435761
+    var i = 0
+    while i < count {
+        bytes[i] = U8(generator >> 56)
+        generator = generator &* 11400714785074694797
+        i += 1
+    }
+    return bytes
+}
+
+/// The lengths of the buffer the vectors are of.
+public let vectorLengths = [0, 1, 3, 4, 8, 9, 16, 17, 63, 64, 65, 128, 129, 240, 241, 1024, 1025, 4160]
+
+/// The seed of the seeded vectors: XXH32's its low half.
+public let vectorSeed: U64 = 0x9E37_79B1_85EB_CA8D
+
+/// Each hash, in hex, of the buffer's first bytes at each length, seed zero.
+public let vectors: [String: String[>..]] = [
+    "crc32": [
+        "0", "d202ef8d", "69cd14ac", "6ad68796", "3973ca98", "6930db44",
+        "464fd115", "869af775", "f93f2b8f", "12d245d", "3fbb4189", "d284fc4f",
+        "100794d6", "7521d582", "1a13aa3", "a3e050fe", "dc7a87ef", "b2a96579",
+    ],
+    "crc32c": [
+        "0", "527d5351", "f46028f1", "58ad8823", "2d7e9674", "7bc72cd8",
+        "991c1f55", "c650da6f", "b460ed0e", "97587c4e", "d31204ce", "bfd262a5",
+        "2546bc08", "51ae5d9", "2fd8cfd5", "d6eefce6", "42f57ac2", "3d52401e",
+    ],
+    "crc64": [
+        "0", "0", "b64ec7a0e3831b18", "1b181a3819f5102c", "4a0040d8f2a63545", "981d6f6199e6d89b",
+        "e2d92e0f857b8227", "9bdeee6ed2681193", "9ecdd11d9b6a3dbf", "7141331c6ce591e7", "a0e6a29caba7ad72", "32256684963f32e0",
+        "4b6982a801868371", "23659f6725ee0bbf", "85b2256224c36b1b", "aa8d36ef58c00660", "ea5b3f7da84cf1a1", "3f6ffc5e92c43151",
+    ],
+    "crc64nvme": [
+        "0", "d5da5047efec8728", "4d0cc47e2755b1a1", "47750eb00768e9d", "8845cbc69223e17c", "586c0c2eb9b6f5e",
+        "7b5887f227403430", "61c4af37130ed7cc", "c98bbe3fda72a28f", "bb590b18733b2ae3", "cde3e057fe635689", "a904ed3e9b7d2c09",
+        "49a5115696ef42da", "a7afda5de3eacefb", "3c3ee8f1aa8f586f", "9bd0453bf75fd7cc", "4a18c6a45a684fb", "35d359d3c3aa379a",
+    ],
+    "adler32": [
+        "1", "10001", "13900e5", "2b90180", "d950330", "10f2035d",
+        "347f06e6", "3c4807c9", "fed11fe8", "1fb020d0", "415d21ad", "4aaf40e9",
+        "8c8b41dc", "b4707e46", "33aa7f2b", "ef520479", "f4c1056f", "61e11e89",
+    ],
+    "xxh32": [
+        "2cc5d05", "cf65b03e", "c23884f5", "a9de7ce9", "a3f6f44b", "ffb82a24",
+        "93ba3759", "89fdc23e", "f1d48fdb", "2e95dbb", "16992b3d", "fd07b71",
+        "68c9ec37", "fa6b6557", "e5f7c54d", "c08e0a35", "75b3b8a1", "db0d9141",
+    ],
+    "xxh64": [
+        "ef46db3751d8e999", "e934a84adb052768", "ff7e1959cb50794a", "9136a0dca57457ee", "cdbcf538e71d1348", "554b1ae991eda6b6",
+        "98c90b57fdfcb55c", "d39a2d051a30c2c", "a9efbe0fa0f3f4e7", "ef558f8acac2b5cd", "de0f20dc2631af7a", "90ca021457d96dc5",
+        "41c280132d697aba", "b81838d483baee53", "95d76c8b4d8fc4d6", "4775bf7cace4d177", "847fa6006d7c2ac0", "eee6a4e2ac952a5e",
+    ],
+    "xxh3": [
+        "2d06800538d394c2", "c44bdff4074eecdb", "54247382a8d6b94d", "e5dc74bc51848a51", "24ccc9acaa9f65e4", "14d5001c15dd3f2b",
+        "981b17d36c7498c9", "796f5acd3a60f862", "83d74a75f2c2577a", "9cb48487720ec49d", "fd81aac4bebc3883", "fcff24126754d861",
+        "98f1b0a679a2ca29", "81c3c2b67f568ccf", "c5a639ecd2030e5e", "dd85c9b5c1109c5c", "d870c0fa13211c6a", "4f323b15321e94e1",
+    ],
+    "xxh128": [
+        "99aa06d3014798d86001c324468d497f", "a6cd5e9392000f6ac44bdff4074eecdb", "20efc49ff02422ea54247382a8d6b94d", "970d585ac632bf8e2e7d8d6876a39fe9", "47a7f080d82bb45664c69cab4bb21dc5", "564ef6078950d457ed7ccbc501eb7501",
+        "c68c368ecf8a9c05562980258a998629", "955fa78643ed3669abbc12d11973d7db", "7fc0ae04a6d2bb0b5e4cb79e9a8121d9", "6d90e81a9b0fd622efdb6a44690721a9", "6c074d65e54db85afe2f650fa500ec6e", "39992220e045260aebb15e34a7fb5ab1",
+        "3815fc91f1b30b686c9e3bc8f0a3b5c", "aa4202daa2769dc85c9aae94c8ebe5a0", "99a80ecf0ecfc647c5a639ecd2030e5e", "d30d24071c64c57dd85c9b5c1109c5c", "fd3ee4fe7f2954c6d870c0fa13211c6a", "67140711c1e3e3354f323b15321e94e1",
+    ],
+]
+
+/// The xxHashes of the same with the seed.
+public let seededVectors: [String: String[>..]] = [
+    "xxh32": [
+        "58efd0e", "66a77325", "dbbe960a", "e0b5e0d6", "bc306937", "bfe9250e",
+        "570c862c", "eb6e058d", "5afc9880", "33a1a8f3", "6d4ff516", "119293d5",
+        "4f7944a0", "4ce6db32", "fad8b9e6", "8937be05", "33e60335", "88172722",
+    ],
+    "xxh64": [
+        "b303d920ec349df", "9c6678669fcd2e6d", "281b7cbb86cc6a05", "ccfe4ead7e01983c", "768161b4e5a58dfa", "6a7ef24927b938a0",
+        "85446bba49cb7df1", "1dd902d73122eda0", "34c3933dc0040446", "f90d26fed8023d61", "7814174cd6405bee", "fcef9beb2ce440a6",
+        "aeb872c374eabf84", "7c3c8490fe0c1b94", "6bd0db4ef4123409", "cfbc5e785ff33ccd", "880172cbae03711f", "b84b336a3e27d9e3",
+    ],
+    "xxh3": [
+        "a8a6b918b2f0364a", "32be332dd766ef8", "634b8990b4976373", "aa2e7eccb0c8f747", "8f973410999b8f6b", "b3ae7333d9013f60",
+        "663f29333b4db6b1", "f3ec5067f4306db3", "c3ab9c8b53960dc7", "4fe8895db9b8c077", "ad80aeec1fc9e0a7", "73fde75280646649",
+        "21fffdbca099c844", "cc0f58c27ef3d8ee", "dda9b0a161d4829a", "ef368a8a2ebabaef", "96792bcf9af88519", "1bf6f5faf9eecabd",
+    ],
+    "xxh128": [
+        "feaa732a3ce25ea986dfc5d7605bfe", "20e49abcc53b3842032be332dd766ef8", "1c7ecf6a308cf00e634b8990b4976373", "3d53e5dfd837d927bfaf51f1e67e0b0f", "f50cec145bcd5c5a7b29471dc729b5ff", "6b380b43ffa61042aef5dfc0ac9f9044",
+        "6ffcb80cd33085c80346d13a7a5498c7", "d77681219e464828980a14119985a7df", "aec92695d77fea89c6ee481741654b12", "37b738968d40bda59405ba2affa95ceb", "72503a6fa8d07adb9d60c345e5c297cd", "a0f7ccb68ee02add8394f5c51f1d8246",
+        "ad559266067c0bf3d4aae26fcec7dc03", "29d2133d6ea58c5b604e98db085c1864", "ec64afae6a137582dda9b0a161d4829a", "17600efe2b493a18ef368a8a2ebabaef", "2c383949f57bf7e196792bcf9af88519", "ee430626ba3b2f3c1bf6f5faf9eecabd",
+    ],
+]
+
+/// The bytes given in pieces of the sizes, over and over, and the hash's value
+/// in hex after them.
+public fn inPieces<H: NonCryptographicHash>(_ hash: H, _ bytes: U8[:], _ sizes: Int[:], _ value: (H) -> String) -> String {
+    var hash = hash
+    var at = 0
+    var i = 0
+    while at < bytes.count {
+        let size = sizes[i % sizes.count]
+        let end = at + size < bytes.count ? at + size : bytes.count
+        hash.update(bytes[at..<end])
+        at = end
+        i += 1
+    }
+    return value(hash)
+}
+
+/// The piece sizes the incremental tests give bytes in.
+public let pieceSizes: Int[>..][>..] = [[1], [7], [16, 1, 31], [64], [100, 3], [255, 1, 2], [1024]]

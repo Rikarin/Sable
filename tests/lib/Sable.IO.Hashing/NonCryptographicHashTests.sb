@@ -1,0 +1,37 @@
+module NonCryptographicHashTests
+
+// NonCryptographicHash (Sable.IO.Hashing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO.Hashing
+
+import HashingSupport
+import Sable.IO.Hashing
+import Sable.Testing
+
+fn fingerprint<H: NonCryptographicHash>(_ parts: String[:], _ function: H.Type) -> U8[>..] {
+    var hash = H()
+    for part in parts {
+        hash.update(utf8: part)
+    }
+    return hash.hashBytes()
+}
+
+@test
+fn everyHashIsOneThroughTheProtocol() {
+    let parts = ["1234", "", "56789"]
+    let whole = "123456789".utf8Bytes()
+    expect(fingerprint(parts, Crc32.self) == Crc32.hashBytes(whole))
+    expect(fingerprint(parts, Crc64.self) == Crc64.hashBytes(whole))
+    expect(fingerprint(parts, Adler32.self) == Adler32.hashBytes(whole))
+    expect(fingerprint(parts, XxHash32.self) == XxHash32.hashBytes(whole))
+    expect(fingerprint(parts, XxHash64.self) == XxHash64.hashBytes(whole))
+    expect(fingerprint(parts, XxHash3.self) == XxHash3.hashBytes(whole))
+    expect(fingerprint(parts, XxHash128.self) == XxHash128.hashBytes(whole))
+}
+
+@test
+fn hashBytesIsTheValueInTheFormatsOrder() {
+    let whole = "123456789".utf8Bytes()
+    expect(XxHash64.hashBytes(whole) == XxHash64.hash(whole).bigEndianBytes())
+    expect(XxHash128.hashBytes(whole).count == XxHash128.hashByteCount)
+    expect(Crc32.hashBytes(whole) == Crc32.hash(whole).littleEndianBytes())
+}

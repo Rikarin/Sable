@@ -480,6 +480,13 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
                 return;
 
+            case (FixedArrayType inline, object?[] elements):
+                for (var i = 0; i < InlineCount(inline, elements); i++) {
+                    Retain(inline.Element, elements[i]);
+                }
+
+                return;
+
             case (SliceType slice, SliceValue view):
                 Retain(new ArrayType(slice.Element), view.Buffer);
                 return;
@@ -594,6 +601,13 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case (TupleType tuple, object?[] elements):
                 for (var i = 0; i < elements.Length; i++) {
                     Release(tuple.Elements[i], elements[i], depth);
+                }
+
+                return;
+
+            case (FixedArrayType inline, object?[] elements):
+                for (var i = 0; i < InlineCount(inline, elements); i++) {
+                    Release(inline.Element, elements[i], depth);
                 }
 
                 return;
@@ -1384,6 +1398,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     // =======================================================================
 
     object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
+        if (InlineArrayBuiltin(builtin, operands, depth, out var inlineResult)) {
+            return inlineResult;
+        }
+
         switch (builtin.Name) {
             // Counted as the native runtime counts it, so that a program
             // interpreted reports the coverage it would natively.
@@ -1564,8 +1582,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
                 return 0L;
 
-            case "crc32_raw":
-                return operands[0];
+            case "crc_available":
+                return false;
 
             // The library reads the system's files, as where the runtime has nothing.
             case "trust_load":

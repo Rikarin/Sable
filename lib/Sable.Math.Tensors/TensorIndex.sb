@@ -1,0 +1,41 @@
+module Sable.Math.Tensors
+
+/// What one dimension of a tensor is indexed by, as NumPy's basic indexing
+/// takes it: the whole of it, one place (which drops the dimension), a range
+/// with a step, or a new dimension of length one.
+///
+/// ```sable
+/// let t = Tensor<Int>(shape: [3, 4]) { $0[0] * 4 + $0[1] }
+/// let v = t[.All, .range(1..<3)]
+/// assert(v.shape == [3, 2] && v[2, 0] == 9)
+/// assert(t[.At(1), .step(2)].toArray() == [4, 6])
+/// ```
+@derive(Equatable, Debug)
+public union TensorIndex {
+    /// The whole dimension.
+    All
+
+    /// One place in it: the dimension is dropped. A negative place counts
+    /// from the end, as NumPy's does.
+    At(Int)
+
+    /// The places from `start` up to `end`, not included, `step` apart. A
+    /// negative start or end counts from the end; either is held to the
+    /// dimension, as NumPy's are. The step is positive.
+    Slice(start: Int, end: Int, step: Int)
+
+    /// A new dimension of length one, here: NumPy's `newaxis`.
+    NewAxis
+
+    /// The places in a range.
+    public static fn range(_ range: Range<Int>) -> TensorIndex => .Slice(start: range.lowerBound, end: range.upperBound, step: 1)
+
+    /// The places in a range, so many apart.
+    public static fn range(_ range: Range<Int>, step: Int) -> TensorIndex => .Slice(start: range.lowerBound, end: range.upperBound, step: step)
+
+    /// Every so many places of the whole dimension, from the first.
+    public static fn step(_ step: Int) -> TensorIndex => .Slice(start: 0, end: Int.max, step: step)
+
+    /// The places from one on.
+    public static fn from(_ start: Int) -> TensorIndex => .Slice(start: start, end: Int.max, step: 1)
+}

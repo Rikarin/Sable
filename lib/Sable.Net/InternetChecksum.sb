@@ -1,0 +1,42 @@
+module Sable.Net
+
+/// The Internet checksum (RFC 1071): the ones' complement of the ones'
+/// complement sum of 16-bit words, big-endian, an odd byte at the end
+/// padded with zero. What IPv4's header, ICMP and (over a pseudo-header)
+/// ICMPv6, TCP and UDP carry.
+///
+/// ```sable
+/// // RFC 1071's example's words: 0001 f203 f4f5 f6f7, summed to ddf2.
+/// assert(InternetChecksum.of([0x00, 0x01, 0xf2, 0x03, 0xf4, 0xf5, 0xf6, 0xf7]) == 0x220d)
+/// assert(InternetChecksum.of([0x00, 0x01, 0xf2, 0x03, 0xf4, 0xf5, 0xf6, 0xf7, 0x22, 0x0d]) == 0)
+/// ```
+public struct InternetChecksum {
+    /// The checksum of the bytes: 0 for bytes whose checksum is among them,
+    /// and right.
+    public static fn of(_ bytes: U8[:]) -> Int {
+        return InternetChecksum.finish(InternetChecksum.sum(bytes, 0))
+    }
+
+    // The bytes' words added to the sum, not yet folded.
+    static fn sum(_ bytes: U8[:], _ start: Int) -> Int {
+        var sum = start
+        var i = 0
+        while i + 1 < bytes.count {
+            sum += (Int(bytes[i]) << 8) | Int(bytes[i + 1])
+            i += 2
+        }
+        if i < bytes.count {
+            sum += Int(bytes[i]) << 8
+        }
+        return sum
+    }
+
+    // The sum folded to 16 bits, and complemented.
+    static fn finish(_ total: Int) -> Int {
+        var sum = total
+        while sum >> 16 != 0 {
+            sum = (sum & 0xFFFF) + (sum >> 16)
+        }
+        return ~sum & 0xFFFF
+    }
+}

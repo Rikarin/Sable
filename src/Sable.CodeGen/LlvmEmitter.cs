@@ -674,7 +674,8 @@ public sealed partial class LlvmEmitter {
                                 declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F64(ptr, i64, ptr, i64, i64, ptr, i64)
-                                declare i64 @sable_crc32(i64, ptr, i64)
+                                declare i64 @sable_crc_update(i64, i64, ptr, i64)
+                                declare zeroext i1 @sable_crc_available()
                                 declare i64 @sable_codec_bytes(i64, ptr, i64, i64, ptr, i64)
                                 declare i64 @sable_codec_string(i64, ptr, i64, i64, ptr, i64)
                                 declare i64 @sable_utf8_to_utf16(ptr, i64, i64, ptr, i64)
@@ -706,6 +707,12 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_append_repeating(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
+                                @sable_lent_array_metadata = external constant [80 x i8]
+                                declare ptr @sable_array_from_elements(ptr nocapture readonly, i64, ptr)
+                                declare void @sable_inline_rotate(ptr nocapture, i64, ptr, i64, i64, i64)
+                                declare void @sable_inline_truncate(ptr nocapture, ptr nocapture, ptr, i64)
+                                declare void @sable_inline_store_slice(ptr nocapture, i64, ptr, i64, i64, ptr, i64, i64)
+                                declare void @sable_inline_restore(ptr nocapture, i64, ptr, ptr, i64, i64)
                                 declare void @sable_array_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
                                 declare void @sable_slice_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
@@ -1044,9 +1051,7 @@ public sealed partial class LlvmEmitter {
 
         var body = new StringBuilder("define internal void @\"sable.globals.share\"() {\nentry:\n");
         foreach (var (name, type) in held) {
-            var value = $"%v{held.FindIndex(g => g.Name == name)}";
-            body.Append($"  {value} = load {Type(type)}, ptr {GlobalStorage(name)}{StorageAlign(type)}\n");
-            Ownership(body, "  ", Witnessing.Share, type, value);
+            OwnershipAt(body, Witnessing.Share, type, GlobalStorage(name), $"%v{held.FindIndex(g => g.Name == name)}");
         }
 
         body.Append("  ret void\n}\n\ndefine internal void @\"sable.globals.register\"() {\nentry:\n")
@@ -1098,6 +1103,8 @@ public sealed partial class LlvmEmitter {
             StructType structType => LayoutOf(structType).Llvm,
             TupleType tuple => LayoutOf(tuple).Llvm,
             SliceType slice => Type(slice.Parts),
+            FixedArrayType { IsBounded: true } bounded => $"{{ i64, [{bounded.Count} x {PartType(bounded.Element)}] }}",
+            FixedArrayType fixedArray => $"[{fixedArray.Count} x {PartType(fixedArray.Element)}]",
             EnumType enumType when IsNullable(enumType) => "ptr",
             EnumType enumType when Niche(enumType) is { } niche => NicheType(niche),
             EnumType enumType => Area(enumType) is { Count: > 0 } area
@@ -1112,6 +1119,32 @@ public sealed partial class LlvmEmitter {
     ///     <c>void</c>.
     /// </summary>
     static string PartType(SilType type) => type == SilType.Unit ? "{}" : Type(type);
+
+    /// <summary>
+    ///     True for a type whose values are held in memory, a value being the
+    ///     address of storage that holds it: one laid out at run time
+    ///     (<see cref="SilType.IsIndirect" />), and one holding an inline array
+    ///     (<see cref="SilType.IsInMemory" />), whose layout is known here but
+    ///     which is never an SSA value. <see cref="Type" /> is what its storage
+    ///     is; a value of it is a <c>ptr</c>.
+    /// </summary>
+    static bool Held(SilType type) => SilType.IsIndirect(type) || SilType.IsInMemory(type);
+
+    /// <summary>What a value of the type is in LLVM: the address of its storage for one held in memory.</summary>
+    static string ValueType(SilType type) => Held(type) ? "ptr" : Type(type);
+
+    /// <summary>A function whose result is held in memory (<see cref="Held" />): given where to write it, first.</summary>
+    static bool ReturnsInMemory(FunctionType type) => type.Result != SilType.Unit && SilType.IsInMemory(type.Result);
+
+    /// <summary>A throwing function whose error is held in memory: given where to write it, after the result's place.</summary>
+    static bool ThrowsInMemory(FunctionType type) => type.Thrown is { } thrown && SilType.IsInMemory(thrown);
+
+    /// <summary>
+    ///     The places a function is given before its parameters, for what it
+    ///     gives back held in memory: its result's, then its error's.
+    /// </summary>
+    static IEnumerable<string> ResultPlaces(FunctionType type) =>
+        (ReturnsInMemory(type) ? ["ptr noalias"] : Array.Empty<string>()).Concat(ThrowsInMemory(type) ? ["ptr noalias"] : []);
 
     /// <summary>
     ///     What a struct is laid out as: its fields, after a hidden byte for one
@@ -1131,12 +1164,16 @@ public sealed partial class LlvmEmitter {
     ///     <c>{ i1 thrown, result, error }</c> — the discriminated return of
     ///     docs/04 §2.2 — and the caller branches on the flag.
     /// </summary>
-    static string ReturnType(FunctionType type) =>
-        type.Thrown is not { } thrown
-            ? Type(type.Result)
-            : type.Result == SilType.Unit
-                ? $"{{ i1, {Type(thrown)} }}"
-                : $"{{ i1, {Type(type.Result)}, {Type(thrown)} }}";
+    static string ReturnType(FunctionType type) {
+        // One held in memory is written where the caller says, and is no part of what is returned.
+        var result = type.Result == SilType.Unit || ReturnsInMemory(type) ? null : Type(type.Result);
+        if (type.Thrown is not { } thrown) {
+            return result ?? "void";
+        }
+
+        var error = ThrowsInMemory(type) ? null : Type(thrown);
+        return $"{{ {string.Join(", ", new[] { "i1", result, error }.Where(static p => p is not null))} }}";
+    }
 
     // ---- Enum layout: TypeLayout's (a nullable reference, a niche, or a tag and a payload area) ----
 
@@ -1272,7 +1309,14 @@ public sealed partial class LlvmEmitter {
 
     void Ownership(StringBuilder output, string indent, Witnessing what, SilType type, string value, string dbg = "") {
         // Nothing to count in a value known to be null: the empty array, a none.
-        if (type.IsTrivial || value == "null") {
+        if (type.IsTrivial || value == "null" || SilType.IsBitwise(type)) {
+            return;
+        }
+
+        // One held in memory (an inline array, or what holds one): the value
+        // is where it is, and what it holds is copied or destroyed there.
+        if (SilType.IsInMemory(type)) {
+            output.Append(indent).Append($"call void {PlaceWitness(type, what)}(ptr {value}){dbg}\n");
             return;
         }
 
@@ -1308,6 +1352,146 @@ public sealed partial class LlvmEmitter {
         }
 
         output.Append(indent).Append($"call void {Witness(type, what)}({Type(type)} {value}){dbg}\n");
+    }
+
+    /// <summary>
+    ///     The function that copies, destroys or visits what a value held in
+    ///     memory holds, where it is (<see cref="SilType.IsInMemory" />): each
+    ///     element of an inline array — a bounded one's first count — each
+    ///     field of a struct or element of a tuple, the payload of an enum's
+    ///     case. Its copy is of what the bits already copied there refer to.
+    /// </summary>
+    string PlaceWitness(SilType type, Witnessing what) {
+        var name = $"@\"sable.{what.ToString().ToLowerInvariant()}.place.{Mangled(type)}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var body = new StringBuilder();
+        var temporaries = 0;
+        string Fresh() => $"%w{temporaries++}";
+        var llvmType = Type(type);
+        body.Append($"define internal void {name}(ptr %v) {{\nentry:\n");
+
+        void Part(SilType part, string at) {
+            if (SilType.IsBitwise(part)) {
+                return;
+            }
+
+            if (SilType.IsInMemory(part)) {
+                body.Append($"  call void {PlaceWitness(part, what)}(ptr {at})\n");
+                return;
+            }
+
+            var loaded = Fresh();
+            body.Append($"  {loaded} = load {Type(part)}, ptr {at}\n");
+            Ownership(body, "  ", what, part, loaded);
+        }
+
+        switch (type) {
+            case FixedArrayType array: {
+                // A loop over the elements: a bounded one's count is its first word.
+                var count = array.Count.ToString(CultureInfo.InvariantCulture);
+                var elements = "%v";
+                if (array.IsBounded) {
+                    body.Append($"  %count = load i64, ptr %v\n  %elements = getelementptr inbounds {llvmType}, ptr %v, i32 0, i32 1\n");
+                    count = "%count";
+                    elements = "%elements";
+                }
+
+                body.Append($"  %none = icmp sle i64 {count}, 0\n  br i1 %none, label %done, label %loop\n")
+                    .Append("loop:\n  %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n")
+                    .Append($"  %at = getelementptr inbounds {PartType(array.Element)}, ptr {elements}, i64 %i\n");
+                Part(array.Element, "%at");
+                body.Append($"  %next = add nuw nsw i64 %i, 1\n  %more = icmp slt i64 %next, {count}\n  br i1 %more, label %loop, label %done\n")
+                    .Append("done:\n  ret void\n");
+                break;
+            }
+
+            case StructType structType: {
+                // A move-only struct's deinit runs first, seeing it whole — if
+                // it is a value at all, and not storage a move emptied.
+                if (what == Witnessing.Destroy && structType.Deinit is { } deinit) {
+                    body.Append($"  %liveAt = getelementptr inbounds {llvmType}, ptr %v, i32 0, i32 0\n  %live = load i1, ptr %liveAt\n")
+                        .Append("  br i1 %live, label %value, label %empty\n")
+                        .Append("empty:\n  ret void\n")
+                        .Append("value:\n")
+                        .Append($"  call void @{Global(deinit)}(ptr %v)\n");
+                }
+
+                var parts = StructParts(structType).ToList();
+                var slots = LayoutOf(structType).Slots;
+                for (var i = 0; i < parts.Count; i++) {
+                    if (parts[i].IsTrivial) {
+                        continue;
+                    }
+
+                    var at = Fresh();
+                    body.Append($"  {at} = getelementptr inbounds {llvmType}, ptr %v, i32 0, i32 {slots[i]}\n");
+                    Part(parts[i], at);
+                }
+
+                body.Append("  ret void\n");
+                break;
+            }
+
+            case TupleType tuple: {
+                var slots = LayoutOf(tuple).Slots;
+                for (var i = 0; i < tuple.Elements.Length; i++) {
+                    if (tuple.Elements[i].IsTrivial) {
+                        continue;
+                    }
+
+                    var at = Fresh();
+                    body.Append($"  {at} = getelementptr inbounds {llvmType}, ptr %v, i32 0, i32 {slots[i]}\n");
+                    Part(tuple.Elements[i], at);
+                }
+
+                body.Append("  ret void\n");
+                break;
+            }
+
+            case EnumType enumType: {
+                // By case: the payload of each that holds references, where it is.
+                var tagType = TagType(enumType);
+                body.Append($"  %tag = load {tagType}, ptr %v\n  %area = getelementptr inbounds {llvmType}, ptr %v, i32 0, i32 1\n");
+                var arms = new StringBuilder();
+                var cases = new StringBuilder();
+                var saved = body;
+                for (var i = 0; i < enumType.Cases.Count; i++) {
+                    if (enumType.Cases[i].Payload is not { IsTrivial: false } payload) {
+                        continue;
+                    }
+
+                    arms.Append($" {tagType} {i}, label %case{i}");
+                    body = new StringBuilder();
+                    Part(payload, "%area");
+                    cases.Append($"case{i}:\n").Append(body).Append("  ret void\n");
+                }
+
+                body = saved;
+                body.Append($"  switch {tagType} %tag, label %done [{arms} ]\n").Append(cases).Append("done:\n  ret void\n");
+                break;
+            }
+
+            default:
+                throw new NotSupportedException($"no value witness in place for {type}");
+        }
+
+        body.Append("}\n\n");
+        _helpers.Append(body);
+        return name;
+    }
+
+    /// <summary>What a value at an address holds, copied, destroyed or visited: where it is for one held in memory, else loaded first (as <paramref name="loaded" />).</summary>
+    void OwnershipAt(StringBuilder body, Witnessing what, SilType type, string address, string loaded) {
+        if (SilType.IsInMemory(type)) {
+            Ownership(body, "  ", what, type, address);
+            return;
+        }
+
+        body.Append($"  {loaded} = load {Type(type)}, ptr {address}{StorageAlign(type)}\n");
+        Ownership(body, "  ", what, type, loaded);
     }
 
     /// <summary>The function that copies, destroys or visits a value of an aggregate type, written the first time it is needed.</summary>
@@ -1456,9 +1640,8 @@ public sealed partial class LlvmEmitter {
                 continue;
             }
 
-            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n")
-                .Append($"  %f{i} = load {Type(type.Fields[i].Type)}, ptr %a{i}\n");
-            Ownership(body, "  ", false, type.Fields[i].Type, $"%f{i}");
+            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n");
+            OwnershipAt(body, Witnessing.Destroy, type.Fields[i].Type, $"%a{i}", $"%f{i}");
         }
 
         body.Append("  ret void\n}\n\n");
@@ -1471,9 +1654,8 @@ public sealed partial class LlvmEmitter {
                 continue;
             }
 
-            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n")
-                .Append($"  %f{i} = load {Type(type.Fields[i].Type)}, ptr %a{i}\n");
-            Ownership(body, "  ", Witnessing.Visit, type.Fields[i].Type, $"%f{i}");
+            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n");
+            OwnershipAt(body, Witnessing.Visit, type.Fields[i].Type, $"%a{i}", $"%f{i}");
         }
 
         body.Append("  ret void\n}\n\n");
@@ -1537,7 +1719,7 @@ public sealed partial class LlvmEmitter {
 
             var name = symbol[SymbolPrefix.Length..];
             declarations.Append(unit.External.TryGetValue(name, out var type)
-                ? $"declare {ReturnType(type)} @{Global(name)}({string.Join(", ", type.Parameters.Select(static p => p is AddressType ? "ptr noalias" : Type(p)))})\n"
+                ? $"declare {ReturnType(type)} @{Global(name)}({string.Join(", ", ResultPlaces(type).Concat(type.Parameters.Select(static p => p is AddressType ? "ptr noalias" : p == SilType.Unit ? "{}" : ValueType(p))))})\n"
                 : $"declare void @{Global(name)}()\n");
         }
 
@@ -1586,7 +1768,23 @@ public sealed partial class LlvmEmitter {
         var element = type.Element;
         var llvmElement = Type(element);
         string copy = "null", destroy = "null", visit = "null";
-        if (!element.IsTrivial) {
+        if (SilType.IsInMemory(element) && !SilType.IsBitwise(element)) {
+            // Held in memory: copied, destroyed and visited where it is.
+            copy = $"@\"sable.elementcopy.{Mangled(element)}\"";
+            destroy = $"@\"sable.elementdestroy.{Mangled(element)}\"";
+            visit = $"@\"sable.elementvisit.{Mangled(element)}\"";
+            var held = new StringBuilder();
+            held.Append($"define internal void {copy}(ptr %d, ptr %s) {{\nentry:\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 {SizeOf(llvmElement)}, i1 false)\n");
+            Ownership(held, "  ", true, element, "%d");
+            held.Append("  ret void\n}\n\n");
+            held.Append($"define internal void {destroy}(ptr %e) {{\nentry:\n");
+            Ownership(held, "  ", false, element, "%e");
+            held.Append("  ret void\n}\n\n");
+            held.Append($"define internal void {visit}(ptr %e) {{\nentry:\n");
+            Ownership(held, "  ", Witnessing.Visit, element, "%e");
+            held.Append("  ret void\n}\n\n");
+            _helpers.Append(held);
+        } else if (!SilType.IsBitwise(element)) {
             copy = $"@\"sable.elementcopy.{Mangled(element)}\"";
             destroy = $"@\"sable.elementdestroy.{Mangled(element)}\"";
             visit = $"@\"sable.elementvisit.{Mangled(element)}\"";
@@ -2033,6 +2231,11 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>The size of an opaque type's values, read from its metadata where the function starts.</summary>
         string OpaqueSize(SilType type) {
+            // One held in memory whose layout is known: a constant.
+            if (!SilType.IsIndirect(type)) {
+                return $"ptrtoint (ptr getelementptr ({Type(type)}, ptr null, i32 1) to i64)";
+            }
+
             if (!_opaqueSizes.TryGetValue(type.ToString(), out var size)) {
                 var of = OpaqueMetadata(type);
                 var at = Fresh();
@@ -2051,6 +2254,13 @@ public sealed partial class LlvmEmitter {
         ///     so the frame does not grow as it runs.
         /// </summary>
         string OpaqueBuffer(SilType type) {
+            // One whose layout is known: storage of its type.
+            if (!SilType.IsIndirect(type)) {
+                var storage = Fresh();
+                _entryAllocas.Append($"  {storage} = alloca {Type(type)}, align {Math.Max(16, Align(type))}\n");
+                return storage;
+            }
+
             var size = OpaqueSize(type);
             var buffer = Fresh();
             _entryAllocas.Append($"  {buffer} = alloca i8, i64 {size}, align 16\n");
@@ -2111,7 +2321,7 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>A value stored into an element's place: an opaque one moved there.</summary>
         void StoreElement(SilType element, string value, string at) {
-            if (SilType.IsIndirect(element)) {
+            if (Held(element)) {
                 OpaqueMove(element, at, value);
             } else {
                 Line($"store {Type(element)} {value}, ptr {at}, !tbaa {TbaaOf(Type(element))}");
@@ -2486,6 +2696,32 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>One of an opaque type's value witnesses, called on its values' addresses and its metadata.</summary>
         void OpaqueWitness(SilType type, int witness, params string[] addresses) {
+            // One whose layout is known (an inline array, or what holds one):
+            // its bits moved, and what it holds copied or destroyed in place.
+            if (!SilType.IsIndirect(type)) {
+                switch (witness) {
+                    case CopyWitness:
+                        OpaqueMove(type, addresses[0], addresses[1]);
+                        Own(true, type, addresses[0]);
+                        return;
+                    case TakeWitness:
+                        OpaqueMove(type, addresses[0], addresses[1]);
+                        return;
+                    case AssignWitness:
+                        Own(true, type, addresses[1]);
+                        Own(false, type, addresses[0]);
+                        OpaqueMove(type, addresses[0], addresses[1]);
+                        return;
+                    case AssignWithTakeWitness:
+                        Own(false, type, addresses[0]);
+                        OpaqueMove(type, addresses[0], addresses[1]);
+                        return;
+                    case DestroyWitness:
+                        Own(false, type, addresses[0]);
+                        return;
+                }
+            }
+
             var metadata = OpaqueMetadata(type);
             var field = Fresh();
             var table = Fresh();
@@ -2567,8 +2803,17 @@ public sealed partial class LlvmEmitter {
                 _labels[function.Blocks[i]] = $"bb{i}";
             }
 
-            // Parameters are the entry block's arguments.
+            // Parameters are the entry block's arguments, after where a
+            // result or an error held in memory is to be written.
             var parameters = new List<string>();
+            if (ReturnsInMemory(function.Type)) {
+                parameters.Add("ptr noalias %result.place");
+            }
+
+            if (ThrowsInMemory(function.Type)) {
+                parameters.Add("ptr noalias %error.place");
+            }
+
             for (var i = 0; i < function.Entry.Arguments.Count; i++) {
                 var argument = function.Entry.Arguments[i];
                 _names[argument] = $"%p{i}";
@@ -2600,7 +2845,7 @@ public sealed partial class LlvmEmitter {
             foreach (var block in function.Blocks.Skip(1)) {
                 foreach (var argument in block.Arguments) {
                     // A block's opaque argument is a buffer of its own, which each edge moves the value into.
-                    if (argument.Type is var opaqueArgument && SilType.IsIndirect(opaqueArgument)) {
+                    if (argument.Type is var opaqueArgument && Held(opaqueArgument)) {
                         _names[argument] = OpaqueBuffer(opaqueArgument);
                         continue;
                     }
@@ -2700,6 +2945,9 @@ public sealed partial class LlvmEmitter {
                         // So is an inout parameter whose type's name has a type
                         // parameter in it, shown as the value.
                         declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, inout.Pointee, i + 1), "DW_OP_deref"));
+                    } else if (i < function.ParameterNames.Count && SilType.IsInMemory(argument.Type)) {
+                        // A value held in memory is given by its address.
+                        declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), "DW_OP_deref"));
                     } else if (i < function.ParameterNames.Count) {
                         declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), ""));
                     } else if (argument.Type == SilType.Object && ContextType(argument) is { } context) {
@@ -2729,8 +2977,8 @@ public sealed partial class LlvmEmitter {
                         continue;
                     }
 
-                    _entryAllocas.Append($"  {slot} = alloca {Type(argument.Type)}{StorageAlign(argument.Type)}\n")
-                        .Append($"  store {Type(argument.Type)} {_names[argument]}, ptr {slot}\n");
+                    _entryAllocas.Append(SilType.IsInMemory(argument.Type) ? $"  {slot} = alloca ptr\n" : $"  {slot} = alloca {Type(argument.Type)}{StorageAlign(argument.Type)}\n")
+                        .Append($"  store {ArgumentType(argument.Type)} {_names[argument]}, ptr {slot}\n");
                     foreach (var (variable, expression) in declarations) {
                         _entryAllocas.Append($"  call void @llvm.dbg.declare(metadata ptr {slot}, metadata {variable}, metadata !DIExpression({expression})){EntryLocation}\n");
                     }
@@ -3125,7 +3373,13 @@ public sealed partial class LlvmEmitter {
                     // zeros. One that holds without owning is never destroyed,
                     // so what it held before it is written is never read.
                     if (!alloc.ElementType.IsTrivial && !alloc.Unmanaged) {
-                        Line($"store {Type(alloc.ElementType)} zeroinitializer, ptr {name}");
+                        if (SilType.IsBitwise(alloc.ElementType)) {
+                            // Bits alone: nothing in it is ever destroyed.
+                        } else if (SilType.IsInMemory(alloc.ElementType)) {
+                            Line($"call void @llvm.memset.p0.i64(ptr {name}, i8 0, i64 {OpaqueSize(alloc.ElementType)}, i1 false)");
+                        } else {
+                            Line($"store {Type(alloc.ElementType)} zeroinitializer, ptr {name}");
+                        }
                     }
 
                     // A source variable lives in this slot for the whole function,
@@ -3174,12 +3428,14 @@ public sealed partial class LlvmEmitter {
 
                 // An opaque value read: copied by its value witness into a buffer
                 // of its own, or moved there, leaving the storage empty.
-                case LoadInst { Type: var opaqueLoad } load when SilType.IsIndirect(opaqueLoad): {
+                case LoadInst { Type: var opaqueLoad } load when Held(opaqueLoad): {
                     var buffer = OpaqueBuffer(opaqueLoad);
                     _names[load] = buffer;
                     if (load.Kind == LoadKind.Take) {
                         OpaqueMove(opaqueLoad, buffer, Name(load.Address));
-                        Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(opaqueLoad)}, i1 false)");
+                        if (!SilType.IsBitwise(opaqueLoad)) {
+                            Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(opaqueLoad)}, i1 false)");
+                        }
                     } else {
                         OpaqueWitness(opaqueLoad, CopyWitness, buffer, Name(load.Address));
                     }
@@ -3187,7 +3443,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case StoreInst { Value.Type: var opaqueStore } store when SilType.IsIndirect(opaqueStore): {
+                case StoreInst { Value.Type: var opaqueStore } store when Held(opaqueStore): {
                     if (store.Kind == StoreKind.Assign && store.Address is not AllocStackInst { Unmanaged: true }) {
                         OpaqueWitness(opaqueStore, AssignWithTakeWitness, Name(store.Address), Name(store.Value));
                     } else {
@@ -3297,7 +3553,7 @@ public sealed partial class LlvmEmitter {
                 }
 
                 // Borrowed where it is: the storage is the value's buffer.
-                case LoadBorrowInst opaqueBorrow when SilType.IsIndirect(opaqueBorrow.Type):
+                case LoadBorrowInst opaqueBorrow when Held(opaqueBorrow.Type):
                     _names[opaqueBorrow] = Name(opaqueBorrow.Address);
                     return;
 
@@ -3311,20 +3567,22 @@ public sealed partial class LlvmEmitter {
                 case EndBorrowInst:
                     return;
 
-                case CopyValueInst { Type: var opaqueCopy } copy when SilType.IsIndirect(opaqueCopy): {
+                case CopyValueInst { Type: var opaqueCopy } copy when Held(opaqueCopy): {
                     var buffer = OpaqueBuffer(opaqueCopy);
                     _names[copy] = buffer;
                     OpaqueWitness(opaqueCopy, CopyWitness, buffer, Name(copy.Value));
                     return;
                 }
 
-                case DestroyValueInst { Value.Type: var opaqueDestroy } destroy when SilType.IsIndirect(opaqueDestroy):
+                case DestroyValueInst { Value.Type: var opaqueDestroy } destroy when Held(opaqueDestroy):
                     OpaqueWitness(opaqueDestroy, DestroyWitness, Name(destroy.Value));
                     return;
 
-                case DestroyAddrInst { Address.Type: AddressType { Pointee: var opaqueDestroyed } } destroy when SilType.IsIndirect(opaqueDestroyed) && destroy.Address is not AllocStackInst { Unmanaged: true }:
+                case DestroyAddrInst { Address.Type: AddressType { Pointee: var opaqueDestroyed } } destroy when Held(opaqueDestroyed) && destroy.Address is not AllocStackInst { Unmanaged: true }:
                     OpaqueWitness(opaqueDestroyed, DestroyWitness, Name(destroy.Address));
-                    Line($"call void @llvm.memset.p0.i64(ptr {Name(destroy.Address)}, i8 0, i64 {OpaqueSize(opaqueDestroyed)}, i1 false)");
+                    if (!SilType.IsBitwise(opaqueDestroyed)) {
+                        Line($"call void @llvm.memset.p0.i64(ptr {Name(destroy.Address)}, i8 0, i64 {OpaqueSize(opaqueDestroyed)}, i1 false)");
+                    }
                     return;
 
                 case CopyValueInst copy:
@@ -3500,6 +3758,21 @@ public sealed partial class LlvmEmitter {
                 case ReturnInst { Value: { } indirectReturned } when SilType.IsIndirect(indirectReturned.Type):
                     throw new NotSupportedException("an opaque value is returned through an address its caller passes");
 
+                // A result held in memory: written to a buffer of the caller's.
+                case ApplyInst inMemoryApply when SilType.IsInMemory(inMemoryApply.Type): {
+                    var buffer = OpaqueBuffer(inMemoryApply.Type);
+                    _names[inMemoryApply] = buffer;
+                    var (target, arguments) = Callee(inMemoryApply.Callee, inMemoryApply.Arguments, [buffer]);
+                    Line($"call void {target}({arguments})");
+                    WriteBack();
+                    return;
+                }
+
+                case ReturnInst { Value: { } inMemoryReturned } when function.Type.Thrown is null && ReturnsInMemory(function.Type):
+                    OpaqueMove(inMemoryReturned.Type, "%result.place", Name(inMemoryReturned));
+                    Line("ret void");
+                    return;
+
                 case ApplyInst apply: {
                     var (target, arguments) = Callee(apply.Callee, apply.Arguments);
                     var call = $"call {Type(apply.Type)} {target}({arguments})";
@@ -3543,11 +3816,11 @@ public sealed partial class LlvmEmitter {
                     Line("ret void");
                     return;
 
-                case StructInst indirectStruct when SilType.IsIndirect(indirectStruct.Type):
+                case StructInst indirectStruct when Held(indirectStruct.Type):
                     IndirectFields(indirectStruct, [..((StructType)indirectStruct.Type).Fields.Select(static f => f.Type)]);
                     return;
 
-                case StructExtractInst indirectField when SilType.IsIndirect(indirectField.Value.Type):
+                case StructExtractInst indirectField when Held(indirectField.Value.Type):
                     _names[indirectField] = IndirectField(Name(indirectField.Value), indirectField.Value.Type, ((StructType)indirectField.Value.Type).Fields[indirectField.Field].Type, indirectField.Field, load: true);
                     return;
 
@@ -3573,11 +3846,11 @@ public sealed partial class LlvmEmitter {
 
                 // An aggregate laid out with padding of its own starts from
                 // zeros, so that its padding is never poison where C reads it.
-                case TupleInst indirectTuple when SilType.IsIndirect(indirectTuple.Type):
+                case TupleInst indirectTuple when Held(indirectTuple.Type):
                     IndirectFields(indirectTuple, ((TupleType)indirectTuple.Type).Elements);
                     return;
 
-                case TupleExtractInst indirectExtract when SilType.IsIndirect(indirectExtract.Value.Type):
+                case TupleExtractInst indirectExtract when Held(indirectExtract.Value.Type):
                     _names[indirectExtract] = IndirectField(Name(indirectExtract.Value), indirectExtract.Value.Type, ((TupleType)indirectExtract.Value.Type).Elements[indirectExtract.Element], indirectExtract.Element, load: true);
                     return;
 
@@ -3626,7 +3899,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case EnumInst indirectEnum when SilType.IsIndirect(indirectEnum.Type):
+                case EnumInst indirectEnum when Held(indirectEnum.Type):
                     IndirectEnum(indirectEnum);
                     return;
 
@@ -3704,7 +3977,7 @@ public sealed partial class LlvmEmitter {
             // the edge: through a buffer of each first when there are several,
             // which may be one another's.
             var moves = new StringBuilder();
-            var opaque = Enumerable.Range(0, arguments.Count).Where(i => SilType.IsIndirect(target.Arguments[i].Type)).ToList();
+            var opaque = Enumerable.Range(0, arguments.Count).Where(i => Held(target.Arguments[i].Type)).ToList();
             if (opaque.Count > 0) {
                 var output = _out;
                 _out = moves;
@@ -3735,7 +4008,7 @@ public sealed partial class LlvmEmitter {
             }
 
             for (var i = 0; i < arguments.Count; i++) {
-                if (SilType.IsIndirect(target.Arguments[i].Type)) {
+                if (Held(target.Arguments[i].Type)) {
                     continue;
                 }
 
@@ -3795,10 +4068,16 @@ public sealed partial class LlvmEmitter {
         /// <summary>A throwing function's return value: the flag, and the result or the error.</summary>
         string Discriminated(bool thrown, SilValue? value) {
             var type = ReturnType(function.Type);
-            var withResult = function.Type.Result != SilType.Unit;
+            var withResult = function.Type.Result != SilType.Unit && !ReturnsInMemory(function.Type);
             var flag = Fresh();
             Line($"{flag} = insertvalue {type} poison, i1 {(thrown ? "true" : "false")}, 0");
             if (value is null) {
+                return flag;
+            }
+
+            // What is held in memory goes where the caller said, and the flag alone says which.
+            if (thrown ? ThrowsInMemory(function.Type) : ReturnsInMemory(function.Type)) {
+                OpaqueMove(value.Type, thrown ? "%error.place" : "%result.place", Name(value));
                 return flag;
             }
 
@@ -3816,7 +4095,7 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>A part moved into its place: an indirect one's bits, any other stored; a unit one has none.</summary>
         void PlacePart(SilType type, string value, string at) {
-            if (SilType.IsIndirect(type)) {
+            if (Held(type)) {
                 OpaqueMove(type, at, value);
             } else if (type != SilType.Unit) {
                 Line($"store {Type(type)} {value}, ptr {at}");
@@ -3825,17 +4104,40 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>A case made in a buffer of its own: emptied, its payload put where the metadata says, and the case written.</summary>
         void IndirectEnum(EnumInst made) {
-            var metadata = OpaqueMetadata(made.Type);
             var buffer = OpaqueBuffer(made.Type);
             _names[made] = buffer;
             Line($"call void @llvm.memset.p0.i64(ptr align 16 {buffer}, i8 0, i64 {OpaqueSize(made.Type)}, i1 false)");
             if (made.Payload is { } payload) {
-                var at = Fresh();
-                Line($"{at} = call ptr @sable_enum_payload(ptr {buffer}, ptr {metadata})");
-                PlacePart(payload.Type, Name(payload), at);
+                PlacePart(payload.Type, Name(payload), EnumPayloadAt(buffer, made.EnumType));
             }
 
-            Line($"call void @sable_enum_inject(ptr {buffer}, i64 {made.Case}, ptr {metadata})");
+            if (SilType.IsIndirect(made.Type)) {
+                Line($"call void @sable_enum_inject(ptr {buffer}, i64 {made.Case}, ptr {OpaqueMetadata(made.Type)})");
+            } else {
+                Line($"store {TagType(made.EnumType)} {made.Case}, ptr {buffer}");
+            }
+        }
+
+        /// <summary>
+        ///     Where an enum's payload is, in a value held in memory: where its
+        ///     metadata says, for one laid out at run time; past the tag, for
+        ///     one holding an inline array, which is always tagged.
+        /// </summary>
+        string EnumPayloadAt(string value, EnumType enumType) {
+            var at = Fresh();
+            Line(SilType.IsIndirect(enumType)
+                ? $"{at} = call ptr @sable_enum_payload(ptr {value}, ptr {OpaqueMetadata(enumType)})"
+                : $"{at} = getelementptr inbounds {Type(enumType)}, ptr {value}, i32 0, i32 1");
+            return at;
+        }
+
+        /// <summary>Where a field of a struct or a tuple held in memory is: where its metadata says, or as its layout is.</summary>
+        string FieldAddressAt(string value, SilType type, int index) {
+            var at = Fresh();
+            Line(SilType.IsIndirect(type) ? $"{at} = call ptr @sable_field_address(ptr {value}, i64 {index}, ptr {OpaqueMetadata(type)})"
+                : type is StructType structType ? $"{at} = getelementptr inbounds {Type(type)}, ptr {value}, i32 0, i32 {FieldSlot(structType, index)}"
+                : $"{at} = getelementptr inbounds {Type(type)}, ptr {value}, i32 0, i32 {LayoutOf((TupleType)type).Slots[index]}");
+            return at;
         }
 
         /// <summary>
@@ -3846,9 +4148,14 @@ public sealed partial class LlvmEmitter {
         void IndirectSwitch(SwitchEnumInst switchEnum) {
             var enumType = (EnumType)switchEnum.Value.Type;
             var value = Name(switchEnum.Value);
-            var metadata = OpaqueMetadata(enumType);
             var tag = Fresh();
-            Line($"{tag} = call i64 @sable_enum_tag(ptr {value}, ptr {metadata})");
+            if (SilType.IsIndirect(enumType)) {
+                Line($"{tag} = call i64 @sable_enum_tag(ptr {value}, ptr {OpaqueMetadata(enumType)})");
+            } else {
+                var stored = Fresh();
+                Line($"{stored} = load {TagType(enumType)}, ptr {value}");
+                Line($"{tag} = zext {TagType(enumType)} {stored} to i64");
+            }
 
             string fallback;
             if (switchEnum.Default is { } defaultBlock) {
@@ -3868,9 +4175,8 @@ public sealed partial class LlvmEmitter {
                 var edge = NewLabel("case");
                 var output = _out;
                 _out = new StringBuilder();
-                var at = Fresh();
-                Line($"{at} = call ptr @sable_enum_payload(ptr {value}, ptr {metadata})");
-                if (SilType.IsIndirect(payload)) {
+                var at = EnumPayloadAt(value, enumType);
+                if (Held(payload)) {
                     OpaqueMove(payload, Name(target.Arguments[0]), at);
                 } else if (payload == SilType.Unit) {
                     _incoming[target.Arguments[0]].Add(("zeroinitializer", edge));
@@ -3957,7 +4263,7 @@ public sealed partial class LlvmEmitter {
         /// <summary>What it shares: the value, or the storage's, read — or, of a type known only by its metadata, where it is.</summary>
         string ShareValue(BuiltinInst share, string operand) {
             var type = Shareable(share);
-            if (!share.Name.EndsWith("_at", StringComparison.Ordinal) || SilType.IsIndirect(type)) {
+            if (!share.Name.EndsWith("_at", StringComparison.Ordinal) || Held(type)) {
                 return operand;
             }
 
@@ -4011,13 +4317,17 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>A struct or a tuple made in a buffer of its own, each field moved or stored where the metadata says.</summary>
         void IndirectFields(SilInstruction made, IReadOnlyList<SilType> parts) {
-            var metadata = OpaqueMetadata(made.Type);
             var buffer = OpaqueBuffer(made.Type);
             _names[made] = buffer;
+            // A struct with a live byte, held in memory, is live once made.
+            if (made.Type is StructType { Deinit: not null } live && !SilType.IsIndirect(live)) {
+                var liveAt = Fresh();
+                Line($"{liveAt} = getelementptr inbounds {Type(live)}, ptr {buffer}, i32 0, i32 0");
+                Line($"store i1 true, ptr {liveAt}");
+            }
+
             for (var i = 0; i < parts.Count; i++) {
-                var at = Fresh();
-                Line($"{at} = call ptr @sable_field_address(ptr {buffer}, i64 {i}, ptr {metadata})");
-                PlacePart(parts[i], Name(made.Operands[i]), at);
+                PlacePart(parts[i], Name(made.Operands[i]), FieldAddressAt(buffer, made.Type, i));
             }
         }
 
@@ -4026,10 +4336,8 @@ public sealed partial class LlvmEmitter {
         ///     read, an indirect one borrowed where it is and any other loaded.
         /// </summary>
         string IndirectField(string value, SilType type, SilType part, int index, bool load) {
-            var metadata = OpaqueMetadata(type);
-            var address = Fresh();
-            Line($"{address} = call ptr @sable_field_address(ptr {value}, i64 {index}, ptr {metadata})");
-            if (!load || SilType.IsIndirect(part)) {
+            var address = FieldAddressAt(value, type, index);
+            if (!load || Held(part)) {
                 return address;
             }
 
@@ -4044,7 +4352,7 @@ public sealed partial class LlvmEmitter {
 
         void SwitchEnum(SwitchEnumInst switchEnum) {
             var enumType = (EnumType)switchEnum.Value.Type;
-            if (SilType.IsIndirect(enumType)) {
+            if (Held(enumType)) {
                 IndirectSwitch(switchEnum);
                 return;
             }
@@ -4193,10 +4501,12 @@ public sealed partial class LlvmEmitter {
         ///     function's T where T is Void, or Never — is passed as the empty
         ///     struct, since LLVM has no parameters of type void.
         /// </summary>
-        string ArgumentType(SilType type) => type == SilType.Unit ? "{}" : Type(type);
+        string ArgumentType(SilType type) => type == SilType.Unit ? "{}" : ValueType(type);
 
-        (string Target, string Arguments) Callee(SilValue callee, IEnumerable<SilValue> arguments) {
-            var passed = arguments.Select(a => $"{ArgumentType(a.Type)} {(a.Type == SilType.Unit ? "zeroinitializer" : Aligned(a))}").ToList();
+        /// <param name="places">Where what the callee gives back held in memory goes: its result's place, then its error's.</param>
+        (string Target, string Arguments) Callee(SilValue callee, IEnumerable<SilValue> arguments, IEnumerable<string>? places = null) {
+            var passed = (places ?? []).Select(static p => $"ptr {p}")
+                .Concat(arguments.Select(a => $"{ArgumentType(a.Type)} {(a.Type == SilType.Unit ? "zeroinitializer" : Aligned(a))}")).ToList();
             if (callee.Type is not ThickFunctionType) {
                 return (Name(callee), string.Join(", ", passed));
             }
@@ -4246,7 +4556,18 @@ public sealed partial class LlvmEmitter {
         void TryApply(TryApplyInst tryApply) {
             var callee = tryApply.Callee.Type as FunctionType ?? ((ThickFunctionType)tryApply.Callee.Type).Signature;
             var type = ReturnType(callee);
-            var (target, arguments) = Callee(tryApply.Callee, tryApply.Arguments);
+
+            // What comes back held in memory is written to the target's own buffer.
+            var places = new List<string>();
+            if (ReturnsInMemory(callee)) {
+                places.Add(Name(tryApply.Normal.Arguments[0]));
+            }
+
+            if (ThrowsInMemory(callee)) {
+                places.Add(Name(tryApply.Error.Arguments[0]));
+            }
+
+            var (target, arguments) = Callee(tryApply.Callee, tryApply.Arguments, places);
 
             var result = Fresh();
             var flag = Fresh();
@@ -4254,7 +4575,7 @@ public sealed partial class LlvmEmitter {
             WriteBack();
             Line($"{flag} = extractvalue {type} {result}, 0");
 
-            var withResult = callee.Result != SilType.Unit;
+            var withResult = callee.Result != SilType.Unit && !ReturnsInMemory(callee);
 
             var normal = NewLabel("normal");
             _extra.Append(normal).Append(":\n");
@@ -4267,11 +4588,14 @@ public sealed partial class LlvmEmitter {
             _extra.Append($"  br label %{_labels[tryApply.Normal]}\n");
 
             var failed = NewLabel("error");
-            var error = Fresh();
-            _extra.Append(failed).Append(":\n")
-                .Append($"  {error} = extractvalue {type} {result}, {(withResult ? 2 : 1)}\n")
-                .Append($"  br label %{_labels[tryApply.Error]}\n");
-            _incoming[tryApply.Error.Arguments[0]].Add((error, failed));
+            _extra.Append(failed).Append(":\n");
+            if (!ThrowsInMemory(callee)) {
+                var error = Fresh();
+                _extra.Append($"  {error} = extractvalue {type} {result}, {(withResult ? 2 : 1)}\n");
+                _incoming[tryApply.Error.Arguments[0]].Add((error, failed));
+            }
+
+            _extra.Append($"  br label %{_labels[tryApply.Error]}\n");
 
             Line($"br i1 {flag}, label %{failed}, label %{normal}");
         }
@@ -4286,6 +4610,11 @@ public sealed partial class LlvmEmitter {
 
             if (builtin.Name.StartsWith("atomic_", StringComparison.Ordinal)) {
                 Atomic(builtin, operands, Result);
+                return;
+            }
+
+            // An inline array's (#304): its elements where it is.
+            if (FixedBuiltin(builtin, operands, Result)) {
                 return;
             }
 
@@ -4599,7 +4928,7 @@ public sealed partial class LlvmEmitter {
                 // value witnesses. Aligned as its type is, or to a byte.
                 case "raw_load" or "raw_load_unaligned" or "raw_take": {
                     var at = RawAddress(operands[0]);
-                    if (SilType.IsIndirect(builtin.Type)) {
+                    if (Held(builtin.Type)) {
                         var buffer = OpaqueBuffer(builtin.Type);
                         _names[builtin] = buffer;
                         if (builtin.Name == "raw_take") {
@@ -4629,7 +4958,7 @@ public sealed partial class LlvmEmitter {
                         Share(type, operands[1]);
                     }
 
-                    if (SilType.IsIndirect(type)) {
+                    if (Held(type)) {
                         OpaqueMove(type, at, operands[1]);
                         return;
                     }
@@ -5234,8 +5563,12 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_cipher(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, ptr null, i64 0, ptr {RawAddress(operands[3])}, ptr {RawAddress(operands[4])}, i64 {operands[5]})");
                     return;
 
-                case "crc32_raw":
-                    Line($"{Result()} = call i64 @sable_crc32(i64 {operands[0]}, ptr {RawAddress(operands[1])}, i64 {operands[2]})");
+                case "crc_update":
+                    Line($"{Result()} = call i64 @sable_crc_update(i64 {operands[0]}, i64 {operands[1]}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
+                    return;
+
+                case "crc_available":
+                    Line($"{Result()} = call zeroext i1 @sable_crc_available()");
                     return;
 
                 case "crypto_blocks_raw":
@@ -5916,7 +6249,7 @@ public sealed partial class LlvmEmitter {
 
                 // An array literal that does not escape its frame: made there,
                 // header and elements, each element stored where it goes.
-                case "array_literal_stack" when !SilType.IsIndirect(((ArrayType)builtin.Type).Element): {
+                case "array_literal_stack" when !Held(((ArrayType)builtin.Type).Element): {
                     var arrayType = (ArrayType)builtin.Type;
                     var layout = $"{{ [48 x i8], [{operands.Length} x {Type(arrayType.Element)}] }}";
                     var memory = Scratch(layout, HeapAlign);
@@ -5957,7 +6290,7 @@ public sealed partial class LlvmEmitter {
                         ? SliceElement(operands[0], operands[1], viewed, check: !builtin.InBounds)
                         : InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
                     // An opaque element: borrowed where it is, or copied into a buffer of its own.
-                    if (builtin.Type is var opaqueElement && SilType.IsIndirect(opaqueElement)) {
+                    if (builtin.Type is var opaqueElement && Held(opaqueElement)) {
                         if (builtin.Name == "array_get_borrowed") {
                             _names[builtin] = element;
                         } else {
@@ -6001,7 +6334,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{slice} = load {Type(unique)}, ptr {operands[0]}");
                     var element = SliceElement(slice, operands[1], unique, check: !builtin.InBounds);
                     ShareIntoArray(operands[0], unique.Element, operands[2]);
-                    if (SilType.IsIndirect(unique.Element)) {
+                    if (Held(unique.Element)) {
                         OpaqueWitness(unique.Element, AssignWithTakeWitness, element, operands[2]);
                         return;
                     }
@@ -6017,7 +6350,7 @@ public sealed partial class LlvmEmitter {
                     var elementType = Type(written.Element);
                     var element = SliceMutableElement(operands[0], operands[1], written);
                     ShareIntoArray(operands[0], written.Element, operands[2]);
-                    if (SilType.IsIndirect(written.Element)) {
+                    if (Held(written.Element)) {
                         OpaqueWitness(written.Element, AssignWithTakeWitness, element, operands[2]);
                         return;
                     }
@@ -6061,7 +6394,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{array} = load ptr, ptr {operands[0]}, !tbaa {TbaaReference}");
                     var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
                     ShareIntoArray(operands[0], arrayType.Element, operands[2]);
-                    if (arrayType.Element is var replacedUnique && SilType.IsIndirect(replacedUnique)) {
+                    if (arrayType.Element is var replacedUnique && Held(replacedUnique)) {
                         OpaqueWitness(replacedUnique, AssignWithTakeWitness, element, operands[2]);
                         return;
                     }
@@ -6078,7 +6411,7 @@ public sealed partial class LlvmEmitter {
                     var elementType = Type(arrayType.Element);
                     var element = MutableElement(operands[0], operands[1], arrayType);
                     ShareIntoArray(operands[0], arrayType.Element, operands[2]);
-                    if (arrayType.Element is var replaced && SilType.IsIndirect(replaced)) {
+                    if (arrayType.Element is var replaced && Held(replaced)) {
                         OpaqueWitness(replaced, AssignWithTakeWitness, element, operands[2]);
                         return;
                     }
@@ -6105,16 +6438,18 @@ public sealed partial class LlvmEmitter {
                 // its metadata says.
                 case "array_mismatch": {
                     var element = ArrayType.ElementOf(builtin.Operands[0].Type)!;
-                    var opaque = SilType.IsIndirect(element);
+                    var opaque = Held(element);
                     if (!opaque && !SilBuiltins.ComparesByBits(element)) {
                         _names[builtin] = "-1";
                         return;
                     }
 
                     // An array is its buffer, all of it.
-                    string Run(int operand) => builtin.Operands[operand].Type is SliceType type
-                        ? $"ptr {SlicePart(operands[operand], type, 0)}, i64 {SlicePart(operands[operand], type, 1)}, i64 {SlicePart(operands[operand], type, 2)}"
-                        : $"ptr {operands[operand]}, i64 0, i64 {Count(operands[operand])}";
+                    string Run(int operand) => builtin.Operands[operand].Type switch {
+                        SliceType type => $"ptr {SlicePart(operands[operand], type, 0)}, i64 {SlicePart(operands[operand], type, 1)}, i64 {SlicePart(operands[operand], type, 2)}",
+                        FixedArrayType inline => FixedRun(operands[operand], inline),
+                        _ => $"ptr {operands[operand]}, i64 0, i64 {Count(operands[operand])}",
+                    };
 
                     var runs = $"{Run(0)}, {Run(1)}";
                     Line(opaque
@@ -6124,6 +6459,11 @@ public sealed partial class LlvmEmitter {
                 }
 
                 // An array is its buffer, all of it: the same one, or the same part of one.
+                // An inline array shares its elements with nothing.
+                case "array_shares" when builtin.Operands.Any(static o => o.Type is FixedArrayType):
+                    _names[builtin] = "false";
+                    return;
+
                 case "array_shares": {
                     string Buffer(int operand) => builtin.Operands[operand].Type is SliceType type ? SlicePart(operands[operand], type, 0) : operands[operand];
                     string[] Span(int operand) => builtin.Operands[operand].Type is SliceType type
@@ -6186,7 +6526,7 @@ public sealed partial class LlvmEmitter {
                 case "array_append_repeating": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var value = operands[1];
-                    if (!SilType.IsIndirect(arrayType.Element)) {
+                    if (!Held(arrayType.Element)) {
                         value = Fresh();
                         _entryAllocas.Append($"  {value} = alloca {Type(arrayType.Element)}, align 16\n");
                         Line($"store {Type(arrayType.Element)} {operands[1]}, ptr {value}");
@@ -6209,7 +6549,7 @@ public sealed partial class LlvmEmitter {
                 case "array_take": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = MutableElement(operands[0], operands[1], arrayType);
-                    if (arrayType.Element is var taken && SilType.IsIndirect(taken)) {
+                    if (arrayType.Element is var taken && Held(taken)) {
                         var buffer = OpaqueBuffer(taken);
                         _names[builtin] = buffer;
                         OpaqueMove(taken, buffer, element);
@@ -6240,7 +6580,7 @@ public sealed partial class LlvmEmitter {
                 case "array_remove_last": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = LastSlot(operands[0], arrayType);
-                    if (arrayType.Element is var removed && SilType.IsIndirect(removed)) {
+                    if (arrayType.Element is var removed && Held(removed)) {
                         var buffer = OpaqueBuffer(removed);
                         _names[builtin] = buffer;
                         OpaqueMove(removed, buffer, element);

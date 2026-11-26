@@ -31,12 +31,12 @@ fn arithmeticIsTheSameBitsEverywhere() {
         let t = F32(step) / 63
         q = (q * r).normalized()
         v = q.transform(v).normalized() * (1 + t) + r.transform(Vector3.one)
-        let blended = q.slerp(to: r, t)
+        let blended = q.slerp(to: r, by: t)
         m = Matrix4x4(scale: Vector3(1 + t, 1.3, 0.7), rotation: blended, translation: v) * view * projection
         hash = fold(q, hash)
         hash = fold(v, hash)
         hash = fold(blended, hash)
-        hash = fold(q.nlerp(to: r, t), hash)
+        hash = fold(q.nlerp(to: r, by: t), hash)
         hash = fold(m, hash)
         hash = fold(m.inverted() ?? Matrix4x4.zero, hash)
         hash = fold(Plane(v, t).transformed(by: view), hash)

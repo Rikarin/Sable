@@ -1,0 +1,88 @@
+module Sable.Net
+
+import Sable.IO
+
+/// What the system says of its TCP and UDP sockets: .NET's
+/// `IPGlobalProperties`. Linux's /proc/net, macOS's pcblist sysctl, and
+/// Windows' GetExtendedTcpTable and GetExtendedUdpTable. macOS lists only
+/// this process's sockets to a program without an entitlement (netstat has
+/// one).
+///
+/// ```sable
+/// fn listening() throws(IoError) -> Int[>..] {
+///     return try NetworkStatistics.tcpListeners().map { $0.port }
+/// }
+/// ```
+public struct NetworkStatistics {
+    /// Every TCP connection and listener, each with its state.
+    public static fn tcpConnections() throws(IoError) -> TcpConnection[>..] {
+        let rows = listConnections(6)
+        if rows < 0 {
+            throw socketError("the TCP connections")
+        }
+        defer {
+            _ = listConnections(0)
+        }
+        var all: TcpConnection[>..] = []
+        for row in 0..<rows {
+            let process = connectionPart(row, 1)
+            let local = NetworkStatistics.address(row, 2)
+            let remote = NetworkStatistics.address(row, 3)
+            all.append(TcpConnection { local: local, remote: remote, state: TcpState.of(connectionPart(row, 0)), processId: process >= 0 ? process : none })
+        }
+        return all
+    }
+
+    /// The addresses TCP listens at.
+    public static fn tcpListeners() throws(IoError) -> SocketAddress[>..] {
+        return try NetworkStatistics.tcpConnections().filter { $0.state == .Listen }.map { $0.local }
+    }
+
+    /// The addresses UDP sockets are bound to.
+    public static fn udpListeners() throws(IoError) -> SocketAddress[>..] {
+        let rows = listConnections(17)
+        if rows < 0 {
+            throw socketError("the UDP sockets")
+        }
+        defer {
+            _ = listConnections(0)
+        }
+        var all: SocketAddress[>..] = []
+        for row in 0..<rows {
+            all.append(NetworkStatistics.address(row, 2))
+        }
+        return all
+    }
+
+    /// TCP's counters.
+    public static fn tcp() throws(IoError) -> TcpStatistics {
+        let counted = try NetworkStatistics.counters(6)
+        return TcpStatistics { connectionsInitiated: counted[0], connectionsAccepted: counted[1], failedConnectionAttempts: counted[2],
+            currentConnections: counted[3], segmentsReceived: counted[4], segmentsSent: counted[5], segmentsResent: counted[6], resetsSent: counted[7] }
+    }
+
+    /// UDP's counters.
+    public static fn udp() throws(IoError) -> UdpStatistics {
+        let counted = try NetworkStatistics.counters(17)
+        return UdpStatistics { datagramsReceived: counted[0], datagramsSent: counted[1], noPort: counted[2], receiveErrors: counted[3] }
+    }
+
+    static fn counters(_ protocolNumber: Int) throws(IoError) -> Int?[>..] {
+        var counted = Int[>..](repeating: -1, count: 8)
+        let known = counted.withMutablePointer { (into: RawPtr<Int>) -> Bool in
+            unsafe {
+                return protocolCounters(protocolNumber, into)
+            }
+        }
+        if !known {
+            throw socketError(protocolNumber == 6 ? "TCP's counters" : "UDP's counters")
+        }
+        return counted.map { $0 >= 0 ? $0 : none }
+    }
+
+    // The row's address, of the part: any, of the family, where it has none.
+    static fn address(_ row: Int, _ part: Int) -> SocketAddress {
+        let family = connectionPart(row, part)
+        return SocketAddress.ofLastCall() ?? SocketAddress(family == 6 ? IpAddress.v6Any : IpAddress.v4Any, port: 0)
+    }
+}

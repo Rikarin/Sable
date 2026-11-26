@@ -1,0 +1,9 @@
+module Sable.IO.Ports
+
+/// The bits that end each character a serial port sends.
+public enum StopBits {
+    One
+    /// One and a half: Windows', for 5 data bits.
+    OnePointFive
+    Two
+}

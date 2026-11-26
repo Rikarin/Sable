@@ -1,0 +1,30 @@
+module Sable.Net
+
+/// A protocol that IP carries, by the number in its header: what a
+/// `RawSocket` sends and receives.
+///
+/// ```sable
+/// assert(IpProtocol.icmp.number == 1 && IpProtocol.icmpV6.number == 58)
+/// assert(IpProtocol(number: 47).number == 47)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct IpProtocol {
+    /// Its number (IANA's).
+    public let number: Int
+
+    public init(number: Int) {
+        precondition(number >= 0 && number <= 255, "a protocol's number is from 0 to 255, and \(number) is not")
+        self.number = number
+    }
+
+    /// ICMP, IPv4's messages.
+    public static var icmp: IpProtocol => IpProtocol(number: 1)
+    /// TCP.
+    public static var tcp: IpProtocol => IpProtocol(number: 6)
+    /// UDP.
+    public static var udp: IpProtocol => IpProtocol(number: 17)
+    /// ICMPv6, IPv6's messages.
+    public static var icmpV6: IpProtocol => IpProtocol(number: 58)
+    /// Raw IP: with IP_HDRINCL, whole datagrams of any protocol (IPv4).
+    public static var raw: IpProtocol => IpProtocol(number: 255)
+}

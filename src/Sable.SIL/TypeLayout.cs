@@ -85,8 +85,30 @@ public static class TypeLayout {
             TupleType tuple => Of(tuple).Size,
             SliceType slice => Size(slice.Parts),
             VectorType vector => RoundUp(VectorBytes(vector), Align(vector)),
+            FixedArrayType fixedArray => RoundUp(ElementsOffset(fixedArray) + Stride(fixedArray.Element) * fixedArray.Count, Align(fixedArray)),
             _ => 0,
         };
+
+    /// <summary>
+    ///     Where an inline array's elements start: at its start for a fixed
+    ///     one, after its count — an Int — aligned for them, for a bounded one.
+    /// </summary>
+    public static int ElementsOffset(FixedArrayType type) => type.IsBounded ? RoundUp(8, Align(type.Element)) : 0;
+
+    /// <summary>
+    ///     The bytes an inline array of the element and count takes: what the
+    ///     cap on one is checked against (<see cref="MaximumInlineBytes" />).
+    /// </summary>
+    public static long InlineBytes(SilType element, long count, bool bounded) =>
+        (bounded ? RoundUp(8, Align(element)) : 0) + (long)Stride(element) * count;
+
+    /// <summary>
+    ///     The most bytes an inline array, <c>T[k]</c> or <c>T[..k]</c>, may
+    ///     take: its value lives in a frame, a field or a payload, copied as a
+    ///     whole and held on the stack (a thread's may be as small as 256 KiB, docs/06),
+    ///     so a larger one is a compile-time error that names the heap's kinds.
+    /// </summary>
+    public const long MaximumInlineBytes = 64 * 1024;
 
     /// <summary>
     ///     The bytes a vector's lanes take, side by side: a Bool lane is a
@@ -112,6 +134,8 @@ public static class TypeLayout {
             EnumType enumType when Niche(enumType) is { } niche => niche.Bytes,
             EnumType enumType => Math.Max(Area(enumType).Unit, TagBytes(enumType)),
             VectorType vector => (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)VectorBytes(vector)),
+            FixedArrayType { IsBounded: true } bounded => Math.Max(8, Align(bounded.Element)),
+            FixedArrayType fixedArray => Align(fixedArray.Element),
             _ => PointerBytes,
         };
 

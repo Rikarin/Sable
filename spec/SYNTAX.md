@@ -149,8 +149,8 @@ T&<u32>             // relative reference, 4-byte offset from the field
 T&<u16 in pool>     // relative reference from a named pool base
 T&?                 // optional reference
 T[]                 // fixed-at-construction array
-T[8]                // fixed size
-T[..]  T[..64]      // inline capacity, resizable within it
+T[8]                // fixed size, its elements inline where the array is
+T[..]  T[..64]      // inline capacity, resizable within it, its elements inline
 T[>..]              // grow-only array
 T[>..<]             // grow/shrink array
 T[:]                // slice view
@@ -862,6 +862,9 @@ extension U8[:] { fn toString() -> String { } }
 
 - Each kind is extended on its own: `T[]` (every fixed size), `T[..]` (every
   inline capacity), `T[>..]`, `T[>..<]`, `T[:]`. No size or capacity is written.
+  `T[k]` and `T[..k]` hold their elements inline (docs/02 §2.5): a member of
+  `T[:]` called on one is lent the elements where they are, and one that
+  changes them changes the array in place.
   What `T[:]` declares, every kind has; a kind's own member of the same name
   comes first.
 - Inside, `self` is the array. The parameters may be constrained, inline or
@@ -1514,6 +1517,16 @@ An array literal passed where a parameter's elements are an existential has
 each of its own converted, as `let xs: (any Any)[] = [1, "a"]` does: `f([1, "a"])`
 of an `(any Any)[:]`. Where another overload takes the literal as it is, that one
 is called.
+
+A tuple literal passed for a tuple parameter has its numbers take the types of
+the parameter's elements, as `let p: (F32, F32) = (0, 1)` does: `remap(x, from:
+(0, 1), to: (4, 0))` of `(T, T)`s, where the other arguments decide T.
+
+A leading dot is for the overload whose parameter's type has a member of that
+name, a built-in one's too: `grid[.All]` is the subscript of a union with an
+`All`, not one of an Int. Of two members of extensions of one type that fit
+alike, the one whose extension says what a type parameter is (`where T == F32`)
+is chosen over one that says what it conforms to (`where T: Numeric`).
 
 Of an optional, `is`, `as?`, `as!` and the patterns `is T` and `let x as T` ask
 of the value it holds: `none` is no `T`, and `as!` of it traps.

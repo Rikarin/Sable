@@ -260,6 +260,12 @@ static void reactor_wake(void) {
 
 // WASI preview 1 can only accept on a socket the engine opened for the
 // program; it cannot open one, nor resolve a name.
+static int socket_fail_as(int kind) {
+    net_last_failure.kind = kind;
+    net_last_failure.code = 0;
+    return IO_FAILED;
+}
+
 static int socket_unsupported(void) {
     net_last_failure.kind = NET_ERROR_UNSUPPORTED;
     net_last_failure.code = 0;
@@ -594,6 +600,239 @@ static void signal_let_go(int signal) {
 
 static bool signal_raise(int signal) {
     (void)signal;
+    return false;
+}
+
+// ---- Pipes, local streams, shared memory and serial ports --------------------
+
+// A WASI module has none of these, nor raw sockets, changes or statistics:
+// every call fails as unsupported.
+static int ipc_unsupported(void) {
+    return socket_unsupported();
+}
+
+static bool os_pipe(int children, intptr_t ends[2]) {
+    (void)children;
+    (void)ends;
+    ipc_unsupported();
+    return false;
+}
+
+static void handle_close(PlatformHandle handle) {
+    (void)handle;
+}
+
+static bool fifo_make(const char *path, int permissions) {
+    (void)path;
+    (void)permissions;
+    ipc_unsupported();
+    return false;
+}
+
+static PlatformPipe fifo_open(const char *path, bool writes) {
+    (void)path;
+    (void)writes;
+    return ipc_unsupported();
+}
+
+static char *local_directory(bool any) {
+    (void)any;
+    ipc_unsupported();
+    return NULL;
+}
+
+static PlatformPipe local_listen(const char *name, int flags, bool first) {
+    (void)name;
+    (void)flags;
+    (void)first;
+    return ipc_unsupported();
+}
+
+static int local_accept(PlatformPipe pipe) {
+    (void)pipe;
+    return ipc_unsupported();
+}
+
+static PlatformPipe local_writer(PlatformPipe pipe) {
+    (void)pipe;
+    return ipc_unsupported();
+}
+
+static PlatformPipe local_connect(const char *name, int flags) {
+    (void)name;
+    (void)flags;
+    return ipc_unsupported();
+}
+
+static int64_t local_peer_process(PlatformPipe pipe, bool server) {
+    (void)pipe;
+    (void)server;
+    return -1;
+}
+
+static PlatformHandle shared_open(const char *name, int64_t size, bool create, int64_t *actual) {
+    (void)name;
+    (void)size;
+    (void)create;
+    (void)actual;
+    return ipc_unsupported();
+}
+
+static bool shared_remove(const char *name) {
+    (void)name;
+    ipc_unsupported();
+    return false;
+}
+
+static PlatformHandle semaphore_open(const char *name, int64_t count, bool create) {
+    (void)name;
+    (void)count;
+    (void)create;
+    return ipc_unsupported();
+}
+
+static int semaphore_try(PlatformHandle semaphore) {
+    (void)semaphore;
+    ipc_unsupported();
+    return -1;
+}
+
+static bool semaphore_release(PlatformHandle semaphore, int64_t count) {
+    (void)semaphore;
+    (void)count;
+    ipc_unsupported();
+    return false;
+}
+
+static void semaphore_close(PlatformHandle semaphore) {
+    (void)semaphore;
+}
+
+static bool semaphore_remove(const char *name) {
+    (void)name;
+    ipc_unsupported();
+    return false;
+}
+
+static PlatformHandle lock_try(const char *path) {
+    (void)path;
+    return ipc_unsupported();
+}
+
+static bool serial_open(const char *name, const SerialSettings *settings, PlatformPipe ends[2]) {
+    (void)name;
+    (void)settings;
+    (void)ends;
+    ipc_unsupported();
+    return false;
+}
+
+static bool serial_configure(PlatformPipe port, const SerialSettings *settings) {
+    (void)port;
+    (void)settings;
+    ipc_unsupported();
+    return false;
+}
+
+static int serial_lines(PlatformPipe port) {
+    (void)port;
+    ipc_unsupported();
+    return -1;
+}
+
+static bool serial_set_line(PlatformPipe port, int line, bool on) {
+    (void)port;
+    (void)line;
+    (void)on;
+    ipc_unsupported();
+    return false;
+}
+
+static bool serial_break(PlatformPipe port, bool on) {
+    (void)port;
+    (void)on;
+    ipc_unsupported();
+    return false;
+}
+
+static bool serial_discard(PlatformPipe port, bool input, bool output) {
+    (void)port;
+    (void)input;
+    (void)output;
+    ipc_unsupported();
+    return false;
+}
+
+static int64_t serial_queued(PlatformPipe port, bool output) {
+    (void)port;
+    (void)output;
+    ipc_unsupported();
+    return -1;
+}
+
+static char *serial_names(void) {
+    return NULL;
+}
+
+// ---- Ping, raw sockets, changes and statistics ------------------------------------
+
+static PlatformSocket socket_raw(int family, int protocol, bool raw) {
+    (void)family;
+    (void)protocol;
+    (void)raw;
+    return ipc_unsupported();
+}
+
+static int64_t socket_icmp_error(PlatformSocket socket, int *type, int *code, PlatformAddress *from, void *bytes, int64_t size) {
+    (void)socket;
+    (void)type;
+    (void)code;
+    (void)from;
+    (void)bytes;
+    (void)size;
+    return IO_WOULD_BLOCK;
+}
+
+static bool ping_echo(const PlatformAddress *to, int timeout, int hops, bool dont_fragment, const void *bytes, int64_t size, int64_t out[2], PlatformAddress *from) {
+    (void)to;
+    (void)timeout;
+    (void)hops;
+    (void)dont_fragment;
+    (void)bytes;
+    (void)size;
+    (void)out;
+    (void)from;
+    ipc_unsupported();
+    return false;
+}
+
+static PlatformSocket changes_open(void) {
+    return ipc_unsupported();
+}
+
+static void changes_drain(PlatformSocket socket) {
+    (void)socket;
+}
+
+static void *changes_watch(int64_t event) {
+    (void)event;
+    return NULL;
+}
+
+static void changes_unwatch(void *watch) {
+    (void)watch;
+}
+
+static int connections_list(int protocol, PlatformConnection **rows) {
+    (void)protocol;
+    *rows = NULL;
+    return ipc_unsupported() == IO_FAILED ? -1 : 0;
+}
+
+static bool protocol_counters(int protocol, int64_t counters[8]) {
+    (void)protocol;
+    (void)counters;
+    ipc_unsupported();
     return false;
 }
 

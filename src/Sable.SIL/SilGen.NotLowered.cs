@@ -7,6 +7,9 @@ public sealed partial class SilGen {
     /// <summary>Where each instance of a generic function was asked for (<see cref="_instanceOrigins" />).</summary>
     readonly Dictionary<string, SyntaxNode> _requests = new(StringComparer.Ordinal);
 
+    /// <summary>The first inline array too large to lower (S7004) since one was last reported, and its size.</summary>
+    (ArrayTypeSymbol Array, long Bytes)? _tooLargeArray;
+
     /// <summary>
     ///     Reports what lowering has no code for (S7000). In the standard
     ///     library it says the function it is in, and is placed at the
@@ -15,6 +18,16 @@ public sealed partial class SilGen {
     ///     program's to change.
     /// </summary>
     void ReportNotLowered(SyntaxNode at, string what) {
+        // What failed to lower because an inline array in it is too large
+        // says so (S7004), where the program needs it.
+        if (_tooLargeArray is var (array, bytes)) {
+            _tooLargeArray = null;
+            _diagnostics.Add(Diagnostic.Error(ErrorCode.ERR_InlineArrayTooLarge, at.Span,
+                $"'{array.ToDisplayString()}' takes {bytes} bytes held inline, more than the {TypeLayout.MaximumInlineBytes} an inline array may: "
+                + $"use '{array.ElementType.ToDisplayString()}{(array.ArrayKind == ArrayKind.Inline ? "[>..]" : "[]")}', whose elements are on the heap").AnchoredAt(at));
+            return;
+        }
+
         var message = $"SIL lowering does not handle {what} yet";
         var tree = _compilation.TreeOf(at);
         if (tree is null || !IsStandardLibrary(tree)) {

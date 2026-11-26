@@ -1,0 +1,237 @@
+module Sable.IO.Hashing
+
+/// XXH64, xxHash's 64-bit hash, with a seed: four lanes of 64-bit words, 32
+/// bytes a step. zstd's frames are checked by its low half. XxHash3 is quicker
+/// on any input; this is for formats that name it.
+///
+/// ```sable
+/// assert(XxHash64.hash([]) == 0xEF46DB3751D8E999)
+/// assert(XxHash64.hash("123456789".utf8Bytes()) == 0x8CB841DB40E6AE83)
+/// var hash = XxHash64(seed: 7)
+/// hash.update(utf8: "1234")
+/// hash.update(utf8: "56789")
+/// assert(hash.value == XxHash64.hash("123456789".utf8Bytes(), seed: 7))
+/// ```
+public struct XxHash64: NonCryptographicHash {
+    var lanes: Xxh64Lanes
+    /// Fewer than 32 bytes that do not fill a stripe yet.
+    var held: U8[>..]
+    var heldCount: Int
+    var length: U64
+
+    /// The seed it hashes with.
+    public let seed: U64
+
+    /// With a seed of zero, nothing given yet.
+    public init() {
+        self.init(seed: 0)
+    }
+
+    /// With the seed, nothing given yet.
+    public init(seed: U64) {
+        self.seed = seed
+        lanes = Xxh64Lanes(seed: seed)
+        held = []
+        heldCount = 0
+        length = 0
+    }
+
+    /// Eight bytes.
+    public static var hashByteCount: Int => 8
+
+    /// The hash of the bytes, at once.
+    public static fn hash(_ bytes: U8[:], seed: U64 = 0) -> U64 {
+        return bytes.withPointer { (start: RawPtr<U8>) -> U64 in
+            unsafe {
+                let count = bytes.count
+                let end = start.address &+ count
+                var lanes = Xxh64Lanes(seed: seed)
+                let whole = start.address &+ (count & ~31)
+                if count >= 32 {
+                    lanes.stripes(start.address, whole)
+                }
+                return xxh64Finish(lanes, count >= 32, seed, count unchecked as U64, whole, end)
+            }
+        }
+    }
+
+    public mutating fn update(_ bytes: U8[:]) {
+        if bytes.count == 0 {
+            return
+        }
+        bytes.withPointer { (start: RawPtr<U8>) in
+            unsafe {
+                self.update(at: start.address, count: bytes.count)
+            }
+        }
+    }
+
+    /// The bytes at an address, after those already given: for the library's
+    /// codecs, which work in memory of their own.
+    package unsafe mutating fn update(at address: Int, count: Int) {
+        length = length &+ (count unchecked as U64)
+        var at = address
+        let end = address &+ count
+        if heldCount > 0 || count < 32 {
+            if held.count == 0 {
+                held = U8[>..](repeating: 0, count: 32)
+            }
+            let taken = 32 &- heldCount < count ? 32 &- heldCount : count
+            let into = heldCount
+            held.withMutablePointer { (room: RawPtr<U8>) in
+                unsafe {
+                    copyBytes(from: at, to: room.address &+ into, taken)
+                }
+            }
+            heldCount = heldCount &+ taken
+            at = at &+ taken
+            if heldCount < 32 {
+                return
+            }
+            var lanes = self.lanes
+            held.withPointer { (room: RawPtr<U8>) in
+                unsafe {
+                    lanes.stripes(room.address, room.address &+ 32)
+                }
+            }
+            self.lanes = lanes
+            heldCount = 0
+        }
+        let whole = at &+ ((end &- at) & ~31)
+        lanes.stripes(at, whole)
+        if whole < end {
+            if held.count == 0 {
+                held = U8[>..](repeating: 0, count: 32)
+            }
+            held.withMutablePointer { (room: RawPtr<U8>) in
+                unsafe {
+                    copyBytes(from: whole, to: room.address, end &- whole)
+                }
+            }
+            heldCount = end &- whole
+        }
+    }
+
+    public mutating fn reset() {
+        lanes = Xxh64Lanes(seed: seed)
+        heldCount = 0
+        length = 0
+    }
+
+    /// The hash of every byte given so far.
+    public var value: U64 {
+        get {
+            let lanes = self.lanes
+            let seed = self.seed
+            let length = self.length
+            let count = heldCount
+            if count == 0 {
+                unsafe {
+                    return xxh64Finish(lanes, length >= 32, seed, length, 0, 0)
+                }
+            }
+            return held.withPointer { (room: RawPtr<U8>) -> U64 in
+                unsafe {
+                    return xxh64Finish(lanes, length >= 32, seed, length, room.address, room.address &+ count)
+                }
+            }
+        }
+    }
+
+    /// The hash as eight bytes, the most significant first, as xxHash's
+    /// canonical form is.
+    public fn hashBytes() -> U8[>..] => value.bigEndianBytes()
+}
+
+const xxPrime64a: U64 = 0x9E37_79B1_85EB_CA87
+
+const xxPrime64b: U64 = 0xC2B2_AE3D_27D4_EB4F
+
+const xxPrime64c: U64 = 0x1656_67B1_9E37_79F9
+
+const xxPrime64d: U64 = 0x85EB_CA77_C2B2_AE63
+
+const xxPrime64e: U64 = 0x27D4_EB2F_1656_67C5
+
+/// XXH64's four lanes.
+struct Xxh64Lanes {
+    var a: U64
+    var b: U64
+    var c: U64
+    var d: U64
+
+    init(seed: U64) {
+        a = seed &+ xxPrime64a &+ xxPrime64b
+        b = seed &+ xxPrime64b
+        c = seed
+        d = seed &- xxPrime64a
+    }
+
+    /// The 32-byte stripes from an address to another.
+    @inline(always)
+    unsafe mutating fn stripes(_ address: Int, _ end: Int) {
+        var a = self.a
+        var b = self.b
+        var c = self.c
+        var d = self.d
+        var at = address
+        while at < end {
+            a = xxh64Round(a, load64(at))
+            b = xxh64Round(b, load64(at &+ 8))
+            c = xxh64Round(c, load64(at &+ 16))
+            d = xxh64Round(d, load64(at &+ 24))
+            at = at &+ 32
+        }
+        self.a = a
+        self.b = b
+        self.c = c
+        self.d = d
+    }
+}
+
+@inline(always)
+fn xxh64Round(_ lane: U64, _ word: U64) -> U64 {
+    return (lane &+ word &* xxPrime64b).rotatedLeft(by: 31) &* xxPrime64a
+}
+
+@inline(always)
+fn xxh64Merge(_ hash: U64, _ lane: U64) -> U64 {
+    return (hash ^ xxh64Round(0, lane)) &* xxPrime64a &+ xxPrime64d
+}
+
+/// The hash, from the lanes (if 32 bytes or more were given) and the bytes
+/// after the last stripe, from one address to another.
+unsafe fn xxh64Finish(_ lanes: Xxh64Lanes, _ striped: Bool, _ seed: U64, _ length: U64, _ address: Int, _ end: Int) -> U64 {
+    var hash: U64
+    if striped {
+        hash = lanes.a.rotatedLeft(by: 1) &+ lanes.b.rotatedLeft(by: 7) &+ lanes.c.rotatedLeft(by: 12) &+ lanes.d.rotatedLeft(by: 18)
+        hash = xxh64Merge(hash, lanes.a)
+        hash = xxh64Merge(hash, lanes.b)
+        hash = xxh64Merge(hash, lanes.c)
+        hash = xxh64Merge(hash, lanes.d)
+    } else {
+        hash = seed &+ xxPrime64e
+    }
+    hash = hash &+ length
+    var at = address
+    while at &+ 8 <= end {
+        hash = (hash ^ xxh64Round(0, load64(at))).rotatedLeft(by: 27) &* xxPrime64a &+ xxPrime64d
+        at = at &+ 8
+    }
+    if at &+ 4 <= end {
+        hash = (hash ^ (load32(at) unchecked as U64) &* xxPrime64a).rotatedLeft(by: 23) &* xxPrime64b &+ xxPrime64c
+        at = at &+ 4
+    }
+    while at < end {
+        hash = (hash ^ (load8(at) unchecked as U64) &* xxPrime64e).rotatedLeft(by: 11) &* xxPrime64a
+        at = at &+ 1
+    }
+    return xxh64Avalanche(hash)
+}
+
+@inline(always)
+fn xxh64Avalanche(_ value: U64) -> U64 {
+    var hash = (value ^ (value >> 33)) &* xxPrime64b
+    hash = (hash ^ (hash >> 29)) &* xxPrime64c
+    return hash ^ (hash >> 32)
+}

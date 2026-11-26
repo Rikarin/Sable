@@ -1,0 +1,160 @@
+module Sable.Net
+
+import Sable.IO
+
+/// A socket that sends and receives IP's payloads itself: ICMP messages, or
+/// whole IPv4 datagrams with their headers (`setHeaderIncluded`). .NET's
+/// `Socket(SocketType.Raw, ...)`, Rust's `socket2`. A raw socket needs
+/// privilege (root, CAP_NET_RAW, an administrator); `icmp` is the ICMP
+/// socket macOS and Linux give anyone (Linux where
+/// `net.ipv4.ping_group_range` lets the user's group).
+///
+/// What a raw IPv4 socket receives starts with the IP header; an IPv6 one's
+/// does not. Linux gives an ICMP socket's echoes an identifier of its own.
+/// Deeply immutable, so Sendable.
+///
+/// ```sable
+/// fn echo(_ to: IpAddress) async throws(IoError) -> Datagram {
+///     let socket = try RawSocket.icmp(.V4)
+///     let request = IcmpMessage.echoRequest(.V4, identifier: 1, sequence: 1, payload: [1, 2, 3])
+///     try await socket.send(request.bytes(), to: to)
+///     return try await socket.receive()
+/// }
+/// ```
+@immutable
+public final class RawSocket: Sendable {
+    let handle: Int
+
+    /// Its family.
+    public let family: IpFamily
+
+    /// The protocol it sends and receives.
+    public let ipProtocol: IpProtocol
+
+    /// Whether it is an ICMP socket of datagrams (`icmp`), not a raw one.
+    public let isDatagram: Bool
+
+    let headerIncluded: Atomic<Bool>
+
+    init(handle: Int, family: IpFamily, ipProtocol: IpProtocol, isDatagram: Bool) {
+        self.handle = handle
+        self.family = family
+        self.ipProtocol = ipProtocol
+        self.isDatagram = isDatagram
+        headerIncluded = Atomic<Bool>(false)
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// A raw socket of the family and protocol: PermissionDenied without
+    /// the privilege it needs.
+    public static fn open(_ family: IpFamily, protocol ipProtocol: IpProtocol) throws(IoError) -> RawSocket {
+        return try RawSocket.opening(family, ipProtocol, raw: true)
+    }
+
+    /// A socket of ICMP (or ICMPv6) datagrams, which needs no privilege
+    /// where the system allows it: PermissionDenied where it does not, and
+    /// Unsupported on Windows.
+    public static fn icmp(_ family: IpFamily) throws(IoError) -> RawSocket {
+        return try RawSocket.opening(family, family == .V4 ? IpProtocol.icmp : IpProtocol.icmpV6, raw: false)
+    }
+
+    static fn opening(_ family: IpFamily, _ ipProtocol: IpProtocol, raw: Bool) throws(IoError) -> RawSocket {
+        let handle = openRawSocket(family == .V4 ? 4 : 6, ipProtocol.number, raw)
+        if handle == 0 {
+            throw socketError(raw ? "a raw socket" : "an ICMP socket")
+        }
+        return RawSocket(handle: handle, family: family, ipProtocol: ipProtocol, isDatagram: !raw)
+    }
+
+    /// The bytes sent to the address as one datagram, the system's IP
+    /// header before them unless the socket's own is included.
+    public fn send(_ bytes: U8[:], to address: IpAddress) async throws(IoError) {
+        var sent = bytes.toArray()
+        #if os(macos)
+        // macOS takes a header's length and fragment offset in the host's
+        // order, not the network's.
+        if headerIncluded.load() && sent.count >= 20 {
+            sent.swapAt(2, 3)
+            sent.swapAt(6, 7)
+        }
+        #endif
+        let to = SocketAddress(address, port: 0)
+        while true {
+            _ = Runtime.sendDatagram(handle, sent, to.familyNumber, to.highBits, to.lowBits, to.scopeNumber, 0, "")
+            if Runtime.socketStatus() == 0 {
+                return
+            }
+            try await waitForSocket(handle, writable: true)
+        }
+    }
+
+    /// The next datagram, waiting until one comes, and whom it is from (its
+    /// port 0). A task cancelled while it waits throws Cancelled.
+    public fn receive(upTo count: Int = 65535) async throws(IoError) -> Datagram {
+        while true {
+            let bytes = Runtime.receiveDatagram(handle, count)
+            if Runtime.socketStatus() == 0 {
+                let truncated = Runtime.socketAddress(5) != 0
+                return Datagram { bytes: bytes, source: SocketAddress.ofLastCall() ?? SocketAddress(family == .V4 ? .v4Any : .v6Any, port: 0), isTruncated: truncated }
+            }
+            try await waitForSocket(handle, writable: false)
+        }
+    }
+
+    /// How many routers what it sends passes before it is dropped: IPv4's
+    /// time to live.
+    public fn hopLimit() throws(IoError) -> Int {
+        return try option(handle, 9)
+    }
+
+    /// Has what it sends dropped after so many routers.
+    public fn setHopLimit(_ hops: Int) throws(IoError) {
+        if hops < 1 || hops > 255 {
+            throw IoError.InvalidInput(path: "a hop limit of \(hops)")
+        }
+        try setOption(handle, 9, hops)
+    }
+
+    /// Has what it sends never broken up on the way: one too long for a
+    /// link is dropped, and the sender told (`PingStatus.PacketTooBig`).
+    public fn setDontFragment(_ on: Bool) throws(IoError) {
+        try setOption(handle, 15, on ? 1 : 0)
+    }
+
+    /// Has what it sends begin with its own IPv4 header (IP_HDRINCL), its
+    /// checksum and identification filled in by the system where they are
+    /// zero.
+    public fn setHeaderIncluded(_ on: Bool) throws(IoError) {
+        try setOption(handle, 16, on ? 1 : 0)
+        headerIncluded.store(on)
+    }
+
+    /// Closed: tasks waiting on it wake and throw Disconnected.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+
+    #if os(linux)
+    // An ICMP error the system kept for the socket (Linux's ping sockets):
+    // its type and code, who sent it, and the echo it is about; none.
+    fn takeError() -> (type: Int, code: Int, from: IpAddress, echo: U8[>..])? {
+        var parts: Int[>..] = [0, 0]
+        var room = U8[>..](repeating: 0, count: 2048)
+        let got = parts.withMutablePointer { (into: RawPtr<Int>) -> Int in
+            return room.withMutablePointer { (bytes: RawPtr<U8>) -> Int in
+                unsafe {
+                    return takeIcmpError(handle, into, bytes, 2048)
+                }
+            }
+        }
+        if got < 0 {
+            return none
+        }
+        let from = SocketAddress.ofLastCall()?.ip ?? (family == .V4 ? IpAddress.v4Any : IpAddress.v6Any)
+        return (type: parts[0], code: parts[1], from: from, echo: room[0..<got].toArray())
+    }
+    #endif
+}

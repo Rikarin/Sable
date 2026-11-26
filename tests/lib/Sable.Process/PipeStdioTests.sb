@@ -1,0 +1,59 @@
+module PipeStdioTests
+
+// Stdio.Pipe (Sable.Process): a child's streams over Sable.IO's OsPipe. Run
+// with
+//     tools/stdlib-coverage.sh Sable.Process
+
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+
+import ProcessSupport
+
+#if !os(windows)
+
+@test
+fn aChildRoundTripsDataThroughAnonymousPipes() async throws {
+    let (input, toChild) = try OsPipe.toChild()
+    let (fromChild, output) = try OsPipe.fromChild()
+    let child = try Command("cat").stdin(.Pipe(end: input)).stdout(.Pipe(end: output)).spawn()
+    // The child has its copies: this program's go, or cat never reads to its end.
+    input.close()
+    output.close()
+    let reading = Task.spawn { () -> U8[>..] in try! await fromChild.readAll() }
+    var sent: U8[>..] = []
+    for i in 0..<200_000 {
+        sent.append(U8(i % 251))
+    }
+    try await toChild.write(sent)
+    toChild.close()
+    let got = await reading.value
+    assertEqual(got.count, sent.count)
+    expect(got == sent)
+    expect((try await child.wait()).success)
+}
+
+@test
+fn twoChildrenAreJoinedAsAShellJoinsThem() async throws {
+    let (readEnd, writeEnd) = try OsPipe.betweenChildren()
+    let first = try sh("printf 'one\\ntwo\\nthree\\n'").stdout(.Pipe(end: writeEnd)).spawn()
+    let second = try Command("wc").argument("-l").stdin(.Pipe(end: readEnd)).stdout(.Piped).spawn()
+    readEnd.close()
+    writeEnd.close()
+    let counted = try await second.stdout!.readText()
+    assertEqual(counted.trimmed(), "3")
+    expect((try await first.wait()).success)
+    expect((try await second.wait()).success)
+}
+
+@test
+fn anEndClosedIsNotGiven() throws {
+    let (end, writer) = try OsPipe.toChild()
+    end.close()
+    expectThrows(saying: ProcessError.InvalidArgument(text: "a pipe's end, closed").description()) {
+        _ = try Command("cat").stdin(.Pipe(end: end)).spawn()
+    }
+    writer.close()
+}
+
+#endif

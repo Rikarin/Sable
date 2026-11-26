@@ -1,0 +1,130 @@
+module Sable.Math.Tensors
+
+/// A strided view that writes: a part of a tensor, or of an array, lent for as
+/// long as a closure runs (`Tensor.withMutableView`, `withTensorView`), and
+/// written in place. It is had only as an `inout` parameter, so that nothing
+/// else reaches what it writes while it does, as docs/02's exclusivity asks.
+///
+/// ```sable
+/// var t = Tensor<Int>(shape: [3, 3], repeating: 0)
+/// t.withMutableView([.range(1..<3), .range(1..<3)]) { (corner: inout MutableTensorView<Int>) in
+///     corner[0, 1] = 5
+///     corner.assign(TensorView<Int>([1, 2], shape: [2]))
+/// }
+/// assert(t.toArray() == [0, 0, 0, 0, 1, 2, 0, 1, 2])
+/// ```
+public struct MutableTensorView<T> {
+    var storage: T[>..]
+    let offset: Int
+
+    /// The length of each dimension.
+    public let shape: Int[>..]
+
+    /// How far apart, in elements, two places one apart in each dimension lie.
+    public let strides: Int[>..]
+
+    init(storage: T[>..], offset: Int, shape: Int[>..], strides: Int[>..]) {
+        self.storage = storage
+        self.offset = offset
+        self.shape = shape
+        self.strides = strides
+    }
+
+    /// How many dimensions it has.
+    public var rank: Int => shape.count
+
+    /// How many places it has.
+    public var count: Int => elementCount(shape)
+
+    /// What it sees, as a view that reads.
+    public var view: TensorView<T> => TensorView<T>(storage: storage, offset: offset, shape: shape, strides: strides)
+
+    /// The element of a view of rank 1.
+    public subscript(i: Int) -> T {
+        get => storage[offsetOf([i], shape, strides, offset)]
+        set { storage[offsetOf([i], shape, strides, offset)] = newValue }
+    }
+
+    /// The element at the place of a view of rank 2.
+    public subscript(i: Int, j: Int) -> T {
+        get => storage[offsetOf([i, j], shape, strides, offset)]
+        set { storage[offsetOf([i, j], shape, strides, offset)] = newValue }
+    }
+
+    /// The element at the place of a view of rank 3.
+    public subscript(i: Int, j: Int, k: Int) -> T {
+        get => storage[offsetOf([i, j, k], shape, strides, offset)]
+        set { storage[offsetOf([i, j, k], shape, strides, offset)] = newValue }
+    }
+
+    /// The element at an index of any rank.
+    public subscript(index index: Int[:]) -> T {
+        get => storage[offsetOf(index, shape, strides, offset)]
+        set { storage[offsetOf(index, shape, strides, offset)] = newValue }
+    }
+
+    /// Every place set to the value.
+    public mutating fn fill(_ value: T) {
+        let offsets = self.view.offsets()
+        for at in offsets {
+            storage[at] = value
+        }
+    }
+
+    /// Every place set to the other's element at it, the other broadcast to
+    /// this shape as NumPy's assignment broadcasts it.
+    public mutating fn assign(_ other: TensorView<T>) {
+        let source = other.broadcast(to: shape).toArray()
+        let offsets = self.view.offsets()
+        var i = 0
+        while i < offsets.count {
+            storage[offsets[i]] = source[i]
+            i += 1
+        }
+    }
+
+    /// Each element replaced by what the closure makes of it.
+    public mutating fn update(_ change: (T) -> T) {
+        let offsets = self.view.offsets()
+        for at in offsets {
+            storage[at] = change(storage[at])
+        }
+    }
+}
+
+extension TensorView {
+    /// The storage offset of each place, in row-major order.
+    fn offsets() -> Int[>..] {
+        var result: Int[>..] = []
+        result.reserveCapacity(count)
+        self.forEachOffset { (at: Int) in
+            result.append(at)
+        }
+        return result
+    }
+}
+
+extension<T> T[>..] {
+    /// Lends the array, seen as a tensor of a shape (row-major, as many
+    /// elements as the shape has), to be written in place for as long as the
+    /// body runs.
+    ///
+    /// ```sable
+    /// var pixels: F32[>..] = [0, 0, 0, 0, 0, 0]
+    /// pixels.withTensorView(shape: [2, 3]) { (image: inout MutableTensorView<F32>) in
+    ///     image[1, 2] = 1
+    /// }
+    /// assert(pixels[5] == 1)
+    /// ```
+    public mutating fn withTensorView<R>(shape: Int[:], _ body: (inout MutableTensorView<T>) -> R) -> R {
+        checkShape(shape)
+        if elementCount(shape) != self.count {
+            preconditionFailure("\(self.count) elements for a tensor of shape \(shape)")
+        }
+        var lent = MutableTensorView<T>(storage: self, offset: 0, shape: shape.toArray(), strides: contiguousStrides(shape, .RowMajor))
+        self = []
+        let result = body(&lent)
+        self = lent.storage
+        return result
+    }
+}

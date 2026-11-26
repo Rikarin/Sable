@@ -1,0 +1,116 @@
+module Sable.IO.Ipc
+
+import Sable.IO
+
+// What the module calls in the runtime (runtime/ipc.c), and what its types
+// share: names, the directory they are in, waiting on a handle.
+
+// The text's bytes lent to the body, with their count.
+fn withBytes<R>(_ text: String, _ body: (RawPtr<U8>, Int) -> R) -> R {
+    let bytes = text.utf8.toArray()
+    return bytes.withPointer { (at: RawPtr<U8>) -> R in body(at, bytes.count) }
+}
+
+// A name for a local stream, a lock, shared memory or a semaphore: not
+// empty, no longer than 'most' bytes, and of letters, digits, '.', '_' and
+// '-' alone, which every system takes as they are.
+fn checkName(_ name: String, most: Int) throws(IoError) {
+    let bytes = name.utf8.toArray()
+    if bytes.isEmpty || bytes.count > most {
+        throw IoError.InvalidInput(path: name)
+    }
+    for byte in bytes {
+        let letter = (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+        let digit = byte >= 0x30 && byte <= 0x39
+        if !letter && !digit && byte != 0x2E && byte != 0x5F && byte != 0x2D {
+            throw IoError.InvalidInput(path: name)
+        }
+    }
+}
+
+// The directory local sockets and locks are in: this user's own (made, and
+// checked to be no one else's), or one any user reaches.
+fn localDirectory(anyUser: Bool) throws(IoError) -> String {
+    var room = U8[>..](repeating: 0, count: 1024)
+    let length = room.withMutablePointer { (at: RawPtr<U8>) -> Int in
+        unsafe {
+            return ipcDirectory(anyUser, at, 1024)
+        }
+    }
+    if length < 0 || length > 1024 {
+        throw IoError.lastSystemError("the local directory")
+    }
+    return String.fromUtf8Lossy(room[0..<length])
+}
+
+#if os(windows)
+// Waits for the handle, once a call on it found it would block; or throws,
+// if the call failed (its other end gone), or the task is cancelled.
+fn waitForHandle(_ handle: Int, writable: Bool) async throws(IoError) {
+    if Runtime.socketStatus() != 1 {
+        throw IoError.Disconnected
+    }
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+    await Runtime.waitForSocket(handle, writable: writable)
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+}
+#endif
+
+// A while, longer each time, to a hundredth of a second: a wait nothing will
+// say the end of.
+fn pause(_ times: Int) async throws(IoError) {
+    do {
+        try await Task.sleep(nanoseconds: times < 8 ? (50_000 << times) : 10_000_000)
+    } catch {
+        throw IoError.Cancelled
+    }
+}
+
+@extern("c", "sable_ipc_directory")
+unsafe fn ipcDirectory(_ anyUser: Bool, _ into: RawPtr<U8>, _ room: Int) -> Int
+
+@extern("c", "sable_ipc_local_listen")
+unsafe fn localListen(_ name: RawPtr<U8>, _ length: Int, _ flags: Int, _ first: Bool) -> Int
+
+@extern("c", "sable_ipc_local_accept")
+fn localAccept(_ handle: Int) -> Int
+
+@extern("c", "sable_ipc_local_writer")
+fn localWriter(_ handle: Int) -> Int
+
+@extern("c", "sable_ipc_local_connect")
+unsafe fn localConnect(_ name: RawPtr<U8>, _ length: Int, _ flags: Int) -> Int
+
+@extern("c", "sable_ipc_local_peer")
+fn localPeer(_ handle: Int, _ server: Bool) -> Int
+
+@extern("c", "sable_ipc_shared_open")
+unsafe fn sharedOpen(_ name: RawPtr<U8>, _ length: Int, _ size: Int, _ create: Bool, _ actual: RawPtr<Int>) -> Int
+
+@extern("c", "sable_ipc_shared_remove")
+unsafe fn sharedRemove(_ name: RawPtr<U8>, _ length: Int) -> Bool
+
+@extern("c", "sable_ipc_handle_close")
+fn closeHandle(_ handle: Int)
+
+@extern("c", "sable_ipc_semaphore_open")
+unsafe fn semaphoreOpen(_ name: RawPtr<U8>, _ length: Int, _ count: Int, _ create: Bool) -> Int
+
+@extern("c", "sable_ipc_semaphore_try")
+fn semaphoreTry(_ semaphore: Int) -> Int
+
+@extern("c", "sable_ipc_semaphore_release")
+fn semaphoreRelease(_ semaphore: Int, _ count: Int) -> Bool
+
+@extern("c", "sable_ipc_semaphore_close")
+fn semaphoreClose(_ semaphore: Int)
+
+@extern("c", "sable_ipc_semaphore_remove")
+unsafe fn semaphoreRemove(_ name: RawPtr<U8>, _ length: Int) -> Bool
+
+@extern("c", "sable_ipc_lock")
+unsafe fn lockTry(_ path: RawPtr<U8>, _ length: Int) -> Int

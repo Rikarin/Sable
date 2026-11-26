@@ -170,9 +170,9 @@ public struct Vector3D: Hashable, AdditiveArithmetic, Sendable {
     /// but for rounding. The amount is not clamped.
     ///
     /// ```sable
-    /// assert(Vector3D.zero.lerp(to: Vector3D.one, 0.25) == Vector3D(repeating: 0.25))
+    /// assert(Vector3D.zero.lerp(to: Vector3D.one, by: 0.25) == Vector3D(repeating: 0.25))
     /// ```
-    public fn lerp(to other: Vector3D, _ amount: F64) -> Vector3D => self + (other - self) * amount
+    public fn lerp(to other: Vector3D, by amount: F64) -> Vector3D => self + (other - self) * amount
 
     /// The smaller of each pair of components: NaN if either is, and -0 below +0.
     public fn min(_ other: Vector3D) -> Vector3D => Vector3D(x.minimum(other.x), y.minimum(other.y), z.minimum(other.z))

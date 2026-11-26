@@ -255,9 +255,8 @@ fn aSmallVecIsWrittenFromTheEndInlineOrNot() {
 }
 
 @test
-fn aSmallVecWithinItsRoomAllocatesOnceAtMost() {
-    // Its inline room's buffer, once, and nothing per element; none at all
-    // once T[..N] is laid out inline (#304).
+fn aSmallVecWithinItsRoomAllocatesNothing() {
+    // Its room is inline, Element[..N] (#304): nothing at all is allocated.
     let made = allocations(during: () => {
         var v = SmallVec<Int, 8>()
         var i = 0
@@ -277,7 +276,7 @@ fn aSmallVecWithinItsRoomAllocatesOnceAtMost() {
         _ = v.popLast()
         v.truncate(to: 3)
     })
-    expect(made <= 1, "\(made) allocations")
+    expect(made == 0, "\(made) allocations")
     // Past its room, it moves to the heap: an allocation, as it should.
     let spilled = allocations(during: () => {
         var v = SmallVec<Int, 2>()

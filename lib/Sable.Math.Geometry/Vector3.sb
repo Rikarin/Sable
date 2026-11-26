@@ -205,9 +205,9 @@ public struct Vector3: Hashable, AdditiveArithmetic, Sendable {
     /// but for rounding. The amount is not clamped.
     ///
     /// ```sable
-    /// assert(Vector3.zero.lerp(to: Vector3.one, 0.25) == Vector3(repeating: 0.25))
+    /// assert(Vector3.zero.lerp(to: Vector3.one, by: 0.25) == Vector3(repeating: 0.25))
     /// ```
-    public fn lerp(to other: Vector3, _ amount: F32) -> Vector3 => self + (other - self) * amount
+    public fn lerp(to other: Vector3, by amount: F32) -> Vector3 => self + (other - self) * amount
 
     /// The smaller of each pair of components: NaN if either is, and -0 below +0.
     public fn min(_ other: Vector3) -> Vector3 => Vector3(x.minimum(other.x), y.minimum(other.y), z.minimum(other.z))

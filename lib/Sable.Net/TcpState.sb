@@ -1,0 +1,33 @@
+module Sable.Net
+
+/// Where a TCP connection is in its life (RFC 9293's states): .NET's
+/// `TcpState`.
+@derive(Equatable, Hashable, Debug)
+public enum TcpState {
+    /// The system did not say.
+    Unknown
+    Closed
+    /// A listener, waiting for connections.
+    Listen
+    SynSent
+    SynReceived
+    /// Open: the two ends talk.
+    Established
+    FinWait1
+    FinWait2
+    CloseWait
+    Closing
+    LastAck
+    /// Closed, and waiting for what is still on the way to go.
+    TimeWait
+    /// Windows' control block being deleted.
+    DeleteTcb
+
+    // By the runtime's number (ipc.c's, Windows' MIB_TCP_STATE).
+    static fn of(_ number: Int) -> TcpState {
+        return number >= 1 && number < tcpStates.count ? tcpStates[number] : .Unknown
+    }
+}
+
+let tcpStates: TcpState[>..] = [.Unknown, .Closed, .Listen, .SynSent, .SynReceived, .Established, .FinWait1, .FinWait2, .CloseWait, .Closing, .LastAck,
+    .TimeWait, .DeleteTcb]

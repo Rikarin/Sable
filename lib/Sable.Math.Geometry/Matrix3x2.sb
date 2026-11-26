@@ -133,8 +133,8 @@ public struct Matrix3x2: Hashable, Sendable {
     }
 
     /// The elements so far from these to the other's.
-    public fn lerp(to other: Matrix3x2, _ amount: F32) -> Matrix3x2 {
-        return Matrix3x2(row1.lerp(to: other.row1, amount), row2.lerp(to: other.row2, amount), row3.lerp(to: other.row3, amount))
+    public fn lerp(to other: Matrix3x2, by amount: F32) -> Matrix3x2 {
+        return Matrix3x2(row1.lerp(to: other.row1, by: amount), row2.lerp(to: other.row2, by: amount), row3.lerp(to: other.row3, by: amount))
     }
 
     /// Whether each element is near the other's.

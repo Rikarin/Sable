@@ -171,6 +171,7 @@ public sealed class BorrowLets : ISilPass {
             RefElementAddrInst field => Lent(field.Reference, function),
             StructElementAddrInst element => OfParameter(element.Address, function),
             TupleElementAddrInst element => OfParameter(element.Address, function),
+            EnumPayloadAddrInst element => OfParameter(element.Address, function),
             _ => false,
         };
 

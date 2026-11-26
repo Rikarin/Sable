@@ -476,6 +476,103 @@ public sealed class VerifierTests {
         AssertRejected(text, complaint);
     }
 
+    /// <summary>
+    ///     A switch that takes its enum gives each case its payload owned and
+    ///     consumes the enum, which must be owned.
+    /// </summary>
+    [Theory]
+    [InlineData("%2 : $M.Node", "destroy_value %2", "", null)]
+    [InlineData("%2 : @guaranteed $M.Node", "", "", "must take its payload owned")]
+    [InlineData("%2 : $M.Node", "destroy_value %2", "destroy_value %0", "not live")]
+    public void ASwitchThatTakesItsEnumOwnsThePayload(string argument, string some, string after, string? complaint) {
+        var text = $$"""
+                    sil_class M.Node {  }
+                    sil_enum Optional$M.Node { Some($M.Node), None }
+
+                    sil @f : $(@owned Optional$M.Node) -> () {
+                    bb0(%0 : $Optional$M.Node):
+                      switch_enum [take] %0, case #Some: bb1, default bb2
+                    bb1({{argument}}):
+                      {{some}}
+                      br bb3
+                    bb2:
+                      br bb3
+                    bb3:
+                      {{after}}
+                      return
+                    }
+
+                    """;
+        var module = SilParser.Parse(text);
+        Assert.Contains("switch_enum [take] %0", SilPrinter.Print(module), StringComparison.Ordinal);
+        if (complaint is null) {
+            Assert.Empty(SilVerifier.Verify(module));
+        } else {
+            AssertRejected(text, complaint);
+        }
+    }
+
+    /// <summary>A taking switch's default may stand only for cases with nothing to destroy.</summary>
+    [Fact]
+    public void ATakingSwitchsDefaultCannotStandForAPayload() =>
+        AssertRejected(
+            """
+            sil_class M.Node {  }
+            sil_enum Optional$M.Node { Some($M.Node), None }
+
+            sil @f : $(@owned Optional$M.Node) -> () {
+            bb0(%0 : $Optional$M.Node):
+              switch_enum [take] %0, case #None: bb1, default bb2
+            bb1:
+              return
+            bb2:
+              return
+            }
+            """,
+            "whose payload it would leak"
+        );
+
+    /// <summary>An owned upcast consumes the object it is given, which must be owned.</summary>
+    [Theory]
+    [InlineData("@owned M.Dog", "", null)]
+    [InlineData("M.Dog", "", "borrowed")]
+    [InlineData("@owned M.Dog", "destroy_value %0\n  ", "not live")]
+    public void AnOwnedUpcastTakesTheObject(string parameter, string after, string? complaint) {
+        var text = $$"""
+                    sil_class M.Animal {  }
+                    sil_class M.Dog : M.Animal {  }
+
+                    sil @f : $({{parameter}}) -> M.Animal {
+                    bb0(%0 : $M.Dog):
+                      %1 = upcast [owned] %0 : $M.Animal
+                      {{after}}return %1
+                    }
+
+                    """;
+        var module = SilParser.Parse(text);
+        Assert.Contains("upcast [owned] %0 : $M.Animal", SilPrinter.Print(module), StringComparison.Ordinal);
+        if (complaint is null) {
+            Assert.Empty(SilVerifier.Verify(module));
+        } else {
+            AssertRejected(text, complaint);
+        }
+    }
+
+    [Fact]
+    public void AnEnumsPayloadAddressNeedsACaseWithAPayload() =>
+        AssertRejected(
+            """
+            sil_enum Optional$Int { Some($Int), None }
+
+            sil @f : $(*Optional$Int) -> () {
+            bb0(%0 : $*Optional$Int):
+              %1 = enum_payload_addr %0, #None
+              return
+            }
+            """,
+            "enum_payload_addr needs an enum's address and a case with a payload"
+        );
+
     /// <summary>A struct's weak and unowned fields as values: made from the object, read back as it, each its own owned value.</summary>
     [Fact]
     public void WeakAndUnownedValuesOfAStructRoundTrip() {

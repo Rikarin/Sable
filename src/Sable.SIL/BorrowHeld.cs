@@ -131,6 +131,7 @@ public sealed class BorrowHeld : ISilPass {
             RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } type } field when type.LetFields.Contains(field.Field) => field,
             StructElementAddrInst element => LetField(element.Address),
             TupleElementAddrInst element => LetField(element.Address),
+            EnumPayloadAddrInst element => LetField(element.Address),
             _ => null,
         };
 
@@ -192,7 +193,7 @@ public sealed class BorrowHeld : ISilPass {
             }
 
             return field is not null && instruction switch {
-                LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst => false,
+                LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst => false,
                 _ => instruction.Operands.Any(o => o.Type is AddressType && LetField(o) is { } other && other.Field == field.Field),
             };
         }

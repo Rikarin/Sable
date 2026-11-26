@@ -180,6 +180,56 @@ public sealed class OptionalAndUnionTests {
             """
         );
 
+    /// <summary>
+    ///     '?.' and '!' store into what an optional holds where it is, in every
+    ///     layout an optional has: a tagged payload, a nullable string, a
+    ///     Bool's and a Char's niche, one holding an inline array, and one
+    ///     laid out at run time.
+    /// </summary>
+    [Fact]
+    public void AStoreThroughAnUnwrapChangesTheOptionalWhereItIs() =>
+        Prints(
+            "5 x\n16 x\n116 z\ntrue\nfalse b t\nchained 9\nx 5\n",
+            """
+            struct Entry { var key: String, var value: Int }
+            struct Holder { var xs: Int[4], var name: String }
+            struct Pair<T> { var a: T, var n: Int }
+            fn renumber<T>(_ p: inout Pair<T>?, _ n: Int) {
+                p!.n = n
+                p?.n = n + 1
+            }
+            fn bump(_ x: inout Int) { x = x + 100 }
+            """,
+            """
+                var a: Entry?[>..] = [Entry { key: "x", value: 1 }, none]
+                a[0]!.value = 5
+                a[1]?.value = 7
+                print("\(a[0]!.value) \(a[0]!.key)")
+                a[0]!.value += 11
+                print("\(a[0]!.value) \(a[0]!.key)")
+                bump(&a[0]!.value)
+                a[0]?.key = "z"
+                a[1]?.key = "w"
+                print("\(a[0]!.value) \(a[0]!.key)")
+                print(a[1] == none)
+                var flag: Bool? = true
+                flag! = false
+                var ch: Char? = 'a'
+                ch! = 'b'
+                var s: String? = "s"
+                s! = "t"
+                print("\(flag!) \(ch!) \(s!)")
+                var h: Holder? = Holder { xs: [1, 2, 3, 4], name: "h" }
+                h!.name = "held"
+                h?.name = "chained"
+                h!.xs[1] = 9
+                print("\(h!.name) \(h!.xs[1])")
+                var p: Pair<String>? = Pair { a: "x", n: 0 }
+                renumber(&p, 4)
+                print("\(p!.a) \(p!.n)")
+            """
+        );
+
     [Fact]
     public void ReachesATupleElementThroughAnOptional() =>
         Prints(

@@ -19,6 +19,7 @@ public class BuildCommand : Command {
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
                sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0|-O1|-O2|-O3|-Os|-Oz] [-g] [--exclusivity=checked|unchecked]
                                      [--target <triple>] [--sysroot <dir>] [--deny-reflection] [--deny-unsafe] [--vectorize-report]
+                                     [--profile-generate[=<file>] | --profile-use <file>]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -48,6 +49,11 @@ public class BuildCommand : Command {
           --deny-reflection  carry no reflection: Mirror and TypeInfo are errors (S3450), and the
                              runtime's field descriptors have no names
           --deny-unsafe      fail on any 'unsafe' block or 'unsafe fn' in the file (S3472)
+          --profile-generate count, as the program runs, which function each call through a vtable,
+                             a witness table or a closure reaches; written as it ends to the file
+                             given, or <output>.sableprof, or where SABLE_PROFILE_FILE says
+          --profile-use <f>  test for, and call directly, the function such a call reached nearly
+                             always in the profile <f>; a call the profile does not know is left
         """;
 
     /// <summary>What the command line asked for.</summary>
@@ -64,6 +70,12 @@ public class BuildCommand : Command {
 
         /// <summary><c>--deny-unsafe</c> (SYNTAX.md §23).</summary>
         public bool DenyUnsafe { get; init; }
+
+        /// <summary><c>--profile-generate</c>: the file the program writes its counts to, or "" for the default.</summary>
+        public string? ProfileGenerate { get; init; }
+
+        /// <summary><c>--profile-use</c>: the profile to guess calls' callees from.</summary>
+        public string? ProfileUse { get; init; }
 
         /// <summary>What clang is asked for.</summary>
         public NativeOptions Native => new() { OptLevel = OptLevel, DebugInfo = Debug, Target = Target, Sysroot = Sysroot };
@@ -82,6 +94,8 @@ public class BuildCommand : Command {
         string? sysroot = null;
         var denyReflection = false;
         var denyUnsafe = false;
+        string? profileGenerate = null;
+        string? profileUse = null;
         var arguments = new List<string>();
 
         for (var i = 0; i < args.Count; i++) {
@@ -100,6 +114,11 @@ public class BuildCommand : Command {
                 case "-O0" or "-O1" or "-O2" or "-O3" or "-Os" or "-Oz": level = args[i][2..]; break;
                 case "-g": debug = true; break;
                 case "--vectorize-report" when !TakesProgramArguments: emit = "vectorize-report"; break;
+                case "--profile-generate": profileGenerate = ""; break;
+                case var generate when generate.StartsWith("--profile-generate=", StringComparison.Ordinal) && generate.Length > "--profile-generate=".Length:
+                    profileGenerate = generate["--profile-generate=".Length..];
+                    break;
+                case "--profile-use" when i + 1 < args.Count: profileUse = args[++i]; break;
                 case "--exclusivity=checked": exclusivity = true; break;
                 case "--exclusivity=unchecked": exclusivity = false; break;
                 default:
@@ -112,7 +131,7 @@ public class BuildCommand : Command {
             }
         }
 
-        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj" or "vectorize-report" or "staticlib" or "dylib")) {
+        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj" or "vectorize-report" or "staticlib" or "dylib") || profileGenerate is not null && profileUse is not null) {
             return null;
         }
 
@@ -126,7 +145,9 @@ public class BuildCommand : Command {
         // passes run, and the debugger sees what they leave. A vectorisation
         // report is of the optimised build.
         level ??= debug && emit != "vectorize-report" ? "0" : "2";
-        return new(input, output, emit, level, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection, DenyUnsafe = denyUnsafe };
+        return new(input, output, emit, level, debug, exclusivity, arguments) {
+            Target = target, Sysroot = sysroot, DenyReflection = denyReflection, DenyUnsafe = denyUnsafe, ProfileGenerate = profileGenerate, ProfileUse = profileUse,
+        };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -173,12 +194,34 @@ public class BuildCommand : Command {
             return 1;
         }
 
+        if ((options.ProfileGenerate ?? options.ProfileUse) is not null && !options.Optimise) {
+            Console.Error.WriteLine("sable: a profile is of an optimised build: --profile-generate and --profile-use need -O1 or above");
+            return 1;
+        }
+
         // Unoptimised, the file is compiled on its own and linked against the
         // standard library's archive in the build cache, compiled by the
         // first build that needed it; optimised, the program is compiled
         // whole, the library with it, so that the SIL passes see all of it.
         if (!options.Optimise && !report && options.Emit is null or "staticlib" or "dylib" && target.HasRuntime) {
             return BuildSeparately(options, executable, target);
+        }
+
+        // Counting the calls, or guessing from what was counted (SIL's CallProfile.cs).
+        ISilPass? profile = null;
+        if (options.ProfileGenerate is { } counts) {
+            profile = new InstrumentProfile(Path.GetFullPath(counts.Length > 0 ? counts : executable + ".sableprof"));
+        } else if (options.ProfileUse is { } profilePath) {
+            if (!File.Exists(profilePath)) {
+                Console.Error.WriteLine($"sable: no such profile '{profilePath}'");
+                return 1;
+            }
+
+            if (ProfileData.Parse(File.ReadAllText(profilePath), out var problem) is { } data) {
+                profile = new UseProfile(data);
+            } else {
+                Console.Error.WriteLine($"warning: the profile '{profilePath}' is not used: {problem}");
+            }
         }
 
         var result = Pipeline.Compile(
@@ -189,7 +232,8 @@ public class BuildCommand : Command {
             optimised: options.Optimise,
             optLevel: options.OptLevel,
             library: LibraryKindOf(options.Emit) is not null,
-            denyReflection: options.DenyReflection
+            denyReflection: options.DenyReflection,
+            profile: profile
         );
         Report(result.Warnings);
 

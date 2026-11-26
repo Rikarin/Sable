@@ -466,6 +466,7 @@ public static partial class RootChecker {
                 SilArgument argument => argument.Block != function.Entry,
                 StructElementAddrInst element => Indirect(element.Address),
                 TupleElementAddrInst element => Indirect(element.Address),
+                EnumPayloadAddrInst element => Indirect(element.Address),
                 _ => false,
             };
 
@@ -644,7 +645,7 @@ public static partial class RootChecker {
                             fresh.Add(load);
                             break;
 
-                        case StructElementAddrInst or TupleElementAddrInst or StructExtractInst or TupleExtractInst or CopyValueInst or LoadBorrowInst
+                        case StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or StructExtractInst or TupleExtractInst or CopyValueInst or LoadBorrowInst
                             when instruction.Operands.Count > 0 && fresh.Contains(instruction.Operands[0]):
                             fresh.Add(instruction);
                             break;

@@ -1083,6 +1083,7 @@ public sealed class SilParser {
             }
 
             case "struct_extract" or "struct_element_addr": {
+                var takes = opcode == "struct_extract" && AcceptFlag("take");
                 var value = Defined(Operand(0), opcode, line);
                 Expect(",");
                 var field = Expect(TokenKind.Member, "a field").Text;
@@ -1094,7 +1095,7 @@ public sealed class SilParser {
                 }
 
                 instruction = opcode == "struct_extract"
-                    ? new StructExtractInst(value, index)
+                    ? takes ? new StructTakeInst(value, index) : new StructExtractInst(value, index)
                     : new StructElementAddrInst(value, index);
                 break;
             }
@@ -1119,6 +1120,21 @@ public sealed class SilParser {
                 break;
             }
 
+            case "enum_payload_addr": {
+                var address = Defined(Operand(0), opcode, line);
+                Expect(",");
+                var name = Expect(TokenKind.Member, "a case").Text;
+                var addressed = (address.Type as AddressType)?.Pointee as EnumType
+                    ?? throw new SilParseException("enum_payload_addr needs an enum's address", line);
+                var index = addressed.CaseIndex(name);
+                if (index < 0) {
+                    throw new SilParseException($"{addressed.Name} has no case #{name}", line);
+                }
+
+                instruction = new EnumPayloadAddrInst(address, index);
+                break;
+            }
+
             case "enum": {
                 if (ParseType() is not EnumType enumType) {
                     throw new SilParseException("enum needs an enum type", line);
@@ -1140,6 +1156,7 @@ public sealed class SilParser {
                 // of a block that dominates this one but comes later in the
                 // text, as promotion leaves them. Its cases are then kept by
                 // name until the function's end, when its type is known.
+                var takes = AcceptFlag("take");
                 var value = Operand(0);
                 var named = new List<(string Case, SilBlock Target)>();
                 SilBlock? fallback = null;
@@ -1155,7 +1172,7 @@ public sealed class SilParser {
                     named.Add((caseName, BlockNamed(Expect(TokenKind.Word, "a block label").Text)));
                 }
 
-                var switched = new SwitchEnumInst(value, [], fallback);
+                var switched = new SwitchEnumInst(value, [], fallback) { Takes = takes };
                 if (value is Placeholder) {
                     _unresolvedCases.Add((switched, named, line));
                 } else {
@@ -1222,10 +1239,11 @@ public sealed class SilParser {
             }
 
             case "upcast": {
+                var owned = AcceptFlag("owned");
                 var value = Operand(0);
                 Expect(":");
-                instruction = new UpcastInst(value, ParseType() as ClassType
-                    ?? throw new SilParseException("upcast gives a class reference", line));
+                var to = ParseType() as ClassType ?? throw new SilParseException("upcast gives a class reference", line);
+                instruction = owned ? new OwnedUpcastInst(value, to) : new UpcastInst(value, to);
                 break;
             }
 

@@ -446,6 +446,11 @@ public static class SilPrinter {
                             .Append(((StructType)extract.Value.Type).Fields[extract.Field].Name);
                         break;
 
+                    case StructTakeInst take:
+                        builder.Append(" [take] ").Append(Name(take.Value)).Append(", #")
+                            .Append(((StructType)take.Value.Type).Fields[take.Field].Name);
+                        break;
+
                     case StructElementAddrInst element:
                         builder.Append(' ').Append(Name(element.Address)).Append(", #")
                             .Append(((StructType)((AddressType)element.Address.Type).Pointee).Fields[element.Field].Name);
@@ -464,6 +469,10 @@ public static class SilPrinter {
                         builder.Append(' ').Append(Name(element.Address)).Append(", ").Append(element.Element);
                         break;
 
+                    case EnumPayloadAddrInst payloadAddress:
+                        builder.Append(' ').Append(Name(payloadAddress.Address)).Append(", #").Append(payloadAddress.EnumType.Cases[payloadAddress.Case].Name);
+                        break;
+
                     case EnumInst enumInst:
                         builder.Append(" $").Append(enumInst.Type).Append(", #").Append(enumInst.EnumType.Cases[enumInst.Case].Name);
                         if (enumInst.Payload is { } payload) {
@@ -474,7 +483,7 @@ public static class SilPrinter {
 
                     case SwitchEnumInst switchEnum: {
                         var enumType = (EnumType)switchEnum.Value.Type;
-                        builder.Append(' ').Append(Name(switchEnum.Value));
+                        builder.Append(switchEnum.Takes ? " [take] " : " ").Append(Name(switchEnum.Value));
                         foreach (var (caseIndex, target) in switchEnum.Cases) {
                             builder.Append(", case #").Append(enumType.Cases[caseIndex].Name).Append(": ").Append(Label(target));
                         }
@@ -573,6 +582,10 @@ public static class SilPrinter {
 
                     case UpcastInst upcast:
                         builder.Append(' ').Append(Name(upcast.Value)).Append(" : $").Append(upcast.Type);
+                        break;
+
+                    case OwnedUpcastInst owned:
+                        builder.Append(" [owned] ").Append(Name(owned.Value)).Append(" : $").Append(owned.Type);
                         break;
 
                     case ClassMethodInst method:

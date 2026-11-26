@@ -934,7 +934,7 @@ public abstract class SilInstruction : SilValue {
     /// </summary>
     internal SilInstruction Clone(Func<SilValue, SilValue> value, Func<SilBlock, SilBlock> block) {
         var copy = this is SwitchEnumInst switchEnum
-            ? new SwitchEnumInst(switchEnum.Value, [..switchEnum.Cases.Select(c => (c.Case, block(c.Target)))], switchEnum.Default is { } fallback ? block(fallback) : null)
+            ? new SwitchEnumInst(switchEnum.Value, [..switchEnum.Cases.Select(c => (c.Case, block(c.Target)))], switchEnum.Default is { } fallback ? block(fallback) : null) { Takes = switchEnum.Takes }
             : (SilInstruction)MemberwiseClone();
         copy._operands = [.._operands.Select(value)];
         copy.Block = null!;
@@ -1056,6 +1056,28 @@ public sealed class StructExtractInst(SilValue value, int field) : SilInstructio
     public override string Opcode => "struct_extract";
 }
 
+/// <summary>
+///     <c>struct_extract [take] %0, #bytes</c>: the one field of an owned
+///     struct that needs destroying, taken out of it — the struct, which has
+///     no deinit and only trivial fields besides, is consumed. What
+///     <c>copy_value</c> of a <c>struct_extract</c>, then
+///     <c>destroy_value</c> of the struct, comes to (<see cref="OwnUpcasts" />):
+///     a digest's bytes kept from the digest a function gave.
+/// </summary>
+public sealed class StructTakeInst(SilValue value, int field) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public int Field { get; } = field;
+    public override SilType Type => ((StructType)Value.Type).Fields[Field].Type;
+    public override string Opcode => "struct_extract";
+
+    /// <summary>Whether a field can be taken out of a struct of the type: the only one with anything to destroy, of a struct with no deinit, held as a value.</summary>
+    public static bool CanTake(SilType type, int field) =>
+        type is StructType { Deinit: null, IsInline: false, IsNoncopyable: false } structType
+        && !SilType.IsIndirect(structType) && !SilType.IsInMemory(structType)
+        && field < structType.Fields.Count
+        && structType.Fields.Select(static (f, i) => (f, i)).All(p => p.i == field || p.f.Type.IsTrivial);
+}
+
 /// <summary><c>struct_element_addr %0, #x</c>: the address of one field of a struct in memory.</summary>
 public sealed class StructElementAddrInst(SilValue address, int field) : SilInstruction(address) {
     public SilValue Address => Operands[0];
@@ -1085,6 +1107,27 @@ public sealed class TupleElementAddrInst(SilValue address, int element) : SilIns
     public int Element { get; } = element;
     public override SilType Type => SilType.Address(((TupleType)((AddressType)Address.Type).Pointee).Elements[Element]);
     public override string Opcode => "tuple_element_addr";
+}
+
+/// <summary>
+///     <c>enum_payload_addr %0, #Some</c>: the address of the payload of an
+///     enum in memory, which holds that case — a switch on it said so — for
+///     a change of the payload where it is, as a field's is changed through
+///     <c>struct_element_addr</c>: <c>entries[i]?.value = v</c>, with no copy
+///     of the payload taken out and written back. Nothing may store another
+///     case into the enum while the address is used.
+/// </summary>
+public sealed class EnumPayloadAddrInst(SilValue address, int @case) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public int Case { get; } = @case;
+    public EnumType EnumType => (EnumType)((AddressType)Address.Type).Pointee;
+
+    public override SilType Type =>
+        Address.Type is AddressType { Pointee: EnumType enumType } && Case < enumType.Cases.Count && enumType.Cases[Case].Payload is { } payload
+            ? SilType.Address(payload)
+            : SilType.Unit;
+
+    public override string Opcode => "enum_payload_addr";
 }
 
 /// <summary><c>enum $Shape, #Circle, %0</c>, or without a payload for a case that has none.</summary>
@@ -1355,6 +1398,18 @@ public sealed class UpcastInst(SilValue value, ClassType type) : SilInstruction(
 }
 
 /// <summary>
+///     <c>upcast [owned] %0 : $Base</c>: an owned object, taken, as one of its
+///     superclasses — the same reference, owned now as the superclass: what
+///     <c>copy_value</c> of an <c>upcast</c>, then <c>destroy_value %0</c>,
+///     comes to, a retain and a release fewer (<see cref="OwnUpcasts" />).
+/// </summary>
+public sealed class OwnedUpcastInst(SilValue value, ClassType type) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type { get; } = type;
+    public override string Opcode => "upcast";
+}
+
+/// <summary>
 ///     <c>class_method %0, #describe : $(Node) -&gt; String</c>: the code of a
 ///     method for the class the object actually is, from its vtable.
 /// </summary>
@@ -1389,6 +1444,7 @@ public static class SharedStorage {
             RefElementAddrInst or GlobalAddrInst => true,
             StructElementAddrInst element => Contains(element.Address),
             TupleElementAddrInst element => Contains(element.Address),
+            EnumPayloadAddrInst element => Contains(element.Address),
             _ => false,
         };
 
@@ -1426,6 +1482,7 @@ public static class SharedStorage {
             RefElementAddrInst { Reference.Type: ClassType type } field => type.LetFields.Contains(field.Field),
             StructElementAddrInst element => IsImmutable(element.Address),
             TupleElementAddrInst element => IsImmutable(element.Address),
+            EnumPayloadAddrInst element => IsImmutable(element.Address),
             _ => false,
         };
 
@@ -1539,6 +1596,14 @@ public sealed class SwitchEnumInst(SilValue value, List<(int Case, SilBlock Targ
     public SilValue Value => Operands[0];
     public List<(int Case, SilBlock Target)> Cases { get; } = cases;
     public SilBlock? Default { get; internal set; } = defaultTarget;
+
+    /// <summary>
+    ///     <c>switch_enum [take]</c>: the switch consumes the enum, an owned
+    ///     one, and gives each case its payload owned, not borrowed. Its
+    ///     default may stand only for cases that carry nothing to destroy.
+    /// </summary>
+    public bool Takes { get; set; }
+
     public override bool HasResult => false;
     public override bool IsTerminator => true;
     public override string Opcode => "switch_enum";
@@ -1780,6 +1845,17 @@ public sealed class SilModule {
     ///     rather than counting freed memory. Off unless a profile asks.
     /// </summary>
     public bool CheckArc { get; set; }
+
+    /// <summary>
+    ///     In a build that profiles its calls (<c>--profile-generate</c>,
+    ///     <see cref="InstrumentProfile" />), each counted call site's key, by
+    ///     its number, and the file the program writes the counts to; null in
+    ///     any other build.
+    /// </summary>
+    public List<string>? ProfileSites { get; set; }
+
+    /// <summary>Where a profiling build writes its counts, unless <c>SABLE_PROFILE_FILE</c> says (<see cref="ProfileSites" />).</summary>
+    public string? ProfileFile { get; set; }
 
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
@@ -2304,6 +2380,18 @@ public static class SilBuiltins {
             // call of its code made directly passes (Simplify's DirectCalls).
             case "no_context" when operands.Count == 0:
                 return new([], SilType.Object);
+            // A call site's callee counted, in a build that profiles its calls
+            // (CallProfile.cs): the site's number, and the function or closure.
+            case "profile_count" when operands is [var site, FunctionType or ThickFunctionType] && site == SilType.Int:
+                return new([..operands], SilType.Unit);
+            // Whether a function value, or a closure's code, is the function:
+            // the test of a guess a profile made (CallProfile.cs).
+            case "function_is" when operands is [FunctionType or ThickFunctionType, FunctionType]:
+                return new([..operands], SilType.Bool);
+            // A closure's context, copied: what its code is called with when it
+            // is called directly.
+            case "closure_context" when operands is [ThickFunctionType]:
+                return new([..operands], SilType.Object);
             // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
             case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
@@ -2324,8 +2412,11 @@ public static class SilBuiltins {
         if (name == "ref_is_unique") {
             // Or of a struct that holds the object and nothing else: a
             // '@builtin' of the library's, on a value that copies on write.
-            // An array's buffer, too, which the empty array has none of.
-            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType)] } or ArrayType }] ? new([operands[0]], SilType.Bool) : null;
+            // An array's buffer too, alone or as such a struct's one field,
+            // which an empty array has none of: unique.
+            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType or ArrayType)] } or ArrayType }]
+                ? new([operands[0]], SilType.Bool)
+                : null;
         }
 
         // A value crossing from one task to another — a task's result, an
@@ -2607,7 +2698,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "thread_start", "thread_loop", "thread_local_set", "task_local_push", "no_context", "object_unmade", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "thread_start", "thread_loop", "thread_local_set", "task_local_push", "no_context", "profile_count", "function_is", "closure_context", "object_unmade", Coverage.Builtin]);
 
     /// <summary>
     ///     True of a builtin that runs code of the program's — a loop's work, a

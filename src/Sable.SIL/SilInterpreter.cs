@@ -728,6 +728,32 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
     }
 
+    /// <summary>
+    ///     The payload of an enum at another address, which holds the case:
+    ///     writing it replaces the enum with the case carrying what is written.
+    /// </summary>
+    sealed class EnumPayload(IReference parent, int @case) : IReference {
+        public IReference Parent => parent;
+        public int Case => @case;
+
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+
+        public object? Peek() =>
+            parent.Peek() switch {
+                EnumValue held when held.Case == @case => held.Payload,
+                null => null,
+                _ => throw new SilTrap("enum_payload_addr of an enum that holds another case"),
+            };
+
+        public void Set(object? value) {
+            if (parent.Peek() is EnumValue held && held.Case != @case) {
+                throw new SilTrap("enum_payload_addr of an enum that holds another case");
+            }
+
+            parent.Set(new EnumValue(@case, value));
+        }
+    }
+
     /// <summary>An element of an array, passed inout: the array is the only reference to its elements.</summary>
     sealed class ArrayElement(HeapArray array, int index) : IReference {
         public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
@@ -797,6 +823,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 var path = StorageOf(element.Parent);
                 path.Add(element.Index);
                 return path;
+            case EnumPayload payload:
+                var held = StorageOf(payload.Parent);
+                held.Add(payload.Case);
+                return held;
             default:
                 return [address];
         }
@@ -1244,6 +1274,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         values[extract] = ((object?[])Get(extract.Value)!)[extract.Field];
                         break;
 
+                    case StructTakeInst take:
+                        values[take] = ((object?[])Get(take.Value)!)[take.Field];
+                        break;
+
                     case TupleExtractInst extract:
                         values[extract] = ((object?[])Get(extract.Value)!)[extract.Element];
                         break;
@@ -1259,6 +1293,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         values[element] = new Element((IReference)Get(element.Address)!, element.Element, tupleType.Elements.Length);
                         break;
                     }
+
+                    case EnumPayloadAddrInst payloadAddress:
+                        values[payloadAddress] = new EnumPayload((IReference)Get(payloadAddress.Address)!, payloadAddress.Case);
+                        break;
 
                     case EnumInst enumInst:
                         values[enumInst] = new EnumValue(enumInst.Case, enumInst.Payload is { } payload ? Get(payload) : null);
@@ -1331,6 +1369,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
                     case UpcastInst upcast:
                         values[upcast] = Get(upcast.Value);
+                        break;
+
+                    case OwnedUpcastInst owned:
+                        values[owned] = Get(owned.Value);
                         break;
 
                     // The method for the class the object is, not the one it is seen as.
@@ -1416,6 +1458,19 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "no_context":
                 return null;
 
+            // A profile is of native code: interpreted, a call is not counted.
+            case "profile_count":
+                return null;
+
+            case "function_is":
+                return (operands[0] is ClosureValue closure ? closure.Function : operands[0] as string) == (string?)operands[1];
+
+            case "closure_context": {
+                var context = ((ClosureValue)operands[0]!).Context;
+                Retain(SilType.Object, context);
+                return context;
+            }
+
             // A fresh array of the constants, room for them alone, as the
             // native constant has.
             case "array_literal" or "array_literal_stack":
@@ -1482,7 +1537,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return ((IReference)operands[0]!).Peek() is not Counted soleBuffer || soleBuffer is { Strong: 1, Immortal: false };
 
             case "ref_is_unique":
-                return (((IReference)operands[0]!).Peek() is object?[] { Length: 1 } holder ? holder[0] : ((IReference)operands[0]!).Peek()) is Counted { Strong: 1, Immortal: false };
+                // An empty array holds no buffer, and is as unique as one can be.
+                return (((IReference)operands[0]!).Peek() is object?[] { Length: 1 } holder ? holder[0] : ((IReference)operands[0]!).Peek()) switch {
+                    Counted counted => counted is { Strong: 1, Immortal: false },
+                    null => builtin.Operands[0].Type is AddressType { Pointee: StructType { Fields: [(_, ArrayType)] } },
+                    _ => false,
+                };
 
             case "make_immortal":
                 MakeImmortal(builtin.Operands[0].Type, operands[0]);

@@ -32,8 +32,8 @@ public static class SilPassManager {
     ///     uncovers more of the other.
     /// </remarks>
     public static IReadOnlyList<ISilPass> Default { get; } = [
-        new PromoteSlots(), new InitFields(), new ForwardCopies(), new BorrowLoads(), new ReadInPlace(), new LendInlineArrays(), new BorrowHeld(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new BorrowLets(), new BorrowWalks(),
-        new PromoteToStack(), new ReadInPlace(), new HoistUniqueness(),
+        new PromoteSlots(), new InitFields(), new ForwardCopies(), new BorrowLoads(), new ReadInPlace(), new LendInlineArrays(), new BorrowHeld(), new BorrowViews(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new BorrowLets(), new BorrowWalks(),
+        new PromoteToStack(), new ReadInPlace(), new HoistUniqueness(), new TakePayloads(), new OwnUpcasts(),
     ];
 
     /// <summary>The passes an optimised build runs, in order.</summary>
@@ -47,11 +47,13 @@ public static class SilPassManager {
     ///     blocks; then small callees are inlined, then the '@autoclosure'
     ///     closures they call or drop (<see cref="InlineClosures" />), and the chain of blocks each call leaves
     ///     merged, so that the passes after see the callee's body in the
-    ///     caller's; what is left is tidied last. An unoptimised build keeps
+    ///     caller's; a loop too big to inline that is given a closure with no
+    ///     context is called as a copy made for that code
+    ///     (<see cref="SpecialiseClosures" />); what is left is tidied last. An unoptimised build keeps
     ///     its calls, so that a trap's backtrace names every frame.
     /// </remarks>
     public static IReadOnlyList<ISilPass> Optimising { get; } = [
-        new Specialise(), new Devirtualise(), new SpeculativeDevirtualise(), new BorrowLoads(), new Inliner(), new InlineClosures(), new Simplify(), ..Default, new VersionLoops(), new Simplify(),
+        new Specialise(), new Devirtualise(), new SpeculativeDevirtualise(), new BorrowLoads(), new Inliner(), new InlineClosures(), new Simplify(), new SpecialiseClosures(), ..Default, new VersionLoops(), new Simplify(),
     ];
 
     /// <summary>
@@ -75,6 +77,21 @@ public static class SilPassManager {
     ///         <item><c>z</c>: without the inliner too, which copies callees into every caller.</item>
     ///     </list>
     /// </remarks>
+    /// <summary>
+    ///     The same, with a profile's pass (<see cref="CallProfile" />) — one that
+    ///     counts the calls, or one that guesses from the counts — where the
+    ///     devirtualising passes end and the inliner has not started.
+    /// </summary>
+    public static IReadOnlyList<ISilPass> ForLevel(string optLevel, ISilPass? profile) {
+        var passes = ForLevel(optLevel);
+        if (profile is null) {
+            return passes;
+        }
+
+        var at = passes.Select(static (p, i) => (p, i)).LastOrDefault(static p => p.p is Specialise or Devirtualise or SpeculativeDevirtualise, (null!, -1)).i + 1;
+        return [..passes.Take(at), profile, ..passes.Skip(at)];
+    }
+
     public static IReadOnlyList<ISilPass> ForLevel(string optLevel) =>
         optLevel switch {
             "0" => Default,

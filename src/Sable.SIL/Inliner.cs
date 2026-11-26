@@ -271,7 +271,7 @@ public sealed class Inliner : ISilPass {
                 cost += instruction switch {
                     IntegerLiteralInst or FloatLiteralInst or FunctionRefInst => 0,
                     StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => 0,
-                    StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => 0,
+                    StructElementAddrInst or TupleElementAddrInst or EnumPayloadAddrInst or RefElementAddrInst => 0,
                     LoadBorrowInst or EndBorrowInst or AllocStackInst or DeallocStackInst => 0,
                     BranchInst or ReturnInst or UnreachableInst => 0,
                     StoreInst store when InSlot(store.Address) && (store.Kind == StoreKind.Init || store.Value.Type.IsTrivial) => 0,
@@ -390,7 +390,7 @@ public sealed class Inliner : ISilPass {
     ///     passes do not look across: a dictionary's lookup, inlined, copies
     ///     the dictionary its call only borrowed.
     /// </summary>
-    static bool Loops(SilFunction function) {
+    internal static bool Loops(SilFunction function) {
         var order = SilVerifier.ReversePostorder(function);
         var position = order.Select(static (b, i) => (b, i)).ToDictionary(static p => p.b, static p => p.i);
         return order.Any(block => block.Successors.Any(next => position[next] <= position[block]));

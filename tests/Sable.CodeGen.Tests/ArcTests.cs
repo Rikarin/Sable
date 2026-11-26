@@ -437,12 +437,112 @@ public sealed class ArcTests {
         Assert.Contains("alloc_stack [unmanaged] $String, var \"label\"", sil, StringComparison.Ordinal);
         Assert.Contains("alloc_stack $String, var \"label\"", sil, StringComparison.Ordinal);
         if (CanBuild) {
-            // Was 899: walk's label each turn, and the dictionary's entries
-            // as they were looked up and updated; renaming's labels stay.
+            // Was 899, then 502, then 205: walk's label each turn, the dictionary's entries
+            // as they were looked up, and copied out to be updated and back, and a view of an array that now borrows it; renaming's labels stay.
             // Counted for specialised code: compiled once (#297), the dictionary copies its entries through their value witnesses.
             using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
             var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
-            Assert.Contains("retains 502,", stats, StringComparison.Ordinal);
+            Assert.Contains("retains 204,", stats, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    ///     A named 'let' whose last use is a 'consuming' argument is moved
+    ///     into the call: the callee holds the only reference to its buffer,
+    ///     and changes it in place with nothing copied — as it would a
+    ///     temporary. One used after the call is copied for it, as before.
+    /// </summary>
+    [Fact]
+    public void ALastUseIntoAConsumingParameterIsAMove() {
+        // The callee's copy is the only reference: 'ref_is_unique' (isUniquelyReferenced), declared where a builtin may be.
+        Assert.Equal(
+            "true\nfalse\n8\no\n",
+            AssertAgree(
+                """
+                module Sable.MoveCheck
+
+                struct Held {
+                    var xs: Int[>..]
+
+                    @builtin("ref_is_unique")
+                    mutating fn isUniquelyReferenced() -> Bool
+                }
+
+                @inline(never)
+                fn alone(_ held: consuming Held) -> Bool {
+                    var mine = held
+                    return mine.isUniquelyReferenced()
+                }
+
+                fn make(_ n: Int) -> Held {
+                    var xs: Int[>..] = []
+                    for i in 0..<n {
+                        xs.append(i)
+                    }
+                    return Held { xs: xs }
+                }
+
+                class Owner {
+                    var label: String
+                    init(label: String) { self.label = label }
+                }
+
+                class Pet {
+                    unowned var owner: Owner
+                    init(owner: Owner) { self.owner = owner }
+                }
+
+                @main
+                fn main() {
+                    let moved = make(8)
+                    print(alone(moved))
+                    let kept = make(8)
+                    print(alone(kept))
+                    print(kept.xs.count)
+                    // An object is not moved: what refers to it unowned may outlive the call.
+                    let o = Owner(label: "o")
+                    let pet = Pet(owner: o)
+                    print(pet.owner.label)
+                }
+                """
+            ).Stdout
+        );
+
+        AllocatesNothingForAMovedBuffer();
+    }
+
+    static void AllocatesNothingForAMovedBuffer() =>
+        Assert.Equal(
+            "0 5 1000\n1 5 0\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline(never)
+                    fn bump(_ xs: consuming Int[>..]) -> Int[>..] {
+                        var ys = xs
+                        ys[0] = 5
+                        return ys
+                    }
+
+                    fn make(_ n: Int) -> Int[>..] {
+                        var xs: Int[>..] = []
+                        for i in 0..<n {
+                            xs.append(i)
+                        }
+                        return xs
+                    }
+                    """,
+                    """
+                        let a = make(1000)
+                        var n = Runtime.allocationCount()
+                        let b = bump(a)
+                        print("\(Runtime.allocationCount() - n) \(b[0]) \(b.count)")
+                        let c = make(10)
+                        n = Runtime.allocationCount()
+                        let d = bump(c)
+                        print("\(Runtime.allocationCount() - n) \(d[0]) \(c[0])")
+                    """
+                )
+            ).Stdout
+        );
 }

@@ -114,6 +114,29 @@ fn aPlaceIsAnothersOnceItsThreadLocalIsGone() {
     assertEqual(log.withLock { $0 }, ["old"])
 }
 
+// A function remembers the cell it found last (the emitter's cache): one made
+// in the place of one gone, or another between, is found as its own.
+@test
+fn eachIsFoundAsItsOwnInOneFunction() {
+    var total = 0
+    let made = Atomic(0)
+    for round in 0..<3 {
+        let local = ThreadLocal { made.add(1) * 10 + round }
+        local.value += 1
+        total += local.value
+    }
+    assertEqual(total, 1 + 12 + 23)
+    assertEqual(made.load(), 3)
+    let first = ThreadLocal { 1 }
+    let second = ThreadLocal { 2 }
+    for _ in 0..<3 {
+        first.value += second.value
+        second.value += 1
+    }
+    assertEqual(first.value, 1 + 2 + 3 + 4)
+    assertEqual(second.value, 5)
+}
+
 @test
 fn whatTheClosureLeavesIsKeptWhenItThrows() {
     let local = ThreadLocal { 1 }

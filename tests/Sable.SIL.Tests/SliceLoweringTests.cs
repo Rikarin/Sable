@@ -301,7 +301,7 @@ public sealed class SliceLoweringTests {
 
         var text = SilPrinter.Print(module);
         Assert.Contains("sil @M.sum : $([Int:]) -> Int", text, StringComparison.Ordinal);
-        Assert.Contains("builtin \"slice_of\"", text, StringComparison.Ordinal);
+        Assert.Matches("builtin \"slice_of(_borrowed)?\"", text);
         Assert.Contains("builtin \"array_slice\"(", text, StringComparison.Ordinal);
         Assert.Contains(") : $[Int:]", text, StringComparison.Ordinal);
 

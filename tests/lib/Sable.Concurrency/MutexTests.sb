@@ -5,6 +5,39 @@ module MutexTests
 import Sable.Concurrency
 import Sable.Testing
 
+// An object a mutex holds, whose array grows on other threads, and shrinks
+// and changes in place there: the buffers the array is given as it grows are
+// shared with the object, which the threads reach, and those it is changed in
+// place in were already (the emitter shares only where the runtime grew it).
+final class Pile {
+    var names: String[>..] = []
+}
+
+@test
+fn anArrayInAnObjectGrowsOnTheThreadsThatShareIt() {
+    let pile = Mutex(Pile())
+    let threads = (0..<4).map { n in
+        Thread.spawn {
+            for i in 0..<200 {
+                pile.withLock { $0.names.append("\(n)-\(i)") }
+                if i % 3 == 0 {
+                    _ = pile.withLock { $0.names.removeLast() }
+                }
+                pile.withLock { pile in
+                    if pile.names.count > 0 {
+                        pile.names[0] = "first"
+                    }
+                }
+            }
+        }
+    }
+    for thread in threads {
+        thread.join()
+    }
+    assertEqual(pile.withLock { $0.names.count }, 4 * (200 - 67))
+    assertEqual(pile.withLock { $0.names[0] }, "first")
+}
+
 @test
 fn aMutexHandsItsValueToOneHolder() {
     let names: Mutex<String[>..]> = Mutex([])

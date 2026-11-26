@@ -100,7 +100,8 @@ public static partial class Pipeline {
         bool library = false,
         bool denyReflection = false,
         string? optLevel = null,
-        bool checkArc = false
+        bool checkArc = false,
+        ISilPass? profile = null
     ) {
         (program, var generatorErrors, var generatorWarnings) = LibraryGenerators.Expand(program);
         if (generatorErrors.Count > 0) {
@@ -128,7 +129,7 @@ public static partial class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        var result = CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, library, denyReflection, checkArc, standard) with { Warnings = warnings };
+        var result = CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, library, denyReflection, checkArc, standard, profile: profile) with { Warnings = warnings };
         if (standard is null && result.Succeeded) {
             check?.Passed();
         }
@@ -151,7 +152,8 @@ public static partial class Pipeline {
         bool denyReflection,
         bool checkArc,
         Func<SyntaxTree, bool>? onDemand,
-        Func<Compilation, (SilModule, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)>)>? lower = null
+        Func<Compilation, (SilModule, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)>)>? lower = null,
+        ISilPass? profile = null
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -198,7 +200,7 @@ public static partial class Pipeline {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
                 SilPassManager.RemoveUnreachable(module);
-                SilPassManager.Run(module, SilPassManager.ForLevel(optLevel));
+                SilPassManager.Run(module, SilPassManager.ForLevel(optLevel, profile));
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
             }

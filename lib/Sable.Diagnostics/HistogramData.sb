@@ -1,0 +1,13 @@
+module Sable.Diagnostics
+
+/// A histogram's buckets, of explicit bounds: 'counts' has one more than
+/// 'boundaries', the last for what is above them all.
+@derive(Equatable, Debug)
+public struct HistogramData {
+    public let count: Int
+    public let sum: F64
+    public let min: F64
+    public let max: F64
+    public let boundaries: F64[>..]
+    public let counts: Int[>..]
+}

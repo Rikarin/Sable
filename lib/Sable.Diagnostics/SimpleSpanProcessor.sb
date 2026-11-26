@@ -1,0 +1,42 @@
+module Sable.Diagnostics
+
+/// The listener that hands each span to an exporter as it ends, on the task
+/// that ended it, sampling as the default does (the parent's choice, a new
+/// trace sampled), or only the given share of new traces. OpenTelemetry's
+/// SimpleSpanProcessor with a parent-based, trace-ID-ratio sampler; a batch
+/// processor is #249's.
+///
+/// ```sable
+/// let exporter = InMemorySpanExporter()
+/// let listening = Tracing.addListener(SimpleSpanProcessor(exporter, ratio: 1.0))
+/// Tracer("t").withSpan("one") { _ in }
+/// listening.cancel()
+/// assert(exporter.spans.count == 1)
+/// ```
+@immutable
+public final class SimpleSpanProcessor: SpanListener {
+    public let exporter: any SpanExporter
+    /// The share of new traces sampled, 0 to 1.
+    public let ratio: F64
+
+    public init(_ exporter: any SpanExporter, ratio: F64 = 1.0) {
+        self.exporter = exporter
+        self.ratio = ratio
+    }
+
+    /// The parent's choice; a new trace sampled if its id falls within the
+    /// ratio, as every process with the same ratio decides it.
+    public fn sample(_ tracer: Tracer, _ name: String, _ kind: SpanKind, traceId: TraceId, parent: SpanContext?) -> SamplingDecision {
+        if let parent = parent {
+            return parent.isSampled ? .RecordAndSample : .Drop
+        }
+        let low = F64(Int(traceId.low & 0x00FF_FFFF_FFFF_FFFF))
+        return low < ratio * 72057594037927936.0 ? .RecordAndSample : .Drop
+    }
+
+    public fn ended(_ span: SpanRecord) {
+        if span.context.isSampled {
+            exporter.export([span])
+        }
+    }
+}

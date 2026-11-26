@@ -1,0 +1,42 @@
+module Sable.Diagnostics
+
+/// An attribute: a key, by OpenTelemetry's semantic conventions where one
+/// fits ("http.request.method"), and its value. What a span, an event and a
+/// measurement are described by.
+///
+/// ```sable
+/// let attributes = [KeyValue("http.request.method", "GET"), KeyValue("http.response.status_code", 200)]
+/// assert(attributes[1].value == AttributeValue.Integer(200))
+/// assert(attributes[0].description() == "http.request.method=GET")
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct KeyValue {
+    public let key: String
+    public let value: AttributeValue
+
+    public init(_ key: String, value: AttributeValue) {
+        self.key = key
+        self.value = value
+    }
+
+    public init(_ key: String, _ value: String) {
+        self.init(key, value: .Text(value))
+    }
+
+    public init(_ key: String, _ value: Int) {
+        self.init(key, value: .Integer(value))
+    }
+
+    public init(_ key: String, _ value: F64) {
+        self.init(key, value: .Number(value))
+    }
+
+    public init(_ key: String, _ value: Bool) {
+        self.init(key, value: .Boolean(value))
+    }
+
+    /// 'key=value'.
+    public fn description() -> String {
+        return "\(key)=\(value.description())"
+    }
+}

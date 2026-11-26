@@ -317,7 +317,7 @@ public sealed partial class Compilation {
 
             foreach (var constraint in parameter.Constraints) {
                 if (!Conversions.Satisfies(argument, substitution.Apply(constraint), context)) {
-                    return $"'{parameter.Name}: {constraint.ToDisplayString()}', and '{argument.ToDisplayString()}' does not conform";
+                    return $"'{parameter.Name}: {constraint.ToDisplayString()}', and '{argument.ToDisplayString()}' does not conform{PlainData.Because(argument, constraint)}";
                 }
             }
         }

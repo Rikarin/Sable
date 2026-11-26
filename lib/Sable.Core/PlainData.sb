@@ -1,0 +1,26 @@
+module Sable.Core
+
+/// A value that is its bytes and nothing else: no reference, no padding, no
+/// tag, and every pattern of bits one of its values. A slice of one may be
+/// seen as a slice of another, or of bytes, with nothing copied
+/// (`reinterpreted(as:)`, `bytes`).
+///
+/// Conformance is the compiler's, by what a type is made of, as Sendable's
+/// is: the integers and the floats; a struct of them laid out with no
+/// padding, with no deinit, neither `@noncopy` nor `@inline_layout`; an
+/// inline array, `T[k]`, of one. Not a Bool or a Char, not an enum, a union
+/// or an optional, not a class, a closure, a reference or an array with a
+/// buffer, and not a tuple. A type may say `: PlainData` (or a protocol may
+/// refine it), and is then held to it (S3490).
+///
+/// ```sable
+/// struct Texel {
+///     var r: U8
+///     var g: U8
+///     var b: U8
+///     var a: U8
+/// }
+/// fn wordsOf<T: PlainData>(_ values: T[:]) -> Int => values.bytes.count / 4
+/// assert(wordsOf([Texel { r: 1, g: 2, b: 3, a: 4 }]) == 1)
+/// ```
+public protocol PlainData { }

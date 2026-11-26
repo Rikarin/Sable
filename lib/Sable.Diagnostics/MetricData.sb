@@ -1,0 +1,43 @@
+module Sable.Diagnostics
+
+/// An instrument's measurements as collected (`MetricReader.collect`): a
+/// point for each set of attributes it was recorded with, cumulative from
+/// when the first reader began. OpenTelemetry's Metric data.
+@derive(Debug)
+public struct MetricData {
+    /// The meter's name and version.
+    public let meter: String
+    public let meterVersion: String
+    public let name: String
+    public let unit: String
+    public let description: String
+    public let kind: InstrumentKind
+    /// Whether its values are integers.
+    public let isInteger: Bool
+    public let points: MetricPoint[>..]
+    /// When it was collected, in nanoseconds since 1970 (UTC).
+    public let time: Int
+
+    /// The point of the attributes, in any order, if there is one.
+    public fn point(_ attributes: KeyValue[>..] = []) -> MetricPoint? {
+        for point in points {
+            if sameAttributes(point.attributes, attributes) {
+                return point
+            }
+        }
+        return none
+    }
+}
+
+// Whether two sets of attributes are the same, in whatever order.
+fn sameAttributes(_ a: KeyValue[>..], _ b: KeyValue[>..]) -> Bool {
+    if a.count != b.count {
+        return false
+    }
+    for attribute in a {
+        if !b.contains(attribute) {
+            return false
+        }
+    }
+    return true
+}

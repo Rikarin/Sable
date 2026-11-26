@@ -1,0 +1,25 @@
+module Sable.Diagnostics
+
+/// What a listener wants of a span about to start (`SpanListener.sample`):
+/// nothing, its record, or its record and the trace marked sampled for the
+/// spans and processes after it. The most any listener wants is what is
+/// done. .NET's `ActivitySamplingResult`.
+@derive(Equatable, Debug)
+public enum SamplingDecision {
+    /// Not recorded: it carries its context on, unsampled.
+    Drop
+    /// Recorded, for this process's listeners, but not marked sampled.
+    RecordOnly
+    /// Recorded, and marked sampled.
+    RecordAndSample
+
+    var rank: Int {
+        get {
+            return match self {
+                case .Drop            => 0
+                case .RecordOnly      => 1
+                case .RecordAndSample => 2
+            }
+        }
+    }
+}

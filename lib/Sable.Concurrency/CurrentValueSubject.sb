@@ -1,0 +1,66 @@
+module Sable.Concurrency
+
+/// A value, and the subscribers that watch it change: Combine's
+/// `CurrentValueSubject`, Rx's `BehaviorSubject`. Each `for await` over it
+/// gets the value as it is then, and every value after; setting `value`
+/// sends it. Unlike a `Watch`, whose slow receiver skips to the newest,
+/// each subscriber here gets every value, held as its buffering policy
+/// says.
+///
+/// ```sable
+/// let volume = CurrentValueSubject<Int>(5)
+/// var listener = volume.makeAsyncIterator()
+/// volume.value = 6
+/// volume.send(7)
+/// assert(await listener.next() == 5)
+/// assert(await listener.next() == 6)
+/// assert(await listener.next() == 7)
+/// assert(volume.value == 7)
+/// ```
+@immutable
+public final class CurrentValueSubject<Element: Sendable>: AsyncSequence {
+    public alias Iter = SubjectIterator<Element, Never>
+
+    let core: SubjectCore<Element, Never>
+
+    /// A subject holding the value, its subscribers' values held as the
+    /// policy says.
+    public init(_ value: Element, bufferingPolicy: StreamBufferingPolicy = .Unbounded) {
+        core = SubjectCore<Element, Never>(1, bufferingPolicy)
+        _ = core.send(value)
+    }
+
+    /// The value now; set, sent to every subscriber — unless the subject is
+    /// finished, which keeps the last.
+    public var value: Element {
+        get {
+            return core.latest()!
+        }
+        set {
+            _ = core.send(newValue)
+        }
+    }
+
+    /// The value set, and sent to every subscriber: whether it was, false
+    /// once the subject is finished.
+    @discardable
+    public fn send(_ value: Element) -> Bool {
+        return core.send(value)
+    }
+
+    /// No more values: each subscriber has those sent, then none.
+    public fn finish() {
+        core.end(none)
+    }
+
+    /// Whether it has been finished.
+    public var isFinished: Bool => core.state.withLock { $0.ended }
+
+    /// How many subscribers it has now.
+    public var subscriberCount: Int => core.state.withLock { $0.subscribers.count }
+
+    /// A subscriber of the value now and those after.
+    public fn makeAsyncIterator() -> SubjectIterator<Element, Never> {
+        return core.subscribe()
+    }
+}

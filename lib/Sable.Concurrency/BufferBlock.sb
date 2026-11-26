@@ -1,0 +1,93 @@
+module Sable.Concurrency
+
+/// A dataflow block that holds what it is sent until it is taken: .NET's
+/// `BufferBlock<T>`, a queue in a pipeline — between a producer and the
+/// blocks it feeds, or several consumers that `receive` from it. Each item
+/// goes to one taker. It holds at most `capacity` items, so a send to it
+/// waits while it is full.
+///
+/// ```sable
+/// let queue = BufferBlock<Int>(capacity: 2)
+/// await queue.send(1)
+/// await queue.send(2)
+/// assert(queue.trySend(3) == .Full)
+/// queue.complete()
+/// assert(try! await queue.receive() == 1)
+/// assert(try! await queue.receive() == 2)
+/// assert(try! await queue.receive() == none)
+/// try! await queue.completion()
+/// ```
+@immutable
+public final class BufferBlock<T: Sendable>: DataflowTarget, AsyncSequence {
+    public alias Input = T
+    public alias Iter = DataflowIterator<T>
+
+    let outlet: BlockOutlet<T>
+    let status: BlockStatus
+
+    /// A block holding at most so many items; none for as many as come.
+    public init(capacity: Int? = none) {
+        if let room = capacity {
+            precondition(room > 0, "a block holding \(room) items")
+        }
+        outlet = BlockOutlet<T>(capacity, toEvery: false)
+        status = BlockStatus()
+    }
+
+    public fn send(_ item: T) async -> SendResult {
+        return await outlet.put(item)
+    }
+
+    public fn trySend(_ item: T) -> SendResult {
+        return outlet.buffer.trySend(item)
+    }
+
+    public fn complete() {
+        outlet.finish(none)
+        _ = status.finished.succeed(true)
+    }
+
+    public fn fault(_ error: any Error) {
+        if status.record(error) {
+            while outlet.buffer.tryReceive() != none { }
+            outlet.finish(error)
+            _ = status.finished.succeed(true)
+        }
+    }
+
+    public var failure: (any Error)? => status.failure
+
+    /// Waits until the block has completed and its items are taken; throws
+    /// what it faulted with.
+    public fn completion() async throws {
+        try await status.completion(outlet.drained)
+    }
+
+    /// What it holds given to the target, if the predicate takes it: as
+    /// `TransformBlock.link(to:propagateCompletion:maxMessages:where:)`.
+    public fn link<Target: DataflowTarget>(to target: Target, propagateCompletion: Bool = false, maxMessages: Int? = none, where accepts: @escaping @Sendable (T) -> Bool = { _ in true })
+        where Target.Input == T, Target: Sendable {
+        let block = self
+        let options = DataflowLinkOptions { propagateCompletion: propagateCompletion, maxMessages: maxMessages }
+        outlet.link(DataflowLink<T>(target, options, accepts), fault: { block.fault($0) })
+    }
+
+    /// The next item no link takes, waiting for it; none once it has
+    /// completed and is empty. Throws what it faulted with.
+    public fn receive() async throws -> T? {
+        return try await outlet.receive()
+    }
+
+    /// An item, if one is held now.
+    public fn tryReceive() -> T? {
+        return outlet.tryReceive()
+    }
+
+    /// Its items as they come: as `receive()`.
+    public fn makeAsyncIterator() -> DataflowIterator<T> {
+        return DataflowIterator<T>(outlet)
+    }
+
+    /// How many items it holds.
+    public var count: Int => outlet.buffer.count
+}

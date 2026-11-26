@@ -1043,6 +1043,9 @@ public sealed partial class SilGen {
         var name = $"{owner}.{field.Name}";
         _globalsByField[field] = (name, type);
         _module.Globals.Add((name, type));
+        if (!field.IsMutable && !field.IsLazy && field.ExportName is null) {
+            _module.ConstantGlobals.Add(name);
+        }
 
         // '@export var': C reads and writes the storage by its name, which
         // every unit having the global (its own unit always) calls it by.
@@ -2280,7 +2283,9 @@ public sealed partial class SilGen {
                     return existing;
                 }
 
-                var enumType = new EnumType(name);
+                // An optional move-only value is move-only too: a copy of it,
+                // destroyed, would run the value's deinit.
+                var enumType = new EnumType(name) { IsNoncopyable = IsMoveOnly(wrapped) };
                 enumType.Cases.Add(("Some", wrapped));
                 enumType.Cases.Add(("None", null));
                 return _module.AddType(enumType);
@@ -2580,7 +2585,7 @@ public sealed partial class SilGen {
 
                 // 'Void?' — what 'try?' makes of a call that returns nothing —
                 // has nothing to carry: whether there was a value is all of it.
-                var enumType = Begin(type, new EnumType(name));
+                var enumType = Begin(type, new EnumType(name) { IsNoncopyable = IsMoveOnly(wrapped) });
                 enumType.Cases.Add(("Some", wrapped == SilType.Unit ? null : wrapped));
                 enumType.Cases.Add(("None", null));
                 return HoldsItself(enumType) ? null : enumType;
@@ -3993,9 +3998,14 @@ public sealed partial class SilGen {
     static bool ParametersFit(FunctionSymbol candidate, FunctionSymbol requirement) {
         // An array is not a type with a name: 'init(_ bytes: U8[:])' is not
         // the 'init(_ key: PublicKey)' it is declared beside.
+        // Nor is an array of one type an array of another: 'export(_ spans:
+        // [SpanRecord])' is not the 'export(_ metrics: [MetricData])' of
+        // another protocol beside it.
         static bool Fits(TypeSymbol given, TypeSymbol wanted) =>
-            (given, wanted) is not ((ArrayTypeSymbol, NamedTypeSymbol { TypeKind: not TypeKind.Protocol }) or (NamedTypeSymbol { TypeKind: not TypeKind.Protocol }, ArrayTypeSymbol))
-            && FitsNamed(given, wanted);
+            (given, wanted) is (ArrayTypeSymbol a, ArrayTypeSymbol b)
+                ? Fits(a.ElementType, b.ElementType)
+                : (given, wanted) is not ((ArrayTypeSymbol, NamedTypeSymbol { TypeKind: not TypeKind.Protocol }) or (NamedTypeSymbol { TypeKind: not TypeKind.Protocol }, ArrayTypeSymbol))
+                  && FitsNamed(given, wanted);
 
         static bool FitsNamed(TypeSymbol given, TypeSymbol wanted) =>
             given is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } g
@@ -5358,6 +5368,22 @@ public sealed partial class SilGen {
             } else {
                 Destroy(outer);
             }
+        }
+
+        /// <summary>
+        ///     A held value made an optional's: owned by the optional, as a
+        ///     copy of one that is borrowed — a captured variable read through
+        ///     its context — whose borrow then ends.
+        /// </summary>
+        SilValue Wrapped(EnumType optional, SilValue value) {
+            Unhold(value);
+            var owned = Owned(value);
+            if (value is LoadBorrowInst borrowed) {
+                Emit(new EndBorrowInst(borrowed));
+                ReleaseOuter(borrowed);
+            }
+
+            return Emit(new EnumInst(optional, 0, owned));
         }
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
@@ -7670,7 +7696,7 @@ public sealed partial class SilGen {
                     return ReferenceTo(reference.Operand);
 
                 case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var target }:
-                    return ReferenceTo(target);
+                    return target.IsAssignable && IsElementPlace(target) ? ElementReference(target) : ReferenceTo(target);
 
                 // An object as one of its superclasses: the same object, owned as that.
                 // A function as a function type that throws more: a thunk.
@@ -8002,6 +8028,12 @@ public sealed partial class SilGen {
 
                 case BoundCall call: {
                     var result = Call(call);
+
+                    // A reference a mutating member gives is into its receiver,
+                    // which it holds until its last use (RootChecker.CheckExclusive).
+                    if (result is { Type: AddressType } && call.Function.IsMutating && Sub(call.Type) is ReferenceTypeSymbol) {
+                        function.ExclusiveReferences.Add(result);
+                    }
 
                     // A call to a function that gives Never does not come back:
                     // nothing after it runs.
@@ -8385,6 +8417,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
+                BeginDeferred(ends);
                 Unhold(value);
                 Emit(new BuiltinInst("array_set", SilType.Unit, arrayAddress, index, value));
                 EndAll(ends);
@@ -8396,6 +8429,7 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            BeginDeferred(borrows);
             Unhold(value);
             switch (((AddressType)address.Type).Pointee) {
                 // A weak or unowned field is given the object without taking the value.
@@ -8772,6 +8806,15 @@ public sealed partial class SilGen {
                 // The whole of an array, where an inout slice is wanted: 'fill(&values)'.
                 case BoundConversion { ConversionKind: ConversionKind.Identity } view when IsArrayView(view) && !IsInlineArray(view.Operand):
                     return ArrayForWriteBack(view, borrows);
+
+                // What a reference that writes refers to: 'r.v = 1', 'c.at(0).bump()'.
+                case BoundConversion { ConversionKind: ConversionKind.Dereference } dereference:
+                    return Expression(dereference.Operand) is { Type: AddressType } referred ? referred : Missing(target, $"storing through '{Describe(target.Syntax)}'");
+
+                // A slice's elements seen as another type's, where they are:
+                // 'xs.reinterpreted(as: U8.self)[0] = 1' (SilGen.Views.cs).
+                case BoundCall { IsView: true, Receiver: not null } reinterpretation:
+                    return ReinterpretedPlace(reinterpretation, borrows);
 
                 // An element of an array, where it is: 'bump(&values[0])'.
                 case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element
@@ -10562,11 +10605,11 @@ public sealed partial class SilGen {
             // An optional compared with a plain value: the value, wrapped.
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual) {
                 if (left.Type is EnumType { Cases: [("Some", { } leftPayload), ("None", null)] } leftOptional && right.Type == leftPayload) {
-                    right = Hold(Emit(new EnumInst(leftOptional, 0, Owned(Unhold(right)))));
+                    right = Hold(Wrapped(leftOptional, right));
                 } else if (right.Type is EnumType { Cases: [("Some", { } rightPayload), ("None", null)] } rightOptional && left.Type == rightPayload) {
                     // Left was borrowed first; keep the temporaries in order.
                     Unhold(right);
-                    left = Emit(new EnumInst(rightOptional, 0, Owned(Unhold(left))));
+                    left = Wrapped(rightOptional, left);
                     Hold(left);
                     Hold(right);
                 }
@@ -12961,6 +13004,26 @@ public sealed partial class SilGen {
                 var at = Emit(new BuiltinInst(name == "sliceEnd" ? "slice_end" : "slice_address", name == "sliceEnd" ? SilType.Unit : SilType.Int, slice));
                 End(slice);
                 return name == "sliceEnd" ? UnitValue.Instance : at;
+            }
+
+            // A slice's bytes as another type's slice: the same buffer (Array+Views.sb).
+            if (name == "reinterpret" && call.Arguments is [var reinterpreted, var fromStride, var toStride, _]) {
+                if (LowerType(call.Type) is not SliceType viewType) {
+                    return Missing(call, "the slice 'reinterpret' gives");
+                }
+
+                if (Borrow(reinterpreted) is not { } slice) {
+                    return null;
+                }
+
+                if (Expression(fromStride) is not { } from || Expression(toStride) is not { } to) {
+                    End(slice);
+                    return null;
+                }
+
+                var view = Emit(new BuiltinInst("slice_reinterpret", viewType, slice, from, to));
+                End(slice);
+                return view;
             }
 
             var builtin = name switch {

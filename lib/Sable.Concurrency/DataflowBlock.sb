@@ -1,0 +1,565 @@
+module Sable.Concurrency
+
+// Dataflow blocks (.NET's System.Threading.Tasks.Dataflow): each block
+// takes items in by `send`, which waits while the block is full — its
+// sender's backpressure — and a source block holds what it makes in a
+// bounded buffer of its own, from which its links take it, or `receive`
+// does. A link is a task that goes through the source's buffer and offers
+// each item to its targets in order: to the first whose predicate takes it
+// and that has room, or else waits for room in the first that takes it.
+// Completion and faults flow along the links that propagate them: a source
+// that has given its last item completes its targets, and one that faulted
+// faults them; a target that faulted faults the source that links to it,
+// so that whatever feeds the pipeline stops rather than waits for ever.
+
+/// What a dataflow block takes items in by: every block but a source of
+/// its own, and what code feeding a pipeline sends to.
+public protocol DataflowTarget {
+    /// What it takes.
+    associatedtype Input: Sendable
+
+    /// The item taken in, waiting while the block is full: `.Sent`, or
+    /// `.Closed` once it is completed or faulted, or `.Cancelled` if the
+    /// task is cancelled while it waits.
+    fn send(_ item: Input) async -> SendResult
+
+    /// The item taken in if there is room now: `.Full` if not.
+    fn trySend(_ item: Input) -> SendResult
+
+    /// No more items: it finishes what it has, and then completes.
+    fn complete()
+
+    /// Stopped with the error: what it holds is dropped, and its
+    /// completion throws the error.
+    fn fault(_ error: any Error)
+
+    /// The error it faulted with, if it has.
+    var failure: (any Error)? { get }
+}
+
+// How a source block offers what it makes to a target it is linked to:
+// whether its completion, or fault, is passed on once it has given its
+// last item; and at most how many items the link gives before it goes.
+struct DataflowLinkOptions: Sendable {
+    let propagateCompletion: Bool
+    let maxMessages: Int?
+}
+
+/// Gives a source block's items, each once, for 'for try await': what it
+/// makes that no link has taken. It throws what the block faulted with.
+public struct DataflowIterator<Value: Sendable>: AsyncIterator {
+    public alias Element = Value
+
+    let outlet: BlockOutlet<Value>
+    var done: Bool
+
+    init(_ outlet: BlockOutlet<Value>) {
+        self.outlet = outlet
+        done = false
+    }
+
+    /// The next item; none once the block has completed and its items are
+    /// taken, or if the task is cancelled while it waits.
+    public mutating fn next() async throws -> Value? {
+        if done {
+            return none
+        }
+        if let item = try await outlet.receive() {
+            return item
+        }
+        done = true
+        return none
+    }
+}
+
+// ---- What the blocks are made of ------------------------------------------
+
+// A link from a source to a target: the target's operations, closed over.
+@immutable
+final class DataflowLink<T: Sendable> {
+    let send: async (T) -> SendResult
+    let trySend: (T) -> SendResult
+    let complete: () -> Void
+    let fault: (any Error) -> Void
+    let failure: () -> (any Error)?
+    let accepts: (T) -> Bool
+    let options: DataflowLinkOptions
+    let given: Atomic<Int>
+
+    init<Target: DataflowTarget>(_ target: Target, _ options: DataflowLinkOptions, _ accepts: @escaping @Sendable (T) -> Bool) where Target.Input == T, Target: Sendable {
+        send = { await target.send($0) }
+        trySend = { target.trySend($0) }
+        complete = { target.complete() }
+        fault = { target.fault($0) }
+        failure = { target.failure }
+        self.accepts = accepts
+        self.options = options
+        given = Atomic(0)
+    }
+
+    // Whether the item is this link's to take.
+    fn takes(_ item: T) -> Bool {
+        if let limit = options.maxMessages {
+            if given.load() >= limit {
+                return false
+            }
+        }
+        return accepts(item)
+    }
+}
+
+struct OutletLinks<T: Sendable> {
+    var links: DataflowLink<T>[>..] = []
+    var dispatching: Bool = false
+
+    init() { }
+}
+
+// What a source block has made and not yet given: a bounded buffer, and
+// its links, which a task gives the items to.
+@immutable
+final class BlockOutlet<T: Sendable> {
+    let buffer: ThrowingChannel<T, any Error>
+    let links: Mutex<OutletLinks<T>>
+    let linked: WaitList
+    let drained: Promise<Bool, Never>
+    let toEvery: Bool
+
+    init(_ capacity: Int?, toEvery: Bool) {
+        if let room = capacity {
+            buffer = ThrowingChannel<T, any Error>(capacity: room)
+        } else {
+            buffer = ThrowingChannel<T, any Error>()
+        }
+        links = Mutex(OutletLinks<T>())
+        linked = WaitList()
+        drained = Promise<Bool, Never>()
+        self.toEvery = toEvery
+    }
+
+    // An item made, waiting while the buffer is full.
+    fn put(_ item: T) async -> SendResult {
+        return await buffer.send(item)
+    }
+
+    // No more items; or the block faulted.
+    fn finish(_ error: (any Error)?) {
+        if let failure = error {
+            buffer.close(error: failure)
+        } else {
+            buffer.close()
+        }
+    }
+
+    fn receive() async throws -> T? {
+        do {
+            if let item = try await buffer.receive() {
+                return item
+            }
+        } catch {
+            _ = drained.succeed(true)
+            throw error
+        }
+        if buffer.isClosed {
+            _ = drained.succeed(true)
+        }
+        return none
+    }
+
+    fn tryReceive() -> T? {
+        return buffer.tryReceive()
+    }
+
+    // A link added; the task that gives items to the links started with
+    // the first. 'fault' faults the block, when a target that propagates
+    // completion has faulted.
+    fn link(_ link: DataflowLink<T>, fault: @escaping @Sendable (any Error) -> Void) {
+        let start = links.withLock { (state: inout OutletLinks<T>) -> Bool in
+            state.links.append(link)
+            if state.dispatching {
+                return false
+            }
+            state.dispatching = true
+            return true
+        }
+        linked.wakeAll()
+        if start {
+            let outlet = self
+            _ = Task.detached {
+                await outlet.dispatch(fault)
+            }
+        }
+    }
+
+    fn current() -> DataflowLink<T>[>..] {
+        return links.withLock { $0.links }
+    }
+
+    fn unlink(_ gone: DataflowLink<T>) {
+        links.withLock { (state: inout OutletLinks<T>) -> Void in
+            var kept: DataflowLink<T>[>..] = []
+            for link in state.links {
+                if link !== gone {
+                    kept.append(link)
+                }
+            }
+            state.links = kept
+        }
+    }
+
+    // Each item to the links, until the buffer ends: then the links that
+    // propagate completion are completed, or faulted.
+    fn dispatch(_ fault: (any Error) -> Void) async {
+        while true {
+            var item: T? = none
+            do {
+                item = try await buffer.receive()
+            } catch {
+                for link in current() {
+                    if link.options.propagateCompletion {
+                        link.fault(error)
+                    }
+                }
+                _ = drained.succeed(true)
+                return
+            }
+            guard let next = item else {
+                if !buffer.isClosed {
+                    // Cancelled: the program is ending.
+                    return
+                }
+                for link in current() {
+                    if link.options.propagateCompletion {
+                        link.complete()
+                    }
+                }
+                _ = drained.succeed(true)
+                return
+            }
+            if !(await offer(next, fault)) {
+                _ = drained.succeed(true)
+                return
+            }
+        }
+    }
+
+    // The item given to the first link that takes it and has room, or else
+    // to the first that takes it, once it has room; to every one that takes
+    // it, for a broadcast. With no link to take it, it waits for one.
+    fn offer(_ item: T, _ fault: (any Error) -> Void) async -> Bool {
+        while true {
+            let ticket = linked.ticket
+            let all = current()
+            var first: DataflowLink<T>? = none
+            var given = false
+            for link in all {
+                if !link.takes(item) {
+                    continue
+                }
+                if toEvery {
+                    if await deliver(item, link, fault) {
+                        given = true
+                    }
+                    continue
+                }
+                match link.trySend(item) {
+                    case .Sent => {
+                        counted(link)
+                        return true
+                    }
+                    case .Full => {
+                        if first == none {
+                            first = link
+                        }
+                    }
+                    case _ => {
+                        if !gone(link, fault) {
+                            return false
+                        }
+                    }
+                }
+            }
+            if given {
+                return true
+            }
+            if let waitFor = first {
+                if await deliver(item, waitFor, fault) {
+                    return true
+                }
+                continue
+            }
+            if Task.isCancelled {
+                return false
+            }
+            await linked.park(since: ticket)
+        }
+    }
+
+    // The item sent to the link, waiting for room: whether it took it.
+    fn deliver(_ item: T, _ link: DataflowLink<T>, _ fault: (any Error) -> Void) async -> Bool {
+        match await link.send(item) {
+            case .Sent => {
+                counted(link)
+                return true
+            }
+            case .Cancelled => {
+                return false
+            }
+            case _ => {
+                _ = gone(link, fault)
+                return false
+            }
+        }
+    }
+
+    fn counted(_ link: DataflowLink<T>) {
+        if let limit = link.options.maxMessages {
+            if link.given.add(1) + 1 >= limit {
+                unlink(link)
+            }
+        }
+    }
+
+    // A target that takes nothing more is let go; one that faulted, and
+    // propagates completion, faults this block. Whether to go on.
+    fn gone(_ link: DataflowLink<T>, _ fault: (any Error) -> Void) -> Bool {
+        unlink(link)
+        if link.options.propagateCompletion {
+            if let error = link.failure() {
+                fault(error)
+                return false
+            }
+        }
+        return true
+    }
+}
+
+// Whether a block has faulted, and with what; and its completion.
+@immutable
+final class BlockStatus {
+    let failed: Mutex<(any Error)?>
+    let finished: Promise<Bool, Never>
+
+    init() {
+        failed = Mutex(none)
+        finished = Promise<Bool, Never>()
+    }
+
+    // The fault recorded: whether it is the first.
+    fn record(_ error: any Error) -> Bool {
+        Runtime.share(error)
+        return failed.withLock { (failed: inout (any Error)?) -> Bool in
+            if failed != none {
+                return false
+            }
+            failed = error
+            return true
+        }
+    }
+
+    var failure: (any Error)? => failed.withLock { $0 }
+
+    // Once the block's work is done, and its outlet's items are taken —
+    // or at once, if it faulted: what it faulted with, thrown.
+    fn completion(_ drained: Promise<Bool, Never>?) async throws {
+        _ = await finished.value()
+        if let error = failure {
+            throw error
+        }
+        if let taken = drained {
+            _ = await taken.value()
+        }
+        if let error = failure {
+            throw error
+        }
+    }
+}
+
+// What a block's work makes of an item: one, several or none.
+union BlockOutput<T> {
+    One(T)
+    Many(T[>..])
+    Nothing
+}
+
+// Items in order: a worker given the nth waits for its turn to give what
+// it made, so that a block working on several at once gives them in the
+// order they came.
+@immutable
+final class BlockTurns {
+    let next: Mutex<Int>
+    let moved: WaitList
+
+    init() {
+        next = Mutex(0)
+        moved = WaitList()
+    }
+
+    // Whether the turn came; false if the block faulted meanwhile.
+    fn wait(_ turn: Int, _ status: BlockStatus) async -> Bool {
+        while true {
+            let ticket = moved.ticket
+            if next.withLock({ $0 }) == turn {
+                return true
+            }
+            if status.failure != none {
+                return false
+            }
+            await moved.park(since: ticket)
+        }
+    }
+
+    fn done(_ turn: Int) {
+        next.withLock { $0 = turn + 1 }
+        moved.wakeAll()
+    }
+}
+
+// The work of a block that takes items in and does something with each:
+// so many workers at once, taking items in turn from a bounded channel,
+// each giving what it made to the outlet — in the order the items came,
+// if asked.
+@immutable
+final class BlockEngine<In: Sendable, Out: Sendable> {
+    let input: Channel<In>
+    let outlet: BlockOutlet<Out>?
+    let work: async (In) throws -> BlockOutput<Out>
+    let status: BlockStatus
+    let ordered: Bool
+    let taking: AsyncMutex
+    let taken: Atomic<Int>
+    let turns: BlockTurns
+    let running: Atomic<Int>
+    let workers: Mutex<Task<Void>[>..]>
+    let atEnd: () -> BlockOutput<Out>
+
+    init(capacity: Int?, parallelism: Int, ordered: Bool, outlet: BlockOutlet<Out>?, atEnd: @escaping @Sendable () -> BlockOutput<Out>, work: @escaping @Sendable async (In) throws -> BlockOutput<Out>) {
+        precondition(parallelism > 0, "a block working on \(parallelism) items at once")
+        if let room = capacity {
+            precondition(room > 0, "a block holding \(room) items")
+            input = Channel<In>(capacity: room)
+        } else {
+            input = Channel<In>()
+        }
+        self.outlet = outlet
+        self.work = work
+        self.atEnd = atEnd
+        status = BlockStatus()
+        self.ordered = ordered && parallelism > 1
+        taking = AsyncMutex()
+        taken = Atomic(0)
+        turns = BlockTurns()
+        running = Atomic(parallelism)
+        workers = Mutex([])
+        var started: Task<Void>[>..] = []
+        for _ in 0..<parallelism {
+            let engine = self
+            started.append(Task.detached {
+                await engine.worker()
+            })
+        }
+        workers.withLock { $0 = started }
+    }
+
+    fn worker() async {
+        while true {
+            var turn = 0
+            var received: In? = none
+            if ordered {
+                await taking.lock()
+                received = await input.receive()
+                turn = taken.add(1)
+                taking.unlock()
+            } else {
+                received = await input.receive()
+            }
+            guard let item = received else {
+                break
+            }
+            if status.failure != none {
+                break
+            }
+            var made: BlockOutput<Out> = .Nothing
+            do {
+                made = try await work(item)
+            } catch {
+                fault(error)
+                break
+            }
+            if ordered {
+                if !(await turns.wait(turn, status)) {
+                    break
+                }
+            }
+            let gave = await give(made)
+            if ordered {
+                turns.done(turn)
+            }
+            if !gave {
+                break
+            }
+        }
+        if running.add(-1) == 1 {
+            if status.failure == none {
+                _ = await give(atEnd())
+            }
+            if let source = outlet {
+                source.finish(status.failure)
+            }
+            // The tasks hold the engine: let go, so that it can go too.
+            workers.withLock { $0 = [] }
+            _ = status.finished.succeed(true)
+        }
+    }
+
+    fn give(_ made: BlockOutput<Out>) async -> Bool {
+        guard let source = outlet else {
+            return true
+        }
+        match made {
+            case .One(let item) => {
+                return await source.put(item) == .Sent
+            }
+            case .Many(let items) => {
+                for item in items {
+                    if await source.put(item) != .Sent {
+                        return false
+                    }
+                }
+                return true
+            }
+            case .Nothing => {
+                return true
+            }
+        }
+    }
+
+    fn send(_ item: In) async -> SendResult {
+        return await input.send(item)
+    }
+
+    fn trySend(_ item: In) -> SendResult {
+        return input.trySend(item)
+    }
+
+    fn complete() {
+        input.close()
+    }
+
+    // Stopped: no more items taken, those held dropped, the workers
+    // cancelled, the outlet closed with the error.
+    fn fault(_ error: any Error) {
+        if !status.record(error) {
+            return
+        }
+        input.close()
+        while input.tryReceive() != none { }
+        if let source = outlet {
+            source.finish(error)
+        }
+        turns.moved.wakeAll()
+        for task in workers.withLock({ $0 }) {
+            task.cancel()
+        }
+    }
+}

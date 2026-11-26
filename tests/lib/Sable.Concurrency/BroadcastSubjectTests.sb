@@ -1,0 +1,169 @@
+module BroadcastSubjectTests
+
+// BroadcastSubject, ThrowingBroadcastSubject and CurrentValueSubject
+// (Sable.Concurrency), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import ConcurrencySupport
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn everySubscriberGetsEveryValue() async {
+    let subject = BroadcastSubject<Int>()
+    var first = subject.makeAsyncIterator()
+    var second = subject.makeAsyncIterator()
+    expect(subject.send(1))
+    expect(subject.send(2))
+    subject.finish()
+    for expected in [1, 2] {
+        expect(await first.next() == expected)
+        expect(await second.next() == expected)
+    }
+    expect(await first.next() == none)
+    expect(await second.next() == none)
+}
+
+@test
+fn aSubscriberGetsOnlyWhatIsSentAfterIt() async {
+    let subject = BroadcastSubject<Int>()
+    subject.send(1)
+    var late = subject.makeAsyncIterator()
+    subject.send(2)
+    subject.finish()
+    expect(await late.next() == 2)
+    expect(await late.next() == none)
+}
+
+@test
+fn aNewSubscriberGetsTheValuesReplayed() async {
+    let subject = BroadcastSubject<Int>(replay: 2)
+    for i in 1...4 {
+        subject.send(i)
+    }
+    var late = subject.makeAsyncIterator()
+    subject.send(5)
+    subject.finish()
+    var seen: Int[>..] = []
+    while let value = await late.next() {
+        seen.append(value)
+    }
+    expect(seen == [3, 4, 5])
+}
+
+@test
+fn aSubscriberAfterTheFinishGetsTheReplayThenTheEnd() async {
+    let subject = BroadcastSubject<Int>(replay: 1)
+    subject.send(9)
+    subject.finish()
+    expect(!subject.send(10))
+    expect(subject.isFinished)
+    var late = subject.makeAsyncIterator()
+    expect(await late.next() == 9)
+    expect(await late.next() == none)
+}
+
+@test
+fn finishingWithAnErrorThrowsItAfterTheValues() async {
+    let subject = ThrowingBroadcastSubject<Int, Broken>()
+    var subscriber = subject.makeAsyncIterator()
+    subject.send(1)
+    subject.finish(throwing: .Down)
+    expect(try! await subscriber.next() == 1)
+    await expectThrows(Broken.Down) { _ = try await subscriber.next() }
+    var late = subject.makeAsyncIterator()
+    await expectThrows(Broken.Down) { _ = try await late.next() }
+}
+
+@test
+fn aSubscriberLetGoLeavesTheSubject() async {
+    let subject = BroadcastSubject<Int>()
+    if true {
+        var subscriber = subject.makeAsyncIterator()
+        assertEqual(subject.subscriberCount, 1)
+        subject.send(1)
+        expect(await subscriber.next() == 1)
+    }
+    assertEqual(subject.subscriberCount, 0)
+}
+
+@test
+fn aCancelledSubscriberLeavesTheSubject() async {
+    let subject = BroadcastSubject<Int>()
+    let listener = Task.spawn {
+        var count = 0
+        for await _ in subject {
+            count += 1
+        }
+        return count
+    }
+    await Task.settle()
+    assertEqual(subject.subscriberCount, 1)
+    listener.cancel()
+    assertEqual(await listener.value, 0)
+    assertEqual(subject.subscriberCount, 0)
+}
+
+@test
+fn aSlowSubscriberKeepsWhatItsPolicySays() async {
+    let subject = BroadcastSubject<Int>(bufferingPolicy: .BufferingNewest(2))
+    var slow = subject.makeAsyncIterator()
+    for i in 1...5 {
+        subject.send(i)
+    }
+    subject.finish()
+    expect(await slow.next() == 4)
+    expect(await slow.next() == 5)
+    expect(await slow.next() == none)
+}
+
+@test
+fn subscribersOnOtherTasksGetEveryValue() async {
+    let subject = BroadcastSubject<Int>()
+    let listeners = (0..<4).map { _ in
+        Task.spawn {
+            var total = 0
+            for await value in subject {
+                total += value
+            }
+            return total
+        }
+    }
+    await Task.settle()
+    for i in 1...100 {
+        subject.send(i)
+    }
+    subject.finish()
+    for listener in listeners {
+        assertEqual(await listener.value, 5050)
+    }
+}
+
+// ---- CurrentValueSubject ---------------------------------------------------
+
+@test
+fn aCurrentValueSubjectGivesItsValueFirst() async {
+    let subject = CurrentValueSubject<String>("idle")
+    var watcher = subject.makeAsyncIterator()
+    subject.value = "busy"
+    expect(subject.value == "busy")
+    subject.finish()
+    expect(await watcher.next() == "idle")
+    expect(await watcher.next() == "busy")
+    expect(await watcher.next() == none)
+}
+
+@test
+fn aLateWatcherGetsTheValueAsItIsNow() async {
+    let subject = CurrentValueSubject<Int>(1)
+    subject.send(2)
+    subject.send(3)
+    var late = subject.makeAsyncIterator()
+    assertEqual(subject.subscriberCount, 1)
+    subject.finish()
+    expect(subject.isFinished)
+    expect(!subject.send(4))
+    expect(subject.value == 3)
+    expect(await late.next() == 3)
+    expect(await late.next() == none)
+}

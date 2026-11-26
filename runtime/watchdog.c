@@ -128,6 +128,7 @@ static void watchdog_main(void *argument) {
             // Not the streams' own flush, which would wait for a thread that
             // is writing.
             coverage_write();
+            terminal_restore();
             _Exit(WATCHDOG_STATUS);
         }
 

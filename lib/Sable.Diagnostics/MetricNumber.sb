@@ -1,0 +1,26 @@
+module Sable.Diagnostics
+
+/// What an instrument measures in (`Counter<Int>`, `Histogram<F64>`): an
+/// integer, summed exactly, or a number. .NET's instruments' `T`.
+public protocol MetricNumber: Sendable {
+    /// Whether it is an integer, summed as one.
+    static var isInteger: Bool { get }
+
+    /// The value as an integer: truncated, for a number.
+    var metricInteger: Int { get }
+
+    /// The value as a number.
+    var metricNumber: F64 { get }
+}
+
+extension Int: MetricNumber {
+    public static var isInteger: Bool => true
+    public var metricInteger: Int => self
+    public var metricNumber: F64 => F64(self)
+}
+
+extension F64: MetricNumber {
+    public static var isInteger: Bool => false
+    public var metricInteger: Int => Int(self)
+    public var metricNumber: F64 => self
+}

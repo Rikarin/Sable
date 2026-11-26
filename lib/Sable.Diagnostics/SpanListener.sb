@@ -1,0 +1,37 @@
+module Sable.Diagnostics
+
+/// What hears of spans (`Tracing.addListener`): whether it wants one about
+/// to start, and each it wanted as it starts and ends. The ends are what an
+/// exporter is given (`SimpleSpanProcessor`); a sampler is a listener's
+/// 'sample'. Called on the task the span is on, so each returns soon.
+/// .NET's `ActivityListener`, OpenTelemetry's SpanProcessor with its Sampler.
+///
+/// ```sable
+/// let exporter = InMemorySpanExporter()
+/// let listener: any SpanListener = SimpleSpanProcessor(exporter)
+/// let listening = Tracing.addListener(listener)
+/// listening.cancel()
+/// ```
+public protocol SpanListener: Sendable {
+    /// What is wanted of a span about to start under the parent (none for a
+    /// trace's first): by default what the parent wanted — sampled or not —
+    /// and a new trace sampled.
+    fn sample(_ tracer: Tracer, _ name: String, _ kind: SpanKind, traceId: TraceId, parent: SpanContext?) -> SamplingDecision
+
+    /// A span it wanted, started.
+    fn started(_ span: Span)
+
+    /// A span it wanted, ended.
+    fn ended(_ span: SpanRecord)
+}
+
+extension SpanListener {
+    public fn sample(_ tracer: Tracer, _ name: String, _ kind: SpanKind, traceId: TraceId, parent: SpanContext?) -> SamplingDecision {
+        if let parent = parent {
+            return parent.isSampled ? .RecordAndSample : .Drop
+        }
+        return .RecordAndSample
+    }
+
+    public fn started(_ span: Span) { }
+}

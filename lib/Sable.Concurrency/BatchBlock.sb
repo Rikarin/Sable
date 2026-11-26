@@ -1,0 +1,177 @@
+module Sable.Concurrency
+
+/// A dataflow block that gives what it takes in as arrays of `size`: .NET's
+/// `BatchBlock<T>`, in front of what is cheaper done many at a time — a
+/// database's insert, a request that takes a list. What is left as it
+/// completes is given as a last, shorter batch; `triggerBatch()` gives what
+/// it holds now. It holds at most `capacity` items not yet batched, and as
+/// many batches not yet taken.
+///
+/// ```sable
+/// let batches = BatchBlock<Int>(size: 2)
+/// for i in 1...5 {
+///     await batches.send(i)
+/// }
+/// batches.complete()
+/// var sizes: Int[>..] = []
+/// while let batch = try! await batches.receive() {
+///     sizes.append(batch.count)
+/// }
+/// assert(sizes == [2, 2, 1])
+/// ```
+@immutable
+public final class BatchBlock<T: Sendable>: DataflowTarget, AsyncSequence {
+    public alias Input = T
+    public alias Iter = DataflowIterator<T[>..]>
+
+    let engine: BlockEngine<BatchInput<T>, T[>..]>
+    let outlet: BlockOutlet<T[>..]>
+
+    /// How many items a batch has.
+    public let size: Int
+
+    /// A block giving batches of so many items, holding at most so many
+    /// (none: as many as come).
+    public init(size: Int, capacity: Int? = none) {
+        precondition(size > 0, "batches of \(size) items")
+        self.size = size
+        let outlet = BlockOutlet<T[>..]>(capacity, toEvery: false)
+        self.outlet = outlet
+        let pending = BatchHeld<T>(size)
+        engine = BlockEngine<BatchInput<T>, T[>..]>(capacity: capacity, parallelism: 1, ordered: false, outlet: outlet, atEnd: {
+            if let rest = pending.take() {
+                return .One(rest)
+            }
+            return .Nothing
+        }, work: { item in
+            match item {
+                case .Item(let value) => {
+                    if let full = pending.add(value) {
+                        return .One(full)
+                    }
+                }
+                case .Flush => {
+                    if let held = pending.take() {
+                        return .One(held)
+                    }
+                }
+            }
+            return .Nothing
+        })
+    }
+
+    public fn send(_ item: T) async -> SendResult {
+        return await engine.send(.Item(item))
+    }
+
+    public fn trySend(_ item: T) -> SendResult {
+        return engine.trySend(.Item(item))
+    }
+
+    /// What it holds now given as a batch, however few, once the items sent
+    /// before are batched.
+    public fn triggerBatch() async {
+        _ = await engine.send(.Flush)
+    }
+
+    public fn complete() {
+        engine.complete()
+    }
+
+    public fn fault(_ error: any Error) {
+        engine.fault(error)
+    }
+
+    public var failure: (any Error)? => engine.status.failure
+
+    /// Waits until the block has batched every item and its batches are
+    /// taken; throws what it faulted with.
+    public fn completion() async throws {
+        try await engine.status.completion(outlet.drained)
+    }
+
+    /// Its batches given to the target, if the predicate takes them: as
+    /// `TransformBlock.link(to:propagateCompletion:maxMessages:where:)`.
+    public fn link<Target: DataflowTarget>(to target: Target, propagateCompletion: Bool = false, maxMessages: Int? = none, where accepts: @escaping @Sendable (T[>..]) -> Bool = { _ in true })
+        where Target.Input == T[>..], Target: Sendable {
+        let engine = self.engine
+        let options = DataflowLinkOptions { propagateCompletion: propagateCompletion, maxMessages: maxMessages }
+        outlet.link(DataflowLink<T[>..]>(target, options, accepts), fault: { engine.fault($0) })
+    }
+
+    /// The next batch no link takes, waiting for it; none once it has
+    /// completed. Throws what it faulted with.
+    public fn receive() async throws -> T[>..]? {
+        return try await outlet.receive()
+    }
+
+    /// A batch, if one is waiting now.
+    public fn tryReceive() -> T[>..]? {
+        return outlet.tryReceive()
+    }
+
+    /// Its batches as they come: as `receive()`.
+    public fn makeAsyncIterator() -> DataflowIterator<T[>..]> {
+        return DataflowIterator<T[>..]>(outlet)
+    }
+}
+
+// The batch a batch block is filling: its one worker's alone, so it needs
+// no lock (a task's steps on different threads are ordered by the hand-
+// over between them).
+@immutable
+final class BatchHeld<T> {
+    let cell: RawPtr<T[>..]>
+    let size: Int
+
+    init(_ size: Int) {
+        self.size = size
+        unsafe {
+            cell = RawPtr<T[>..]>.allocate(count: 1)
+            var empty: T[>..] = []
+            empty.reserveCapacity(size)
+            cell.initialize(to: empty)
+        }
+    }
+
+    deinit {
+        unsafe {
+            cell.deinitialize()
+            cell.deallocate()
+        }
+    }
+
+    // The item added: the batch, if it is now full.
+    fn add(_ item: T) -> T[>..]? {
+        unsafe {
+            var held = cell.move()
+            held.append(item)
+            if held.count < size {
+                cell.initialize(to: move held)
+                return none
+            }
+            var next: T[>..] = []
+            next.reserveCapacity(size)
+            cell.initialize(to: next)
+            return held
+        }
+    }
+
+    // What is held, if anything.
+    fn take() -> T[>..]? {
+        unsafe {
+            let held = cell.move()
+            var next: T[>..] = []
+            next.reserveCapacity(size)
+            cell.initialize(to: next)
+            return held.isEmpty ? none : held
+        }
+    }
+}
+
+// What a batch block's worker takes: an item, or the word to give a batch
+// of what it holds.
+union BatchInput<T> {
+    Item(T)
+    Flush
+}

@@ -300,6 +300,55 @@ What an `&` argument names must be a place an assignment could write — a
 are refused for a `let xs`, and for an array a call gives, `&make()[0]`
 (S3010), rather than writing a copy that is then dropped.
 
+### References that write
+
+A reference writes where it is made of a place that may be written: `&x`
+of a `var`, an `inout` parameter, `self` in a `mutating` member, or a field
+or element of one, and what a `mutating` member returns. Every other one
+only reads — a `T&` parameter, `&` of a `let`, what any other function
+returns — and a write through it is S3010. A local holds what it is given:
+`let r = c.at(0)` writes through, and a `var` that writes is given only
+references that write.
+
+```sable
+struct Chunk {
+    var items: Node[>..]
+    mutating fn at(_ i: Int) -> Node& { return &self.items[i] }   // roots(0): into self
+}
+
+var chunk = Chunk { items: [Node(v: 1), Node(v: 2)] }
+chunk.at(0).v = 10                  // a place, through the reference
+chunk.at(1).bump()                  // a mutating member of what it refers to
+chunk.at(0) = Node(v: 3)            // the whole of it
+let r = chunk.at(1)
+r.v = 20                            // 'let r' writes through: it is never rebound
+var w = chunk.at(0)
+w = &other                          // a 'var' is rebound, to another that writes
+```
+
+A store to a reference — a call that returns one, a `let` that holds one —
+writes what it refers to; a store to a `var` that holds one rebinds it.
+
+An element of an array, `&xs[i]` or `&self.items[i]`, is referred to where
+it is: the array is made the only reference to its buffer, and the
+reference is the element's address in it. That address is good only while
+the array does not change, so the reference holds an access to the variable
+it is rooted in, from where it is made to its last use, as an `inout`
+argument does for a call: any other use of that variable meanwhile, reading
+included, is an error (S3062). What a `mutating` member returns holds its
+receiver the same way. The reference cannot outlive its root either (docs/02
+§2.4): returning one rooted in a local is S3061, using it after its root's
+scope ends is too. Rooted in an object's array, or a global's, the access
+cannot be proved — another reference to the object may grow the array — so
+such a reference is used where it is made and not kept in a variable,
+passed on or returned (S3067).
+
+```sable
+let r = chunk.at(0)
+chunk.items.append(Node(v: 9))      // error[S3062]: 'chunk' is used while a reference into it is in use
+r.v = 1
+```
+
 ### A range of an array as a place
 
 A range of an array's elements is a place of type `T[:]`, by any range of
@@ -883,12 +932,50 @@ extension U8[:] { fn toString() -> String { } }
 - Its members are generic over the parameters and monomorphised per element
   type, like any generic. `Sable.Core` declares the array family's own members
   (`count`, `append`, `contains`, …) this way.
+- `PlainData` (Sable.Core) is met by a value that is its bytes alone: the
+  integers and the floats, a struct of them with no padding and no deinit,
+  neither `@noncopy` nor `@inline_layout`, and an inline array `T[k]` of one
+  — not a Bool, a Char, an enum, a union, an optional, a tuple, a class, a
+  closure, a reference or an array with a buffer. Conformance is by what a
+  type is made of, as Sendable's is; a type that declares it is held to it
+  (S3490).
 - It may conform the arrays to protocols, `extension<Element: Debug>
   Element[:]: Debug`, and conforms them where its element meets its
   constraints. So every kind of array, and a slice, is Equatable, Hashable and
   Comparable (in lexicographic order) when its element is, as in Swift:
   `assertEqual(words, ["a", "b"])`, `xs < ys`, an array as a dictionary's key.
   An operator such a conformance declares on `T[:]` takes arrays of any kind.
+
+### Views of a slice's bytes
+
+A slice of plain values may be seen as a slice of another plain type's,
+with nothing copied: `xs.reinterpreted(as: T.self)` is the same buffer, its
+run measured in the other stride, and `xs.bytes` is
+`xs.reinterpreted(as: U8.self)`. It is a slice like any other, kept and
+passed on as one, which holds the buffer. The run's bytes must be a whole
+number of `T`s and start, in their buffer, at a multiple of `T`'s stride,
+or the view traps — an array's first element always does.
+
+```sable
+struct Vector3 { var x: F32; var y: F32; var z: F32 }   // 12 bytes, no padding
+
+let points: Vector3[>..] = [Vector3(x: 1, y: 2, z: 3), Vector3(x: 4, y: 5, z: 6)]
+let floats = points.reinterpreted(as: F32.self)        // F32[:], count 6, the same buffer
+let again = floats.reinterpreted(as: Vector3.self)     // and back
+let raw = points.bytes                                 // U8[:], count 24
+points[1..<2].reinterpreted(as: U64.self)              // traps: starts 12 bytes in
+```
+
+Where the receiver may be written, so may the view, and writing through it
+changes the receiver's elements where they are: `points.reinterpreted(as:
+F32.self)[4] = 50`, `scale(&points.reinterpreted(as: F32.self))`,
+`points.reinterpreted(as: F32.self).reverse()`. The receiver lends itself
+for the access as it does to an `inout T[:]` (§5, "A range of an array as a
+place") — made the only reference to its buffer, or an inline array lent
+where it is — so nothing is copied, and has it back when the access ends;
+a view given back with another count of bytes traps. A `let` array's view
+only reads (S3010). Both element types must be PlainData (S3023 for a
+member of the array, S3007 for `T`).
 
 ---
 

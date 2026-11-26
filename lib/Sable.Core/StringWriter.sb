@@ -153,6 +153,26 @@ public struct StringWriter {
         return buffer.finish(count: count)
     }
 
+    /// What has been appended, as a string of its own: the writer goes on,
+    /// its room kept, as `finish` would not leave it.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     var writer = StringWriter.allocate(capacity: 16)
+    ///     writer.append(utf8: "ab", from: 0, to: 2)
+    ///     assert(writer.copied() == "ab")
+    ///     writer.append(byte: 0x63)
+    ///     assert(writer.finish() == "abc")
+    /// }
+    /// ```
+    public fn copied() -> String {
+        unsafe {
+            let copy = StringBuffer.allocate(capacity: count)
+            RawMemory.copy(to: copy.address, from: buffer.address, count)
+            return copy.finish(count: count)
+        }
+    }
+
     /// What has been appended, as a string, if it is well-formed UTF-8, or
     /// none: the writer is done with either way.
     public unsafe fn finishIfValid() -> String? {

@@ -1,6 +1,33 @@
 module Sable.IO
 
-/// Standard input, output and error.
+import Sable.Concurrency
+import Sable.Time
+
+/// Standard input, output and error, and the terminal they may be: whether
+/// they are one, its size, styled text, the cursor, the alternate screen,
+/// raw mode and the keys typed. .NET's `System.Console`, Rust's `IsTerminal`
+/// with crossterm.
+///
+/// What only a terminal does — moving the cursor, clearing, the alternate
+/// screen — writes nothing where standard output is a file or a pipe, and
+/// styles are written only as far as it shows them (`colorSupport`). On
+/// Windows a console is asked to read escape sequences (virtual terminal
+/// processing) the first time it is written to so.
+///
+/// Raw mode, the alternate screen and a hidden cursor are undone however the
+/// program ends: as the closure that asked for them returns or throws, as
+/// the program exits, traps, or is ended by a signal (Ctrl+C, SIGTERM), and
+/// for as long as it is stopped (Ctrl+Z). A program ended by SIGKILL is the
+/// one that cannot be.
+///
+/// ```sable
+/// if Console.isOutputTerminal {
+///     Console.writeLine("ready", style: Style().foreground(.green))
+/// }
+/// if let (columns, rows) = Console.size {
+///     assert(columns > 0 && rows > 0)
+/// }
+/// ```
 public struct Console {
     public static fn write(_ text: String) {
         Runtime.write(text)
@@ -48,4 +75,495 @@ public struct Console {
 
     /// Standard error, as a Writer, as standardOutput is.
     public static var standardError: FileHandle => FileHandle(handle: Runtime.fileStandard(2), path: "<standard error>", owned: false)
+
+    /// What print and Console.write hold back, written now.
+    public static fn flush() {
+        _ = try? Console.standardOutput.flush()
+    }
+
+    // ---- What the streams are ---------------------------------------------
+
+    /// Whether standard input is a terminal: what is read is typed. .NET's
+    /// `!IsInputRedirected`, Rust's `stdin().is_terminal()`.
+    public static var isInputTerminal: Bool => Runtime.isTerminal(0)
+
+    /// Whether standard output is a terminal, rather than a file or a pipe.
+    public static var isOutputTerminal: Bool => Runtime.isTerminal(1)
+
+    /// Whether standard error is a terminal.
+    public static var isErrorTerminal: Bool => Runtime.isTerminal(2)
+
+    /// The terminal's columns and rows: standard output's, else standard
+    /// error's, else standard input's; none where none is a terminal that
+    /// says. Asked each time, as the window can be resized
+    /// (`Signal.WindowChange`).
+    public static var size: (columns: Int, rows: Int)? {
+        get {
+            for stream in [1, 2, 0] {
+                let packed = Runtime.terminalSize(stream)
+                if packed != 0 {
+                    return (columns: packed >> 32, rows: packed & 0xFFFFFFFF)
+                }
+            }
+            return none
+        }
+    }
+
+    // What each stream shows, found the first time it is asked: 'support'
+    // and one, 0 for not yet.
+    static let supports: Atomic<Int> = Atomic<Int>(0)
+
+    static fn support(_ stream: Int) -> ColorSupport {
+        let shift = stream == 1 ? 0 : 4
+        let known = (Console.supports.load(ordering: .Relaxed) >> shift) & 15
+        if known != 0 {
+            return Console.ofRank(known - 1)
+        }
+        let found = ColorSupport.of(stream: stream)
+        _ = Console.supports.bitwiseOr((found.rank + 1) << shift, ordering: .Relaxed)
+        return found
+    }
+
+    static fn ofRank(_ rank: Int) -> ColorSupport {
+        return match rank {
+            case 0  => ColorSupport.None
+            case 1  => ColorSupport.Monochrome
+            case 2  => ColorSupport.Basic
+            case 3  => ColorSupport.Extended
+            default => ColorSupport.TrueColor
+        }
+    }
+
+    /// What standard output shows of a style: worked out once, from whether
+    /// it is a terminal and NO_COLOR, CLICOLOR_FORCE, TERM and COLORTERM.
+    public static var colorSupport: ColorSupport => Console.support(1)
+
+    /// What standard error shows of a style.
+    public static var errorColorSupport: ColorSupport => Console.support(2)
+
+    // ---- Styled text ----------------------------------------------------------
+
+    /// The text, in the style as far as standard output shows it.
+    public static fn write(_ text: String, style: Style) {
+        Runtime.write(style.apply(to: text, for: Console.colorSupport))
+    }
+
+    /// The text and a line break, the text in the style.
+    public static fn writeLine(_ text: String, style: Style) {
+        Runtime.write(style.apply(to: text, for: Console.colorSupport) + "\n")
+    }
+
+    /// The text to standard error, in the style as far as it shows it.
+    public static fn writeError(_ text: String, style: Style) {
+        Runtime.writeError(style.apply(to: text, for: Console.errorColorSupport))
+    }
+
+    /// The text and a line break to standard error, the text in the style.
+    public static fn writeErrorLine(_ text: String, style: Style) {
+        Runtime.writeError(style.apply(to: text, for: Console.errorColorSupport) + "\n")
+    }
+
+    // ---- The cursor and the screen ---------------------------------------------
+
+    // A control sequence, where standard output is a terminal.
+    static fn control(_ sequence: String) {
+        if Console.colorSupport != .None {
+            Runtime.write("\u{1B}" + sequence)
+        }
+    }
+
+    /// The cursor put at the column and row, counted from 0 at the top left.
+    public static fn moveCursor(toColumn column: Int, row: Int) {
+        Console.control("[\(row + 1);\(column + 1)H")
+    }
+
+    /// The cursor moved so many columns right (left for fewer than none) and
+    /// rows down (up), no further than the screen's edge.
+    public static fn moveCursor(columns: Int = 0, rows: Int = 0) {
+        if columns != 0 {
+            Console.control(columns > 0 ? "[\(columns)C" : "[\(-columns)D")
+        }
+        if rows != 0 {
+            Console.control(rows > 0 ? "[\(rows)B" : "[\(-rows)A")
+        }
+    }
+
+    /// Where the cursor is, as the terminal answers when asked: its column and
+    /// row from 0. Throws Unsupported where standard input and output are not
+    /// both a terminal, and TimedOut where it does not answer within a second.
+    /// What is typed meanwhile is kept for `readKey`.
+    public static fn cursorPosition() throws(IoError) -> (column: Int, row: Int) {
+        if Console.colorSupport == .None || !Console.isInputTerminal {
+            throw IoError.Unsupported(what: "the cursor's position, standard input and output not a terminal")
+        }
+        return try Console.keys.withLock { (pending: inout U8[>..]) throws(IoError) -> (column: Int, row: Int) in
+            return try Console.inRawMode(Console.rawMode == 0 ? 1 : Console.rawMode) { () throws(IoError) -> (column: Int, row: Int) in
+                Runtime.write("\u{1B}[6n")
+                let until = Runtime.monotonicNanoseconds() + 1_000_000_000
+                var got: U8[>..] = []
+                while true {
+                    if let (column, row, start, end) = Console.report(got) {
+                        pending.append(contentsOf: got[..<start])
+                        pending.append(contentsOf: got[end...])
+                        return (column: column, row: row)
+                    }
+                    let left = (until - Runtime.monotonicNanoseconds()) / 1_000_000
+                    let byte = left > 0 ? Runtime.terminalRead(left) : -2
+                    if byte < 0 {
+                        pending.append(contentsOf: got)
+                        throw byte == -2 ? IoError.TimedOut : IoError.UnexpectedEof
+                    }
+                    got.append(U8(byte))
+                }
+            }
+        }
+    }
+
+    // A report of the cursor, ESC [ row ; column R, in what was read: its
+    // column and row from 0, and where it starts and ends.
+    static fn report(_ bytes: U8[>..]) -> (Int, Int, Int, Int)? {
+        var start = 0
+        while start + 1 < bytes.count {
+            if bytes[start] == 0x1B && bytes[start + 1] == 0x5B {
+                var numbers = [0, 0]
+                var which = 0
+                var digits = 0
+                var i = start + 2
+                while i < bytes.count {
+                    let b = Int(bytes[i])
+                    if b >= 0x30 && b <= 0x39 {
+                        numbers[which] = numbers[which] * 10 + b - 0x30
+                        digits += 1
+                    } else if b == 0x3B && which == 0 && digits > 0 {
+                        which = 1
+                        digits = 0
+                    } else if b == 0x52 && which == 1 && digits > 0 {
+                        return (numbers[1] - 1, numbers[0] - 1, start, i + 1)
+                    } else {
+                        break
+                    }
+                    i += 1
+                }
+            }
+            start += 1
+        }
+        return none
+    }
+
+    // What the program shows that is to be undone as it ends: 1 the
+    // alternate screen, 2 no cursor.
+    static let shown: Atomic<Int> = Atomic<Int>(0)
+
+    static fn show(_ bit: Int, _ on: Bool) {
+        let before = on ? Console.shown.bitwiseOr(bit) : Console.shown.bitwiseAnd(~bit)
+        Runtime.terminalShow(on ? before | bit : before & ~bit)
+    }
+
+    /// Whether the cursor is shown. Hidden, it is shown again as the program
+    /// ends, however it ends.
+    public static var isCursorVisible: Bool {
+        get {
+            return (Console.shown.load() & 2) == 0
+        }
+        set {
+            if Console.colorSupport == .None {
+                return
+            }
+            if newValue {
+                Console.control("[?25h")
+                Console.show(2, false)
+            } else {
+                Console.show(2, true)
+                Console.control("[?25l")
+            }
+        }
+    }
+
+    /// The cursor's place and style kept, for `restoreCursor`.
+    public static fn saveCursor() {
+        Console.control("7")
+    }
+
+    /// The cursor where `saveCursor` kept it.
+    public static fn restoreCursor() {
+        Console.control("8")
+    }
+
+    /// The screen cleared, and the cursor at its top left.
+    public static fn clear() {
+        Console.control("[2J\u{1B}[H")
+    }
+
+    /// The cursor's line cleared, the cursor where it is.
+    public static fn clearLine() {
+        Console.control("[2K")
+    }
+
+    /// The cursor's line cleared from the cursor to its end.
+    public static fn clearToEndOfLine() {
+        Console.control("[K")
+    }
+
+    /// The screen cleared from the cursor to its end.
+    public static fn clearToEndOfScreen() {
+        Console.control("[J")
+    }
+
+    /// The window's title, where the terminal shows one.
+    public static fn setTitle(_ title: String) {
+        Console.control("]0;\(title)\u{7}")
+    }
+
+    /// The terminal's bell.
+    public static fn beep() {
+        if Console.isOutputTerminal {
+            Runtime.write("\u{7}")
+        }
+    }
+
+    /// Whether the alternate screen is shown (`withAlternateScreen`).
+    public static var isAlternateScreen: Bool => (Console.shown.load() & 1) != 0
+
+    /// The body run on the alternate screen — a screen of its own, with no
+    /// scrollback, as a full-screen program has — and what was on the
+    /// terminal before shown again after, whether it returns or throws, or
+    /// the program ends.
+    ///
+    /// ```sable
+    /// Console.withAlternateScreen {
+    ///     Console.clear()
+    ///     Console.write("a screen of its own")
+    /// }
+    /// ```
+    public static fn withAlternateScreen<R, E: Error>(_ body: () throws(E) -> R) throws(E) -> R {
+        let entered = Console.enterAlternateScreen()
+        do {
+            let result = try body()
+            if entered {
+                Console.leaveAlternateScreen()
+            }
+            return result
+        } catch {
+            if entered {
+                Console.leaveAlternateScreen()
+            }
+            throw error
+        }
+    }
+
+    /// The async body run on the alternate screen.
+    public static fn withAlternateScreen<R, E: Error>(_ body: async () throws(E) -> R) async throws(E) -> R {
+        let entered = Console.enterAlternateScreen()
+        do {
+            let result = try await body()
+            if entered {
+                Console.leaveAlternateScreen()
+            }
+            return result
+        } catch {
+            if entered {
+                Console.leaveAlternateScreen()
+            }
+            throw error
+        }
+    }
+
+    // Whether it was entered now: not when it was already, or there is no
+    // terminal.
+    static fn enterAlternateScreen() -> Bool {
+        if Console.colorSupport == .None || Console.isAlternateScreen {
+            return false
+        }
+        Console.show(1, true)
+        Console.control("[?1049h")
+        Console.flush()
+        return true
+    }
+
+    static fn leaveAlternateScreen() {
+        Console.control("[?1049l")
+        Console.flush()
+        Console.show(1, false)
+    }
+
+    // ---- Raw mode and keys ---------------------------------------------------
+
+    // What was read and is not yet a key; the lock, one reader at a time.
+    static let keys: Mutex<U8[>..]> = Mutex([])
+
+    // The mode standard input's terminal is in: 0, or raw (1), or raw with
+    // the interrupt's keys too (2).
+    static let mode: Atomic<Int> = Atomic<Int>(0)
+
+    static var rawMode: Int => Console.mode.load()
+
+    /// Whether standard input's terminal is in raw mode (`withRawMode`).
+    public static var isRawMode: Bool => Console.rawMode != 0
+
+    /// The body run with standard input's terminal in raw mode: each key
+    /// given as it is typed, to `readKey`, and shown nowhere, rather than a
+    /// line at a time once Enter is pressed, as the terminal edits it. Output
+    /// is as it was: a line break still starts the next line. The mode
+    /// before is put back after, whether the body returns or throws, or the
+    /// program ends however it does.
+    ///
+    /// Ctrl+C, Ctrl+\ and Ctrl+Z do as they did — signal the program — or,
+    /// with 'interruptsAsKeys', are read as keys like the others. Where
+    /// standard input is no terminal the body is run as it is.
+    ///
+    /// ```sable
+    /// fn confirm() throws(IoError) -> Bool {
+    ///     Console.write("delete? [y/n] ")
+    ///     return try Console.withRawMode {
+    ///         while true {
+    ///             let key = try Console.readKey()
+    ///             if let c = key.character {
+    ///                 if c == 'y' || c == 'n' {
+    ///                     Console.writeLine("\(c)")
+    ///                     return c == 'y'
+    ///                 }
+    ///             }
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    public static fn withRawMode<R, E: Error>(interruptsAsKeys: Bool = false, _ body: () throws(E) -> R) throws(E) -> R {
+        return try Console.inRawMode(interruptsAsKeys ? 2 : 1, body)
+    }
+
+    /// The async body run with standard input's terminal in raw mode.
+    public static fn withRawMode<R, E: Error>(interruptsAsKeys: Bool = false, _ body: async () throws(E) -> R) async throws(E) -> R {
+        let before = Console.enter(interruptsAsKeys ? 2 : 1)
+        do {
+            let result = try await body()
+            Console.leave(before)
+            return result
+        } catch {
+            Console.leave(before)
+            throw error
+        }
+    }
+
+    static fn inRawMode<R, E: Error>(_ mode: Int, _ body: () throws(E) -> R) throws(E) -> R {
+        let before = Console.enter(mode)
+        do {
+            let result = try body()
+            Console.leave(before)
+            return result
+        } catch {
+            Console.leave(before)
+            throw error
+        }
+    }
+
+    // The mode it was in; -1 where there is no terminal to put in it.
+    static fn enter(_ mode: Int) -> Int {
+        Console.flush()
+        let before = Runtime.terminalMode(mode)
+        if before >= 0 {
+            Console.mode.store(mode)
+        }
+        return before
+    }
+
+    static fn leave(_ before: Int) {
+        if before >= 0 {
+            Console.flush()
+            _ = Runtime.terminalMode(before)
+            Console.mode.store(before)
+        }
+    }
+
+    /// The next key typed, waiting for it: in raw mode for as long as it
+    /// waits, if the terminal is not in it already. A sequence a key sends
+    /// is read whole, as one key; an escape with nothing after it within
+    /// 50 ms is the Escape key. .NET's `ReadKey(intercept: true)`.
+    /// Throws Unsupported where standard input is no terminal, and
+    /// UnexpectedEof once it will give no more. One task at a time reads.
+    public static fn readKey() throws(IoError) -> KeyEvent {
+        guard let key = try Console.nextKey(within: -1) else {
+            throw IoError.TimedOut
+        }
+        return key
+    }
+
+    /// The next key typed within the time; none if there was none by then.
+    ///
+    /// ```sable
+    /// fn waitForAny() -> Bool {
+    ///     let key = try? Console.readKey(timeout: Duration.seconds(5))
+    ///     return key != none
+    /// }
+    /// ```
+    public static fn readKey(timeout: Duration) throws(IoError) -> KeyEvent? {
+        let milliseconds = timeout.totalMilliseconds
+        return try Console.nextKey(within: milliseconds < 0 ? 0 : milliseconds)
+    }
+
+    /// Whether a key has been typed and waits to be read: `readKey` would
+    /// not wait. .NET's `KeyAvailable`.
+    public static var isKeyAvailable: Bool {
+        get {
+            if !Console.isInputTerminal {
+                return false
+            }
+            return Console.keys.withLock { (pending: inout U8[>..]) -> Bool in
+                if !pending.isEmpty {
+                    return true
+                }
+                return Console.inRawMode(Console.rawMode == 0 ? 1 : Console.rawMode) {
+                    let byte = Runtime.terminalRead(0)
+                    if byte >= 0 {
+                        pending.append(U8(byte))
+                    }
+                    return byte >= 0
+                }
+            }
+        }
+    }
+
+    // The next key within so many milliseconds, or however long for less
+    // than none.
+    static fn nextKey(within milliseconds: Int) throws(IoError) -> KeyEvent? {
+        if !Console.isInputTerminal {
+            throw IoError.Unsupported(what: "reading keys from standard input that is not a terminal")
+        }
+        let until = Runtime.monotonicNanoseconds() + milliseconds * 1_000_000
+        return try Console.keys.withLock { (pending: inout U8[>..]) throws(IoError) -> KeyEvent? in
+            return try Console.inRawMode(Console.rawMode == 0 ? 1 : Console.rawMode) { () throws(IoError) -> KeyEvent? in
+                while true {
+                    if !pending.isEmpty {
+                        if let (key, length) = KeyEvent.decodeOne(pending, 0, complete: false) {
+                            pending = pending[length...].toArray()
+                            return key
+                        }
+                        // More of a sequence, soon, or it is what came.
+                        let byte = Runtime.terminalRead(50)
+                        if byte >= 0 {
+                            pending.append(U8(byte))
+                        } else if let (key, length) = KeyEvent.decodeOne(pending, 0, complete: true) {
+                            pending = pending[length...].toArray()
+                            return key
+                        }
+                        continue
+                    }
+                    var left = -1
+                    if milliseconds >= 0 {
+                        left = (until - Runtime.monotonicNanoseconds() + 999_999) / 1_000_000
+                        if left < 0 {
+                            left = 0
+                        }
+                    }
+                    let byte = Runtime.terminalRead(left)
+                    if byte == -2 {
+                        return none
+                    }
+                    if byte == -1 {
+                        throw IoError.UnexpectedEof
+                    }
+                    pending.append(U8(byte))
+                }
+            }
+        }
+    }
 }

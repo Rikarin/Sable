@@ -1,0 +1,38 @@
+module Sable.Diagnostics
+
+/// A sum that grows and shrinks — items queued, connections open — added
+/// to from any task, without a lock (`Meter.upDownCounter`). OpenTelemetry's
+/// UpDownCounter, .NET's `UpDownCounter<T>`.
+///
+/// ```sable
+/// let meter = Meter("server")
+/// let connections = meter.upDownCounter("connections.open", unit: "{connection}")
+/// connections.add(1)
+/// connections.add(-1)
+/// ```
+@immutable
+public final class UpDownCounter<Value: MetricNumber> {
+    let instrument: Instrument
+
+    init(_ instrument: Instrument) {
+        self.instrument = instrument
+    }
+
+    public var name: String => instrument.name
+
+    /// The amount, of either sign, added to the sum of no attributes.
+    @inline(always)
+    public fn add(_ amount: Value) {
+        if Metrics.isCollecting {
+            instrument.add(amount.metricInteger, amount.metricNumber, instrument.plain)
+        }
+    }
+
+    /// The amount added to the sum of the attributes.
+    @inline(always)
+    public fn add(_ amount: Value, _ attributes: @autoclosure () -> KeyValue[>..]) {
+        if Metrics.isCollecting {
+            instrument.add(amount.metricInteger, amount.metricNumber, instrument.series(attributes()))
+        }
+    }
+}

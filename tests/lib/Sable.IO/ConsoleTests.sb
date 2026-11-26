@@ -1,0 +1,421 @@
+module ConsoleTests
+
+// Console (Sable.IO), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO
+// What needs a terminal is run again in a process of its own under a
+// pseudoterminal (TerminalSupport): each such test does its part there when
+// isUnderTerminal() says it is that process, and looks on from here.
+
+import IoSupport
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+import TerminalSupport
+
+// ---- Without a terminal: the test's streams are pipes ----------------------------
+
+@test
+fn pipesAreNoTerminal() {
+    expect(!Console.isOutputTerminal)
+    expect(!Console.isErrorTerminal)
+    expect(Console.colorSupport == .None || Runtime.environment("CLICOLOR_FORCE") != none)
+}
+
+@test
+fn keysAreNotReadFromWhatIsNoTerminal() {
+    if Console.isInputTerminal {
+        try! skip("standard input is a terminal")
+    }
+    expectIoError("Unsupported") { _ = try Console.readKey() }
+    expectIoError("Unsupported") { _ = try Console.readKey(timeout: Duration.milliseconds(1)) }
+    expectIoError("Unsupported") { _ = try Console.cursorPosition() }
+    expect(!Console.isKeyAvailable)
+}
+
+@test
+fn rawModeWithNoTerminalRunsTheBodyAsItIs() {
+    if Console.isInputTerminal {
+        try! skip("standard input is a terminal")
+    }
+    let got = Console.withRawMode { Console.isRawMode }
+    expect(!got)
+    expect(Console.withAlternateScreen { 3 } == 3)
+    expect(!Console.isAlternateScreen)
+}
+
+@test
+fn withoutATerminalNothingButTheTextIsWritten() {
+    if Runtime.environment("CLICOLOR_FORCE") != none {
+        try! skip("CLICOLOR_FORCE asks for styles")
+    }
+    Console.write("plain ", style: Style().bold())
+    Console.writeLine("line", style: Style().foreground(.red))
+    Console.writeError("error ", style: Style().bold())
+    Console.writeErrorLine("line", style: Style().underlined())
+    Console.moveCursor(toColumn: 1, row: 1)
+    Console.moveCursor(columns: -1, rows: 1)
+    Console.clear()
+    Console.clearLine()
+    Console.clearToEndOfLine()
+    Console.clearToEndOfScreen()
+    Console.saveCursor()
+    Console.restoreCursor()
+    Console.setTitle("t")
+    Console.beep()
+    Console.isCursorVisible = false
+    expect(Console.isCursorVisible)
+    Console.flush()
+    expect(Console.size == none || Console.isInputTerminal)
+    expect(!Console.isRawMode)
+}
+
+// ---- Under a terminal ---------------------------------------------------------------
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn underATerminalEveryStreamIsOne() async throws {
+    if isUnderTerminal() {
+        let (columns, rows) = Console.size!
+        Console.writeLine("streams \(Console.isInputTerminal) \(Console.isOutputTerminal) \(Console.isErrorTerminal) \(columns)x\(rows) \(Console.colorSupport)")
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.underATerminalEveryStreamIsOne")
+    expect(run.waitFor("streams true true true 80x24 Extended"), run.output)
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn theSizeIsAskedEachTime() async throws {
+    if isUnderTerminal() {
+        Console.writeLine("first \(Console.size!.columns)")
+        _ = Console.readLine()
+        Console.writeLine("then \(Console.size!.columns)x\(Console.size!.rows)")
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.theSizeIsAskedEachTime")
+    expect(run.waitFor("first 80"), run.output)
+    run.resize(columns: 132, rows: 50)
+    run.type("\n")
+    expect(run.waitFor("then 132x50"), run.output)
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn noColorLeavesTheStylesButNotTheColours() async throws {
+    if isUnderTerminal() {
+        Console.writeLine("styled", style: Style().foreground(.red).bold())
+        Console.writeLine("support \(Console.colorSupport)")
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.noColorLeavesTheStylesButNotTheColours", environment: ["NO_COLOR": "1"])
+    expect(run.waitFor("support Monochrome"), run.output)
+    expect(run.output.contains("\u{1B}[1mstyled\u{1B}[0m"), run.output)
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn stylesAreWrittenToATerminal() async throws {
+    if isUnderTerminal() {
+        Console.writeLine("styled", style: Style().foreground(.red).bold())
+        Console.writeErrorLine("error", style: Style().underlined())
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.stylesAreWrittenToATerminal", environment: ["COLORTERM": "truecolor"])
+    expect(run.waitFor("\u{1B}[4merror\u{1B}[0m"), run.output)
+    expect(run.output.contains("\u{1B}[1;31mstyled\u{1B}[0m"), run.output)
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn keysAreReadAsTheyAreTyped() async throws {
+    if isUnderTerminal() {
+        try Console.withRawMode {
+            Console.writeLine("ready")
+            var names: String[>..] = []
+            for _ in 0..<7 {
+                names.append(try Console.readKey().description())
+            }
+            Console.writeLine("keys " + names.joined(separator: " "))
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.keysAreReadAsTheyAreTyped")
+    expect(run.waitFor("ready"), run.output)
+    expect(run.isRaw)
+    run.type("a")
+    run.type([0x1B, 0x5B, 0x41])
+    run.type([0x1B, 0x5B, 0x33, 0x3B, 0x35, 0x7E])
+    run.type("é\r")
+    run.type([0x1B, 0x62])
+    run.type([0x1B])
+    expect(run.waitFor("keys a Up Ctrl+Delete é Enter Alt+b Escape"), run.output)
+    expect((await run.finish()).success)
+    expect(run.isCooked)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn aKeyIsWaitedForNoLongerThanAsked() async throws {
+    if isUnderTerminal() {
+        let nothing = try Console.readKey(timeout: Duration.milliseconds(20))
+        Console.writeLine("none \(nothing == none) \(Console.isKeyAvailable)")
+        let key = try Console.readKey(timeout: Duration.seconds(10))
+        Console.writeLine("then \(key!.description())")
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.aKeyIsWaitedForNoLongerThanAsked")
+    expect(run.waitFor("none true false"), run.output)
+    run.type("z")
+    expect(run.waitFor("then z"), run.output)
+    expect((await run.finish()).success)
+    expect(run.isCooked)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn theCursorsPlaceIsAsTheTerminalAnswers() async throws {
+    if isUnderTerminal() {
+        let (column, row) = try Console.withRawMode { () throws(IoError) -> (column: Int, row: Int) in
+            Console.writeLine("asking")
+            return try Console.cursorPosition()
+        }
+        Console.writeLine("at \(column) \(row) \(try Console.readKey().description())")
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.theCursorsPlaceIsAsTheTerminalAnswers")
+    expect(run.waitFor("\u{1B}[6n"), run.output)
+    // A key typed before the answer is kept.
+    run.type("k")
+    run.type([0x1B, 0x5B, 0x35, 0x3B, 0x31, 0x30, 0x52])
+    expect(run.waitFor("at 9 4 k"), run.output)
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn theCursorAndTheScreenAreWrittenTo() async throws {
+    if isUnderTerminal() {
+        Console.moveCursor(toColumn: 4, row: 2)
+        Console.moveCursor(columns: 3, rows: -1)
+        Console.moveCursor(columns: -2, rows: 5)
+        Console.clear()
+        Console.clearLine()
+        Console.clearToEndOfLine()
+        Console.clearToEndOfScreen()
+        Console.saveCursor()
+        Console.restoreCursor()
+        Console.setTitle("t")
+        Console.beep()
+        Console.isCursorVisible = false
+        Console.writeLine("hidden \(Console.isCursorVisible)")
+        Console.isCursorVisible = true
+        Console.writeLine("done \(Console.isCursorVisible)")
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.theCursorAndTheScreenAreWrittenTo")
+    expect(run.waitFor("done true"), run.output)
+    let written = run.output
+    for sequence in ["[3;5H", "[3C", "[1A", "[2D", "[5B", "[2J\u{1B}[H", "[2K", "[K", "[J", "\u{1B}7", "\u{1B}8", "]0;t\u{7}", "[?25l", "hidden false", "[?25h"] {
+        expect(written.contains(sequence), sequence)
+    }
+    expect((await run.finish()).success)
+}
+
+// ---- Raw mode and the screen undone ---------------------------------------------------
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeIsUndoneWhenTheBodyThrows() async throws {
+    if isUnderTerminal() {
+        do {
+            try Console.withRawMode { () throws(IoError) in
+                Console.writeLine("raw \(Console.isRawMode)")
+                throw IoError.TimedOut
+            }
+        } catch {
+            Console.writeLine("thrown \(Console.isRawMode)")
+        }
+        _ = Console.readLine()
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeIsUndoneWhenTheBodyThrows")
+    expect(run.waitFor("thrown false"), run.output)
+    expect(run.output.contains("raw true"))
+    expect(run.isCooked)
+    run.type("\n")
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeNestsAndIsPutBackAsItWas() async throws {
+    if isUnderTerminal() {
+        Console.withRawMode {
+            Console.withRawMode(interruptsAsKeys: true) {
+                Console.writeLine("inner")
+                _ = try? Console.readKey()
+            }
+            Console.writeLine("outer \(Console.isRawMode)")
+            _ = try? Console.readKey()
+        }
+        Console.writeLine("after \(Console.isRawMode)")
+        _ = Console.readLine()
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeNestsAndIsPutBackAsItWas")
+    expect(run.waitFor("inner"), run.output)
+    expect(run.mode == 0)
+    run.type("x")
+    expect(run.waitFor("outer true"), run.output)
+    expect(run.mode == 4)
+    run.type("y")
+    expect(run.waitFor("after false"), run.output)
+    expect(run.isCooked)
+    run.type("\n")
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeAndTheScreenAreUndoneOnATrap() async throws {
+    if isUnderTerminal() {
+        Console.isCursorVisible = false
+        Console.withAlternateScreen {
+            Console.withRawMode {
+                Console.writeLine("trapping")
+                fatalError("on purpose")
+            }
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeAndTheScreenAreUndoneOnATrap")
+    let status = await run.finish()
+    expect(status.shellStatus == 134, status.description())
+    let output = run.output
+    expect(output.contains("\u{1B}[?1049htrapping"), output)
+    expect(output.contains("\u{1B}[?1049l\u{1B}[?25h"), output)
+    expect(output.contains("fatal error: on purpose"), output)
+    // The report is on the screen the program was started on.
+    expect(output.firstRange(of: "\u{1B}[?1049l")!.lowerBound < output.firstRange(of: "fatal error")!.lowerBound, output)
+    expect(run.isCooked)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeIsUndoneOnTheProgramsExit() async throws {
+    if isUnderTerminal() {
+        Console.withAlternateScreen {
+            Console.withRawMode {
+                Console.writeLine("exiting")
+                Runtime.exit(3)
+            }
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeIsUndoneOnTheProgramsExit")
+    let status = await run.finish()
+    expect(status.code == 3, status.description())
+    expect(run.output.contains("\u{1B}[?1049l"), run.output)
+    expect(run.isCooked)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeIsUndoneOnASignalThatEndsTheProgram() async throws {
+    if isUnderTerminal() {
+        Console.withRawMode {
+            Console.writeLine("raw")
+            _ = Runtime.raiseSignal(Signal.Terminate.number)
+            Console.writeLine("not ended")
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeIsUndoneOnASignalThatEndsTheProgram")
+    let status = await run.finish()
+    expect(status.signal == Signal.Terminate, status.description())
+    expect(!run.output.contains("not ended"), run.output)
+    expect(run.isCooked)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn ctrlCIsTheInterruptItWas() async throws {
+    if isUnderTerminal() {
+        Console.withRawMode {
+            Console.writeLine("waiting")
+            _ = try? Console.readKey()
+            Console.writeLine("not interrupted")
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.ctrlCIsTheInterruptItWas", controlling: true)
+    expect(run.waitFor("waiting"), run.output)
+    run.type([0x03])
+    let status = await run.finish()
+    expect(status.signal == Signal.Interrupt, status.description())
+    expect(!run.output.contains("not interrupted"), run.output)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn ctrlCIsAKeyWhenAskedFor() async throws {
+    if isUnderTerminal() {
+        Console.withRawMode(interruptsAsKeys: true) {
+            Console.writeLine("waiting")
+            Console.writeLine("read \((try? Console.readKey())!.description())")
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.ctrlCIsAKeyWhenAskedFor", controlling: true)
+    expect(run.waitFor("waiting"), run.output)
+    run.type([0x03])
+    expect(run.waitFor("read Ctrl+c"), run.output)
+    expect((await run.finish()).success)
+}
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn ctrlCCanBeHandled() async throws {
+    if isUnderTerminal() {
+        let interrupts = try Console.interrupts()
+        await Console.withRawMode {
+            Console.writeLine("waiting")
+            var iterator = interrupts.makeAsyncIterator()
+            let signal = await iterator.next()
+            Console.writeLine("handled \(signal!.name) \(Console.isRawMode)")
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.ctrlCCanBeHandled", controlling: true)
+    expect(run.waitFor("waiting"), run.output)
+    run.type([0x03])
+    expect(run.waitFor("handled INT true"), run.output)
+    expect((await run.finish()).success)
+}
+
+// SIGTSTP, as Ctrl+Z sends it: not among Signal's names.
+#if os(macos)
+let stopNumber = 18
+#else
+let stopNumber = 20
+#endif
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeIsUndoneWhileStoppedAndPutBackAfter() async throws {
+    if isUnderTerminal() {
+        Console.withRawMode {
+            Console.writeLine("stopping")
+            _ = Runtime.raiseSignal(stopNumber)
+            Console.writeLine("resumed")
+            _ = try? Console.readKey()
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeIsUndoneWhileStoppedAndPutBackAfter")
+    expect(run.waitFor("stopping"), run.output)
+    var cooked = false
+    for _ in 0..<500 {
+        if run.isCooked {
+            cooked = true
+            break
+        }
+        try? await Task.sleep(for: Duration.milliseconds(10))
+    }
+    expect(cooked)
+    expect(!run.output.contains("resumed"))
+    run.send(.Continue)
+    expect(run.waitFor("resumed"), run.output)
+    expect(run.isRaw)
+    run.type("q")
+    expect((await run.finish()).success)
+    expect(run.isCooked)
+}

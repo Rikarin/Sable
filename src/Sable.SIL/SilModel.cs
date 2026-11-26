@@ -1658,6 +1658,15 @@ public sealed class SilFunction(string name, FunctionType type) {
     public IReadOnlyList<int>? ResultRoots { get; set; }
 
     /// <summary>
+    ///     The references lowering made into storage its root owns — an
+    ///     element of an array (<c>&amp;xs[0]</c>), what a <c>mutating</c>
+    ///     member gives — each of which holds an access to its root from
+    ///     where it is made to its last use (RootChecker.CheckExclusive,
+    ///     docs/02 §2.4). Read before the passes, which keep it no longer.
+    /// </summary>
+    public HashSet<SilValue> ExclusiveReferences { get; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
     ///     What its source's <c>@inline(always)</c> or <c>@inline(never)</c>
     ///     asks of the inliners, SIL's and LLVM's. Printed as
     ///     <c>inline(always)</c>.
@@ -1810,6 +1819,13 @@ public sealed class SilModule {
     ///     initialised: <c>sil_global @M.total : $Int</c>.
     /// </summary>
     public List<(string Name, SilType Type)> Globals { get; } = [];
+
+    /// <summary>
+    ///     The globals that are 'let's: set as the program starts, destroyed
+    ///     as it ends, and never written in between, so that a value read out
+    ///     of one may be borrowed across any call (<see cref="BorrowLoads" />).
+    /// </summary>
+    public HashSet<string> ConstantGlobals { get; } = [];
 
     /// <summary>
     ///     The C functions the module calls (<c>@extern</c>, SYNTAX.md §24),
@@ -2184,6 +2200,17 @@ public static class SilBuiltins {
 
         if (SimdBuiltins.Is(name)) {
             return SimdBuiltins.Resolve(name, operands, result);
+        }
+
+        // A slice's bytes seen as another plain type's (Array+Views.sb): the
+        // same buffer, retained for the view, the run's start and count
+        // measured in the second stride, which the first's bytes must be a
+        // whole number of, from a multiple of it, or it traps. The element
+        // is the view's own, which only the result says.
+        if (name == "slice_reinterpret") {
+            return operands is [SliceType, var from, var to] && from == SilType.Int && to == SilType.Int && result is SliceType
+                ? new([operands[0], SilType.Int, SilType.Int], result)
+                : null;
         }
 
         // The empty array, slice or bounded inline array ('T[..k]' holding none).
@@ -3294,6 +3321,16 @@ public static class SilBuiltins {
         Add("signal_take", SilType.Int, SilType.Int);
         Add("signal_unwatch", SilType.Unit, SilType.Int);
         Add("signal_raise", SilType.Bool, SilType.Int);
+        Add("terminal_is", SilType.Bool, SilType.Int);
+        Add("terminal_styles", SilType.Bool, SilType.Int);
+        Add("terminal_size", SilType.Int, SilType.Int);
+        Add("terminal_mode", SilType.Int, SilType.Int);
+        Add("terminal_show", SilType.Unit, SilType.Int);
+        Add("terminal_read", SilType.Int, SilType.Int);
+        Add("pty_open", SilType.Int);
+        Add("pty_name", SilType.String, SilType.Int);
+        Add("pty_call", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("pty_attach", SilType.Bool, SilType.String, SilType.Bool);
         Add("process_current_directory", SilType.String);
         Add("process_change_directory", SilType.Bool, SilType.String);
         Add("process_id", SilType.Int);

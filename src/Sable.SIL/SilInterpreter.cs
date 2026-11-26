@@ -1980,6 +1980,22 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_error_output":
                 return Allocate(new HeapString(_lastErrorOutput));
 
+            // What it interprets has no terminal: its output is kept.
+            case "terminal_is" or "terminal_styles" or "pty_attach":
+                return false;
+
+            case "terminal_size" or "pty_open" or "pty_call":
+                return 0L;
+
+            case "terminal_mode" or "terminal_read":
+                return -1L;
+
+            case "terminal_show":
+                return null;
+
+            case "pty_name":
+                return "";
+
             case "process_current_directory":
                 return Allocate(new HeapString(Sandbox?.CurrentDirectory ?? Directory.GetCurrentDirectory()));
 
@@ -2268,6 +2284,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 array.Elements.RemoveAt(array.Elements.Count - 1);
                 return last;
             }
+
+            // A slice's bytes as another plain type's (SilInterpreter.Views.cs).
+            case "slice_reinterpret":
+                return Reinterpret(builtin, operands);
 
             // Elements [from, to) of an array or a slice: a view of the same
             // buffer, which it holds a count of; nothing is copied.

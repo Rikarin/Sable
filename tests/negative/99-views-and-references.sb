@@ -1,0 +1,98 @@
+module Negative.ViewsAndReferences
+
+// A slice seen as another type's is of plain data alone, a view of a place
+// only where the place may be written, and a reference writes only where it
+// was made of a place that may be (SYNTAX.md "Views of a slice's bytes",
+// "References that write"). What the root checker refuses — a reference kept
+// past its root, or used beside it — is SIL's, in RootTests.
+
+struct Node {
+    var v: Int
+    mutating fn bump() { v += 1 }
+}
+
+struct Padded {
+    var a: U8
+    var b: U32
+}
+
+struct Tail {
+    var a: U32
+    var b: U8
+}
+
+struct Empty { }
+
+class Box {
+    var v: Int = 0
+}
+
+enum Colour { Red, Green }
+
+struct Chunk {
+    var items: Node[>..]
+    var one: Node
+
+    mutating fn at(_ i: Int) -> Node& {
+        return &self.items[i]
+    }
+}
+
+struct Flagged: PlainData {             //! S3490 its field 'flag' is 'Bool': not every byte is a Bool
+    var flag: Bool
+}
+
+struct Gapped: PlainData {              //! S3490 has padding before 'b'
+    var a: U8
+    var b: U64
+}
+
+struct Shared: PlainData {              //! S3490 holds its elements in a buffer
+    var items: U8[>..]
+}
+
+protocol Vertex: PlainData { }
+
+struct Lettered: Vertex {               //! S3490 not every pattern of bits is a Char
+    var c: Char
+}
+
+fn readOnlyParameter(_ n: Node&) {
+    n.v = 1                             //! S3010 'n' is a reference that only reads
+    n.bump()                            //! S3041
+}
+
+fn unconstrained<T>(_ xs: T[:]) -> U8[:] {
+    return xs.bytes                     //! S3023 'T' is not constrained to be PlainData
+}
+
+fn notPlain() {
+    _ = ["a"].bytes                     //! S3023 'String' does not conform
+    _ = [true].bytes                    //! S3023 not every byte is a Bool
+    _ = [Padded { a: 1, b: 2 }].bytes   //! S3023 has padding before 'b'
+    _ = [Tail { a: 1, b: 2 }].bytes     //! S3023 has padding at its end
+    _ = [Empty()].bytes                 //! S3023 has no bytes
+    _ = [Box()].bytes                   //! S3023 is a class
+    _ = [Colour.Red].bytes              //! S3023 whose tag is not any pattern of bits
+    _ = [(1, 2)].bytes                  //! S3023 a tuple's layout is not promised
+    _ = [1 as Int?].bytes               //! S3023 an optional's tag
+    _ = [Node(v: 1)].reinterpreted(as: Bool.self)    //! S3007 'T' would be 'Bool', which is not 'PlainData': not every byte is a Bool
+}
+
+fn readOnlyViews(_ given: U32[:]) {
+    let fixed: U32[>..] = [1]
+    fixed.reinterpreted(as: U8.self)[0] = 2          //! S3010
+    given.reinterpreted(as: U8.self)[0] = 2          //! S3010
+    fixed.reinterpreted(as: U8.self).reverse()       //! S3041
+}
+
+fn readOnlyReferences() {
+    let n = Node(v: 3)
+    let r = &n
+    r.v = 4                             //! S3010 'r' is a reference that only reads
+    r = Node(v: 5)                      //! S3010 'r' is a reference that only reads
+    var c = Chunk { items: [Node(v: 1)], one: Node(v: 2) }
+    var w = c.at(0)
+    w = &n                              //! S3010 'w' writes through the reference it holds
+    w.v = 6
+}

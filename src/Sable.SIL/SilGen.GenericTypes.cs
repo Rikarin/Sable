@@ -29,7 +29,7 @@ public sealed partial class SilGen {
 
         var made = InstanceMetadata(definition);
         var constraints = definition.TypeParameters.SelectMany((p, i) => p.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c)).Select(c => (Index: i, Constraint: c)))
-            .Where(static c => c.Constraint is not NamedTypeSymbol { Name: "Sendable", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }).ToList();
+            .Where(static c => c.Constraint is not NamedTypeSymbol { Name: "Sendable" or "PlainData", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }).ToList();
         var asked = new List<(int Index, SilType Type)>();
         foreach (var (index, constraint) in constraints) {
             var wanted = constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol, TypeParameters.IsEmpty: true } protocol ? new ExistentialTypeSymbol(protocol) : constraint;

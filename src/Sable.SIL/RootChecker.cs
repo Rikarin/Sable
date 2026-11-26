@@ -42,7 +42,7 @@ namespace Sable.SIL;
 ///         would differ.
 ///     </para>
 /// </remarks>
-public static class RootChecker {
+public static partial class RootChecker {
     abstract record Anchor;
 
     sealed record LocalAnchor(AllocStackInst Slot) : Anchor;
@@ -128,6 +128,7 @@ public static class RootChecker {
             CheckReturns(function, anchors, source, diagnostics);
             CheckStores(function, anchors, source, diagnostics);
             CheckLiveness(function, anchors, source, diagnostics);
+            CheckExclusive(function, anchors, summaries, source, diagnostics);
             reported?.Invoke(before, source);
         }
     }
@@ -180,6 +181,11 @@ public static class RootChecker {
 
                         case RefElementAddrInst element:
                             changed |= Add(element, [HeapAnchor.Instance]);
+                            break;
+
+                        // An element where it is, in the buffer of the array at the place: rooted where the array is.
+                        case BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } element:
+                            changed |= Add(element, Of(element.Operands[0]));
                             break;
 
                         // A reference kept in a variable: whatever was put there.

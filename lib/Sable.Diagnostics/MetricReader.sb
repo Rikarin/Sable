@@ -1,0 +1,63 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+import Sable.Time
+
+/// What collects the program's metrics: instruments record from when the
+/// first reader is made until the last is shut down. Collects when asked,
+/// or exports to an exporter every so often. OpenTelemetry's MetricReader
+/// (manual and periodic), .NET's `MeterListener`.
+///
+/// ```sable
+/// let reader = MetricReader()
+/// let requests = Meter("web").counter("requests")
+/// requests.add(2, [KeyValue("route", "/")])
+/// let data = reader.collect().filter { $0.name == "requests" }
+/// assert(data[0].point([KeyValue("route", "/")])!.number == 2.0)
+/// reader.shutdown()
+/// ```
+@immutable
+public final class MetricReader {
+    let isOpen: Atomic<Bool>
+
+    /// A reader: the instruments record from now on.
+    public init() {
+        isOpen = Atomic(true)
+        _ = Int.atomicAdd(Metrics.readers, 1, 4)
+    }
+
+    deinit {
+        shutdown()
+    }
+
+    /// Every instrument's measurements, as they are now.
+    public fn collect() -> MetricData[>..] {
+        return Metrics.collect()
+    }
+
+    /// What is collected now, given to the exporter.
+    public fn export(to exporter: any MetricExporter) {
+        exporter.export(collect())
+    }
+
+    /// What is collected given to the exporter every so often, on a task of
+    /// its own, until the task is cancelled or the reader shut down; and
+    /// once more then.
+    public fn exportPeriodically(to exporter: any MetricExporter, every interval: Duration) -> Task<Void> {
+        let isOpen = self.isOpen
+        return Task.detached {
+            while isOpen.load() && !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                exporter.export(Metrics.collect())
+            }
+        }
+    }
+
+    /// The reader collects no more; with none left, instruments record
+    /// nothing. Shutting it down again does nothing.
+    public fn shutdown() {
+        if isOpen.exchange(false) {
+            _ = Int.atomicSub(Metrics.readers, 1, 4)
+        }
+    }
+}

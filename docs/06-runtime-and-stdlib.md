@@ -1086,7 +1086,10 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     'unsafe', home, temporary and known folders by XDG,
                     Apple and Windows rules), OsPipe (OsPipeReader
                     OsPipeWriter, and PipeEnd for a child's stream:
-                    Stdio.Pipe), Fifo (mkfifo; below)
+                    Stdio.Pipe), Fifo (mkfifo; below), Console (whether a
+                    stream is a terminal, size, Style TerminalColor
+                    ColorSupport, cursor, clear, alternate screen,
+                    withRawMode, readKey KeyEvent Key KeyModifiers; below)
 Sable.IO.Ipc        LocalListener LocalStream (a Unix domain socket, or a
                     Windows named pipe, by name; LocalAccess, peer
                     credentials, Windows' messages), SharedMemory
@@ -1177,8 +1180,24 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     drop oldest, newest or the write; close(error:);
                     cancellable sends and receives), Broadcast, Watch,
                     Oneshot, AsyncStream and AsyncThrowingStream (make,
-                    buffering policy, onTermination), merge, debounce,
-                    throttle, Mutex RwLock Condition Semaphore Barrier
+                    buffering policy, onTermination), merge (of two or
+                    three), combineLatest, switchToLatest, mapConcurrent
+                    and flatMapConcurrent (a limit, in order or not),
+                    debounce, throttle, timeout, chunked(maxCount:orEvery:),
+                    sample; BroadcastSubject (replay) and
+                    CurrentValueSubject; dataflow blocks — BufferBlock,
+                    TransformBlock, TransformManyBlock, ActionBlock,
+                    BatchBlock, BroadcastBlock, JoinBlock — linked with
+                    predicates and limits, bounded (a send waits: the
+                    producer's backpressure), parallel in order or not,
+                    completion and faults passed along the links, and a
+                    faulted target faulting what feeds it; ObjectPool
+                    (a cell a thread in front of a shared stack; Lease,
+                    move-only; PoolPolicy, Resettable; leases tracked
+                    with where they were rented) and AsyncPool (made
+                    asynchronously, at most so many, rents waiting in
+                    turn, idle timeout on a Clock, validation),
+                    Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
                     Thread (spawn, scope, park, blockOn), JoinHandle,
                     ThreadLocal, TaskLocal, parallelFor parallelInvoke
@@ -1191,7 +1210,7 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     Continuation (checked; a leak traps in debug),
                     withTimeout, race, whenAll/whenAny/whenEach,
                     Task.sleep(for:), Timer, Interval, TestClock; each, and
-                    debounce, throttle and cancel(after:), on any Clock
+                    the timed operators and cancel(after:), on any Clock
                     (Task, TaskGroup, WaitList, AsyncSequence with map,
                     filter, compactMap, prefix, chunked, reduce,
                     first(where:), collect and zip, Atomic<T> and OnceCell
@@ -1235,7 +1254,15 @@ Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
 Sable.Crypto.X509   Certificate, CertificateVerifier (RFC 5280 paths, name
                     constraints, host names, revocation lists), TrustStore
                     (the system's), CertificateBuilder, CertificateRequest
-Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
+Sable.Diagnostics   Logger (structured, with the current span's ids),
+                    Backtrace, Panic, Debugger; tracing: Tracer (withSpan,
+                    startSpan), Span, SpanContext (W3C traceparent),
+                    TraceContextPropagator, Tracing (listeners, the current
+                    span as a task-local), SpanListener SimpleSpanProcessor
+                    SpanExporter InMemorySpanExporter; metrics: Meter,
+                    Counter UpDownCounter Histogram (explicit or exponential
+                    buckets) Gauge and observable ones, MetricReader
+                    MetricExporter MetricData; ConsoleExporter (below)
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; requireAll;
                     expectEquivalent (deep, by path), expectAll,
@@ -1857,8 +1884,11 @@ default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
   loads of four lanes need no alignment on either processor. std140 and std430
   align a `vec3` and a `mat3`'s columns to 16, which is the buffer's padding
   to lay out: a `Vector4` or a `Matrix4x4`, or an `@align(16)` struct around
-  the field. `withComponents` views an array of them as `F32`s and `withBytes`
-  as bytes, with no copy; `simd` and `init(_: SIMD)` go to and from a register.
+  the field. They are PlainData, so `components` views an array of them as
+  `F32`s and Sable.Core's `bytes` as bytes, the same buffer with no copy, and
+  `withMutableComponents` lends the `F32`s to change in place, all safe code
+  (`reinterpreted(as:)`, docs/02 §2.5); `simd` and `init(_: SIMD)` go to and
+  from a register.
 - **Scalars, and F64.** The types are of `F32`, not generic: generics cost
   nothing specialised, but a build compiled once for every type
   (`SABLE_GENERICS=unspecialised`) would call an addition through a witness,
@@ -2116,6 +2146,64 @@ place.
 - **Cancellation.** `wait` throws `Cancelled`, and the child runs on:
   `withTimeout` limits a wait. `output` and `status` kill theirs.
 
+### The terminal
+
+`Sable.IO`'s `Console` asks the runtime (`runtime/terminal.c`, over
+`platform_terminal_posix.c` and `platform_terminal_win32.c`; WASI has no
+terminal) whether a stream is one, its size, and to put standard input in raw
+mode; the rest — styles, the cursor, the alternate screen, `cursorPosition` —
+is escape sequences, written only where standard output shows them
+(`ColorSupport`: NO_COLOR, CLICOLOR_FORCE, TERM, COLORTERM). Windows' console
+is asked to read them (virtual terminal processing) and to send keys as a
+terminal does (virtual terminal input); its keys are read as events, UTF-16
+made UTF-8. `KeyEvent.decode` reads what terminals send, xterm's, the Linux
+console's and the kitty protocol's.
+
+- **Raw mode** leaves output as it was (a line feed still starts a line) and
+  the interrupt's keys signals unless asked for as keys.
+- **Undone however the program ends.** The runtime notes the mode it found,
+  the alternate screen and a hidden cursor; it puts them back as the
+  closure that asked returns or throws, at exit, before a trap's report
+  (which is then on the main screen), on a fault, and in a handler it sets
+  for each signal that ends a program and has no handler of the program's
+  (`Signals` keep theirs; one let go gets the runtime's again): the handler
+  undoes, and sends the signal again to do what it did. SIGTSTP undoes, stops,
+  and on going on puts raw mode back. On Windows the console handler does it
+  for Ctrl+C and Ctrl+Break the program does not catch.
+- **Ctrl+C** is `Signal.Interrupt` (`Console.interrupts`, in Sable.Process).
+- **Tests** run a test again under a pseudoterminal the runtime makes
+  (`Runtime.ptyOpen`, `ptyAttach`), type at it and read it; Windows' ConPTY
+  has no file a program's streams can be, so there they are skipped.
+
+### Tracing and metrics
+
+`Sable.Diagnostics` has OpenTelemetry's API, in the library: what libraries and
+programs say of their work, and an exporter protocol for where it goes (the
+console exporter here; OTLP, Prometheus and the SDK are #249's, runtime
+counters #244's).
+
+- **Nothing listening costs one load.** `Tracing.isListening` and
+  `Metrics.isCollecting` read a cell of their own, by its address, with a
+  relaxed atomic load. `withSpan` is inlined, its body called on both ways of
+  that branch so that the closure is inlined too (`InlineClosures`), and its
+  attributes are an autoclosure never worked out: a span, a counter's add and
+  a histogram's record with nothing listening are below .NET's
+  (`benchmarks/library/diagnostics-disabled`).
+- **The current span** is a task-local of its own key, pushed and popped by
+  `withSpan` and `Tracing.withContext`: it crosses every `await` and goes to
+  child tasks, not to detached ones. A sampled-out span has no state, and
+  still carries its context, unsampled, to its children and other processes.
+- **Recording takes no lock.** An instrument's series without attributes is
+  raw cells changed by atomic instructions; one with attributes is found in
+  an insert-only table by reads alone, its place published by a release
+  store, and only a new set of attributes takes the lock — past 2000 sets
+  they are counted under `otel.metric.overflow=true`. An F64's sum, min and
+  max are compare-and-exchange loops.
+- **Exponential histograms** record at scale 6 (1.1 % buckets) in chunks of
+  eight octaves made as values first fall in them, and are made coarser as
+  they are collected, to `maxSize` buckets and `maxScale`.
+- **Collection** is cumulative, from the first reader on; a reader exports
+  when asked or every so often.
 ### Pipes, local streams, shared memory and serial ports
 
 The operating system's own channels between processes (#239), over

@@ -11589,8 +11589,12 @@ public sealed partial class SilGen {
             }
 
             // A variadic parameter takes the arguments from its position on,
-            // gathered into an array.
-            var variadicAt = callee.Parameters.Length > 0 && callee.Parameters[^1].IsVariadic ? callee.Parameters.Length - 1 : -1;
+            // gathered into an array — unless the binder gathered them, as it
+            // does a subscript's indices.
+            var variadicAt = callee.Parameters.Length > 0 && callee.Parameters[^1].IsVariadic
+                             && !(call.Arguments.Length == callee.Parameters.Length && call.Arguments[^1] is BoundArray { IsVariadicPack: true })
+                ? callee.Parameters.Length - 1
+                : -1;
             var passed = call.Arguments.Length;
             if (variadicAt >= 0) {
                 passed = variadicAt;

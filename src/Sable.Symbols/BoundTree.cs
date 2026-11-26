@@ -568,6 +568,9 @@ public sealed class BoundArray(
     /// <summary>A call's argument whose elements are of no one type: the element that differs, and the error unless the parameter says what they are.</summary>
     internal (SyntaxNode Element, string Message)? Inconsistent { get; init; }
 
+    /// <summary>A variadic parameter's arguments, gathered where they were passed: a subscript's indices (#349).</summary>
+    public bool IsVariadicPack { get; init; }
+
     public override IEnumerable<BoundNode> Children => Elements;
 }
 

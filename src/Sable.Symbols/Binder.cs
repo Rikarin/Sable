@@ -7712,7 +7712,12 @@ public sealed partial class Binder {
                 // Stored through, 'xs[^1] = v' and 'xs[^1].x = v' want a
                 // subscript with a setter, of those whose labels fit.
                 var use = IsPlaceBeingWritten(syntax) ? SubscriptUse.Store : SubscriptUse.Read;
-                var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution, use);
+                // The labels written choose among subscripts, as a call's do:
+                // 'g[sum: 1, 2, scale: 3]' is not 'g[1, 2, 3]' (#349).
+                ImmutableArray<string?> labels = syntax.ArgumentList.Arguments.Any(static a => !a.NameToken.IsNone)
+                    ? [..syntax.ArgumentList.Arguments.Select(static a => a.NameToken.IsNone ? null : a.NameToken.Text)]
+                    : [];
+                var resolved = ResolveOverload(group.Candidates, indices, labels, syntax, found.Substitution, use);
 
                 if (resolved is null) {
                     return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
@@ -7723,12 +7728,34 @@ public sealed partial class Binder {
                 }
 
                 var converted = ImmutableArray.CreateBuilder<BoundExpression>(indices.Length);
-                for (var i = 0; i < indices.Length && i < resolved.Parameters.Length; i++) {
-                    var wanted = found.Substitution.Apply(resolved.Parameters[i].Type);
+                BoundExpression Index(int i, TypeSymbol wanted) {
                     var index = indices[i] is BoundUnboundClosure unbound
                         ? BindExpression(unbound.Syntax as ExpressionSyntax ?? throw new InvalidOperationException(), wanted)
                         : indices[i];
-                    converted.Add(Convert(index, wanted, index.Syntax));
+                    return Convert(index, wanted, index.Syntax);
+                }
+
+                var at = 0;
+                for (var p = 0; p < resolved.Parameters.Length; p++) {
+                    var wanted = found.Substitution.Apply(resolved.Parameters[p].Type);
+                    if (resolved.Parameters[p].IsVariadic && wanted is ArrayTypeSymbol variadic) {
+                        // A variadic parameter's indices, each one of its elements, as a
+                        // call's arguments are (#349).
+                        var elements = ImmutableArray.CreateBuilder<BoundExpression>();
+                        for (var last = indices.Length - (resolved.Parameters.Length - 1 - p); at < last; at++) {
+                            elements.Add(Index(at, variadic.ElementType));
+                        }
+
+                        // Gathered here, as the setter has 'newValue' after them.
+                        converted.Add(new BoundArray(elements.Count > 0 ? elements[0].Syntax : syntax, wanted, elements.ToImmutable()) { IsVariadicPack = true });
+                        continue;
+                    }
+
+                    if (at >= indices.Length) {
+                        break;
+                    }
+
+                    converted.Add(Index(at++, wanted));
                 }
 
                 return new BoundIndexAccess(

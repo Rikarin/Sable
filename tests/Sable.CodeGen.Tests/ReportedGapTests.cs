@@ -411,4 +411,89 @@ public sealed class ReportedGapTests {
                 print("end")
             }
             """).Stdout);
+
+    /// <summary>A subscript's variadic parameter takes each index as one of its elements, labelled or not, before other parameters and in a setter (#349).</summary>
+    [Fact]
+    public void VariadicSubscriptParameters() =>
+        Assert.Equal(
+            """
+            3
+            2
+            [1, 2, 3, 9]
+            *2*
+            1
+            60
+            ["c", "a", "c"]
+
+            """,
+            Programs.AssertAgree("""
+            module VariadicSubscript
+
+            union Axis {
+                All
+                At(Int)
+            }
+
+            struct Grid {
+                var cells: Int[>..]
+
+                subscript(_ at: Int...) -> Int {
+                    get => cells[at.count]
+                    set {
+                        cells[at.count] = newValue
+                    }
+                }
+
+                subscript(axes axes: Axis...) -> String {
+                    get {
+                        var said = ""
+                        for axis in axes {
+                            match axis {
+                                case .All => said += "*"
+                                case .At(let i) => said += "\(i)"
+                            }
+                        }
+                        return said
+                    }
+                }
+
+                subscript(sum xs: Int..., scale scale: Int) -> Int {
+                    get {
+                        var total = 0
+                        for x in xs {
+                            total += x
+                        }
+                        return total * scale
+                    }
+                }
+            }
+
+            struct Table<T> {
+                var items: T[>..]
+
+                subscript(_ picks: Int...) -> T[>..] {
+                    get {
+                        var picked: T[>..] = []
+                        for i in picks {
+                            picked.append(items[i])
+                        }
+                        return picked
+                    }
+                }
+            }
+
+            @main
+            fn main() {
+                var g = Grid(cells: [1, 2, 3, 4])
+                print(g[0, 1])
+                print(g[5])
+                g[0, 0, 0] = 9
+                print(g.cells)
+                print(g[axes: .All, .At(2), .All])
+                print(g[axes: .At(1)])
+                print(g[sum: 1, 2, 3, scale: 10])
+                let t = Table(items: ["a", "b", "c"])
+                print(t[2, 0, 2])
+            }
+            """).Stdout);
 }

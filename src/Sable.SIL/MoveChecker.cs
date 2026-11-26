@@ -47,7 +47,8 @@ public static class MoveChecker {
         // Every consuming read of a move-only variable is a move.
         foreach (var block in function.Blocks) {
             for (var i = 0; i < block.Instructions.Count; i++) {
-                if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst { VariableName: not null } slot } load
+                // Not one that holds what it lends — a loop's element of an array of them — which nothing may move out (#345).
+                if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst { VariableName: not null, Unmanaged: false } slot } load
                     && IsMoveOnly(slot.ElementType)) {
                     var take = new LoadInst(slot, LoadKind.Take) { Block = block, Location = load.Location };
                     block.Instructions[i] = take;
@@ -104,11 +105,32 @@ public static class MoveChecker {
                         $"a value of @noncopy type '{load.Type}' cannot be moved out of a field or an element; move the whole value"
                     );
                     break;
+
+                // An element of an array of them read out, or copied in from
+                // another, is a copy (#345): one is lent, or taken out
+                // ('removeLast()'), or the whole array moved.
+                case BuiltinInst { Name: "array_get" } element when IsMoveOnly(element.Type) && reported.Add(element.Location):
+                    Report(
+                        ErrorCode.ERR_PartialMove,
+                        element,
+                        $"a value of @noncopy type '{element.Type}' cannot be moved out of an array's element; borrow it where it is, or take it out of the array"
+                    );
+                    break;
+
+                case BuiltinInst { Name: "array_append_all" or "array_append_repeating" or "array_of_slice" } copied
+                    when copied.Operands.Any(static o => o.Type is SliceType { Element: var element } && IsMoveOnly(element) || IsMoveOnly(o.Type) && o.Type is not ArrayType and not AddressType)
+                         && reported.Add(copied.Location):
+                    Report(
+                        ErrorCode.ERR_CopyOfNoncopyable,
+                        copied,
+                        "the elements are @noncopy, so they cannot be copied into an array"
+                    );
+                    break;
             }
         }
     }
 
-    static bool IsMoveOnly(SilType type) => type is NominalType { IsNoncopyable: true };
+    static bool IsMoveOnly(SilType type) => type is NominalType { IsNoncopyable: true } or ArrayType { Element: NominalType { IsNoncopyable: true } };
 
     /// <summary>
     ///     The variable whose box an address is the value of — a local a

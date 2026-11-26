@@ -2486,9 +2486,10 @@ public sealed partial class SilGen {
             // The growable kinds and 'T[]' share a counted buffer. A slice is
             // a view of a run of such a buffer's elements, sharing it ('[T:]'),
             // or of an inline array's, lent for a call.
-            // An array copies its elements on write, so a move-only element has no array yet.
+            // An array of move-only elements is move-only itself (#345): never
+            // shared, so never copied on write.
             case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice or ArrayKind.Inline } array:
-                return Lower(array.ElementType) is { } elementType && elementType is not NominalType { IsNoncopyable: true }
+                return Lower(array.ElementType) is { } elementType
                     ? array.ArrayKind == ArrayKind.Slice ? new SliceType(elementType) : new ArrayType(elementType)
                     : null;
 
@@ -4534,6 +4535,7 @@ public sealed partial class SilGen {
         type switch {
             NominalType { IsNoncopyable: true } => true,
             TupleType tuple => tuple.Elements.Any(IsMoveOnly),
+            ArrayType array => IsMoveOnly(array.Element),
             _ => false,
         };
 
@@ -4866,7 +4868,7 @@ public sealed partial class SilGen {
 
                 var argument = (SilArgument)parameterValue;
                 if (function.Type.IsOwned(_entry.Arguments.IndexOf(argument))
-                    && (argument.Type is NominalType { IsNoncopyable: true } || !argument.Type.IsTrivial && MovesParameter(body, symbol.Parameters[i]))) {
+                    && (IsMoveOnly(argument.Type) || !argument.Type.IsTrivial && MovesParameter(body, symbol.Parameters[i]))) {
                     var slot = NewSlot(argument.Type, symbol.Parameters[i].Name);
                     Emit(new StoreInst(argument, slot, StoreKind.Assign));
                     _spilled[symbol.Parameters[i]] = slot;
@@ -5438,16 +5440,31 @@ public sealed partial class SilGen {
                 return Hold(Emit(new LoadBorrowInst(place)));
             }
 
+            // So is an element of an array of them, 'handles[0].id' (#345):
+            // where the variable's array holds it, or out of a parameter's lent.
+            if (expression is BoundIndexAccess { Subscript: null, Indices: [var elementIndex], Receiver: var elements } && LowerType(expression.Type) is { } elementType
+                && IsMoveOnly(elementType) && Sub(elements.Type) is ArrayTypeSymbol && !IsInlineArray(elements)) {
+                if (MoveOnlyPlace(elements) is { } arrayPlace) {
+                    return Expression(elementIndex) is { } at
+                        ? Hold(Emit(new LoadBorrowInst(Emit(new BuiltinInst("array_element_addr", SilType.Address(elementType), arrayPlace, at)))))
+                        : null;
+                }
+
+                if (elements is BoundParameterAccess && IsBorrowable(elements) && Borrow(elements) is { } lentArray) {
+                    return Expression(elementIndex) is { } at ? Emit(new BuiltinInst("array_get_borrowed", elementType, lentArray, at)) : null;
+                }
+            }
+
             // So is a move-only field of something in memory: a
             // method that borrows 'self' borrows it in place, where a copy
             // would be a move out of what holds it.
-            if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true } && Place(expression) is { } inPlace) {
+            if (expression is BoundFieldAccess && LowerType(expression.Type) is { } placed && IsMoveOnly(placed) && Place(expression) is { } inPlace) {
                 return Hold(Emit(new LoadBorrowInst(inPlace)));
             }
 
             // And one of an object: borrowed in the object, which stays
             // borrowed, or alive, until the field's borrow ends.
-            if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true }
+            if (expression is BoundFieldAccess && LowerType(expression.Type) is { } held && IsMoveOnly(held)
                 && ObjectOf(expression) is not null) {
                 if (FieldInObject(expression) is not var (address, reference)) {
                     return null;
@@ -5632,9 +5649,9 @@ public sealed partial class SilGen {
         AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
             expression switch {
                 BoundLocalAccess local when _slots.TryGetValue(local.Local, out var slot) && !_boxed.Contains(local.Local)
-                    && slot.ElementType is NominalType { IsNoncopyable: true } => slot,
+                    && IsMoveOnly(slot.ElementType) => slot,
                 BoundParameterAccess parameter when _spilled.TryGetValue(parameter.Parameter, out var spilled)
-                    && spilled.ElementType is NominalType { IsNoncopyable: true } => spilled,
+                    && IsMoveOnly(spilled.ElementType) => spilled,
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => MoveOnlyPlace(conversion.Operand),
                 _ => null,
             };
@@ -5642,7 +5659,7 @@ public sealed partial class SilGen {
         /// <summary>A move-only local kept in a box, because a closure captures it — here or in the closure — or null.</summary>
         BoundLocalAccess? CapturedMoveOnly(BoundExpression expression) =>
             expression switch {
-                BoundLocalAccess local when LowerType(local.Type) is NominalType { IsNoncopyable: true }
+                BoundLocalAccess local when LowerType(local.Type) is { } boxed && IsMoveOnly(boxed)
                     && (_boxed.Contains(local.Local) || closure?.Captures.TryGetValue(local.Local, out var capture) == true && capture.Boxed) => local,
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => CapturedMoveOnly(conversion.Operand),
                 _ => null,
@@ -6634,6 +6651,20 @@ public sealed partial class SilGen {
         ///     of the loop releases it with the rest.
         /// </summary>
         void ForArray(BoundForEach loop) {
+            // An array of move-only values is walked where it is, each element lent (#345).
+            if (loop.Element is not null && LowerType(loop.Sequence.Type) is ArrayType moveOnly && IsMoveOnly(moveOnly)) {
+                if (MoveOnlyPlace(loop.Sequence) is { } place) {
+                    ForArrayInPlace(loop, place, moveOnly.Element);
+                    return;
+                }
+
+                // A borrowed parameter's: the value it is lent.
+                if (loop.Sequence is BoundParameterAccess && IsBorrowable(loop.Sequence) && Borrow(loop.Sequence) is { } lentArray) {
+                    ForArrayInPlace(loop, lentArray, moveOnly.Element);
+                    return;
+                }
+            }
+
             if (loop.Element is null || Expression(loop.Sequence) is not { } sequence || ArrayType.ElementOf(sequence.Type) is not { } elementType
                 || SlotFor(loop.Element, loop.Syntax) is null) {
                 Fail(loop.Syntax, "this 'for' over an array");
@@ -6701,6 +6732,64 @@ public sealed partial class SilGen {
             if (sequenceType is not FixedArrayType) {
                 Emit(new StoreInst(Emit(new BuiltinInst("array_empty", sequenceType)), array, StoreKind.Assign));
             }
+        }
+
+        /// <summary>
+        ///     <c>for h in handles</c> of an array of move-only values: a
+        ///     counting loop over the variable's own array, which is never
+        ///     copied, each element lent to the loop's variable — held where
+        ///     the array holds it, read in place, moved by nothing.
+        /// </summary>
+        void ForArrayInPlace(BoundForEach loop, SilValue place, SilType elementType) {
+            // The array: in a slot, borrowed for each look; or a value lent already.
+            SilValue Lend() => place is AllocStackInst ? Emit(new LoadBorrowInst(place)) : place;
+            void EndLend(SilValue lent) {
+                if (lent is LoadBorrowInst) {
+                    Emit(new EndBorrowInst(lent));
+                }
+            }
+
+            if (SlotFor(loop.Element!, loop.Syntax) is not { } elementSlot) {
+                Fail(loop.Syntax, "this 'for' over an array");
+                return;
+            }
+
+            elementSlot.Unmanaged = true;
+            var counter = NewSlot(SilType.Int);
+            Emit(new StoreInst(Emit(new IntegerLiteralInst(SilType.Int, 0)), counter, StoreKind.Init));
+            var header = function.AddBlock();
+            var body = function.AddBlock();
+            var step = function.AddBlock();
+            var after = function.AddBlock();
+            Branch(header);
+
+            _current = header;
+            var current = Emit(new LoadInst(counter));
+            var counted = Lend();
+            var count = Emit(new BuiltinInst("array_count", SilType.Int, counted));
+            EndLend(counted);
+            Jump(new CondBranchInst(Emit(new BuiltinInst("cmp_lt_Int", SilType.Bool, current, count)), body, [], after, []));
+
+            _current = body;
+            var lent = Lend();
+            Emit(new StoreInst(Emit(new BuiltinInst("array_get_borrowed", elementType, lent, Emit(new LoadInst(counter)))), elementSlot, StoreKind.Assign));
+            EndLend(lent);
+            if (loop.Filter is { } filter) {
+                var filtered = function.AddBlock();
+                Condition(filter, filtered, step);
+                _current = filtered;
+            }
+
+            InLoop(loop, after, step, () => Statement(loop.Body));
+            if (_current is not null) {
+                Branch(step);
+            }
+
+            _current = step;
+            var one = Emit(new IntegerLiteralInst(SilType.Int, 1));
+            Emit(new StoreInst(Emit(new BuiltinInst("add_Int", SilType.Int, Emit(new LoadInst(counter)), one)), counter, StoreKind.Assign));
+            Branch(header);
+            _current = after;
         }
 
         /// <summary>True when the code moves the parameter's value out: 'move p'.</summary>

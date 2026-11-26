@@ -542,10 +542,15 @@ naming the move (`'a' is used after its value was moved out of it, at line
 is an error. Natively a struct with a deinit carries a hidden live byte, so
 the storage a move empties is not deinited. Locals now die at the end of the
 block that declared them, on every way out, which a move-only value needs and
-deterministic destruction (docs/02 §2.2) asked for. Deferred: partial moves
-out of fields, `using`, and move-only values in arrays or generic
-parameters — none is needed by anything Phase 3 delivers, and each is a
-use of the same dataflow rather than a new one.
+deterministic destruction (docs/02 §2.2) asked for. An array of move-only
+values is move-only itself (#345), so never shared and never copied on
+write: it is appended to, walked by borrowing (`for h in handles` lends each
+element where the array holds it), its elements read and changed in place,
+taken out (`removeLast()`) or emptied, and moved whole; reading an element
+out, or copying elements in from a slice, is an error. Deferred: partial
+moves out of fields, `using`, and move-only values in generic parameters —
+none is needed by anything Phase 3 delivers, and each is a use of the same
+dataflow rather than a new one.
 
 ### 3.3 Root inference / borrow checking (~10 weeks) ★
 

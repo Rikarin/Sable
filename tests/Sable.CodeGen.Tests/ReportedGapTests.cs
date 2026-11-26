@@ -727,4 +727,140 @@ public sealed class ReportedGapTests {
             }
             """).Stdout);
     }
+
+    /// <summary>
+    ///     An array of move-only values (#345): appended to, walked by borrowing, its elements read and
+    ///     changed in place, taken out, emptied, moved whole; each element destroyed as the array goes.
+    /// </summary>
+    [Fact]
+    public void AnArrayOfMoveOnlyValues() =>
+        Assert.Equal(
+            """
+            3
+            lent 1
+            lent 2
+            lent 3
+            first 1
+            second 20
+            total 124
+            took 3
+            2
+            closed 1
+            closed 20
+            emptied
+            closed 7
+            1
+            end
+            closed 3
+            closed 4
+
+            """,
+            Programs.AssertAgree("""
+            module ArrayOfMoveOnly
+
+            @noncopy
+            struct Handle {
+                var id: Int
+
+                deinit {
+                    print("closed \(id)")
+                }
+            }
+
+            fn total(_ handles: Handle[>..]) -> Int {
+                var sum = 0
+                for h in handles {
+                    sum += h.id
+                }
+                return sum + handles[0].id * 100
+            }
+
+            fn add(_ handles: inout Handle[>..], _ id: Int) {
+                handles.append(Handle { id: id })
+            }
+
+            fn keep(_ handles: consuming Handle[>..]) -> Int {
+                return handles.count
+            }
+
+            @main
+            fn main() {
+                var handles: Handle[>..] = []
+                handles.append(Handle { id: 1 })
+                handles.append(Handle { id: 2 })
+                add(&handles, 3)
+                print(handles.count)
+                for h in handles {
+                    print("lent \(h.id)")
+                }
+                print("first \(handles[0].id)")
+                handles[1].id = 20
+                print("second \(handles[1].id)")
+                print("total \(total(handles))")
+                let last = handles.removeLast()
+                print("took \(last.id)")
+                print(handles.count)
+                handles.removeAll()
+                print("emptied")
+                handles.append(Handle { id: 4 })
+                var others: Handle[>..] = []
+                others.append(Handle { id: 7 })
+                print(keep(move others))
+                print("end")
+            }
+            """).Stdout);
+
+    /// <summary>An array of move-only values is move-only, and an element is lent or taken out, never copied out (#345).</summary>
+    [Fact]
+    public void AnArrayOfMoveOnlyValuesIsNotCopied() {
+        var errors = string.Join("\n", Sable.Driver.Pipeline.Compile(new Sable.Syntax.SourceText("""
+            module Neg
+
+            @noncopy
+            struct Handle {
+                var id: Int
+
+                deinit {
+                    print("closed \(id)")
+                }
+            }
+
+            fn eat(_ h: consuming Handle) { }
+
+            @main
+            fn main() {
+                var handles: Handle[>..] = []
+                handles.append(Handle { id: 1 })
+                let copy = handles
+                print(handles.count)
+                let one = handles[0]
+                for h in copy {
+                    eat(h)
+                }
+            }
+            """, "test.sb")).Errors);
+        Assert.Contains("'handles' is used after its value was moved out of it, at line 18", errors, StringComparison.Ordinal);
+        Assert.Contains("cannot be moved out of a field or an element", errors, StringComparison.Ordinal);
+        var element = string.Join("\n", Sable.Driver.Pipeline.Compile(new Sable.Syntax.SourceText("""
+            module Neg
+
+            @noncopy
+            struct Handle {
+                var id: Int
+
+                deinit {
+                    print("closed \(id)")
+                }
+            }
+
+            @main
+            fn main() {
+                var handles: Handle[>..] = []
+                handles.append(Handle { id: 1 })
+                let one = handles[0]
+                print(one.id)
+            }
+            """, "test.sb")).Errors);
+        Assert.Contains("cannot be moved out of an array's element", element, StringComparison.Ordinal);
+    }
 }

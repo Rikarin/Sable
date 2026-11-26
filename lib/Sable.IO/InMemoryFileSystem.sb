@@ -7,8 +7,9 @@ import Sable.Time
 /// `FileSystem`, so that it reads and writes no disk, and its files are
 /// what the test says. .NET's `MockFileSystem`.
 ///
-/// Paths are `/`-separated whatever the machine; a relative one is from
-/// the root, and `.` and `..` are taken as they read. Errors are those the
+/// Paths are read as `FilePath` reads them on the machine — `/` between
+/// names everywhere, and `\` too on Windows, where a drive is passed over;
+/// a relative one is from the root, and `.` and `..` are taken as they read. Errors are those the
 /// disk's would be: `NotFound`, `AlreadyExists`, `IsDirectory`,
 /// `NotADirectory`, `DirectoryNotEmpty`. A file is written when the clock
 /// given says; by default all are at the Unix epoch. It may be used from
@@ -60,9 +61,11 @@ public final class InMemoryFileSystem: FileSystem {
     }
 
     // The path's names from the root, '/' between them: "" for the root.
+    // Split by the path's own style, as 'appending' joined it: on Windows
+    // by '\' as well as '/'.
     static fn key(_ path: FilePath) -> String {
         var names: String[>..] = []
-        for component in FilePath(path.string ?? String.fromUtf8Lossy(path.bytes), style: .Posix).components {
+        for component in path.components {
             match component.kind {
                 case .Normal => { names.append(component.string ?? String.fromUtf8Lossy(component.bytes)) }
                 case .ParentDirectory => {

@@ -61,6 +61,19 @@ fn everyMemberTakesAStringOrAFilePath() {
     }
 }
 
+// A path is read in its own style: a Windows one's '\' separates names, as
+// FilePath.appending joins them there, and its drive is passed over.
+@test
+fn aPathIsReadInItsOwnStyle() {
+    let files = InMemoryFileSystem()
+    try! files.createDirectory(FilePath("\\m", style: .Windows))
+    try! files.write(FilePath("\\m", style: .Windows).appending("a.txt"), "a")
+    try! files.write(FilePath("C:\\m\\b.txt", style: .Windows), "b")
+    expect(try! files.list(FilePath("/m", style: .Posix)) == ["a.txt", "b.txt"])
+    expect(try! files.read(FilePath("/m/a.txt", style: .Posix)) == "a")
+    expect(files.paths == ["/m", "/m/a.txt", "/m/b.txt"])
+}
+
 @test
 fn filesGivenAreMadeWithTheirDirectories() {
     let files = InMemoryFileSystem(["config/app.toml": "port = 80", "/b.txt": "b"])

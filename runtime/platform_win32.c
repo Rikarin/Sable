@@ -140,6 +140,8 @@ static void name_frame(void *frame, char *text, size_t size) {
     line.SizeOfStruct = sizeof line;
     DWORD displacement = 0;
     if (symbols && SymFromAddr(process, (DWORD64)(uintptr_t)at, &offset, &symbol.info)) {
+        char demangled[300];
+        const char *name = symbol_demangle(symbol.info.Name, demangled, sizeof demangled);
         if (SymGetLineFromAddr64(process, (DWORD64)(uintptr_t)at, &displacement, &line) && line.FileName != NULL && line.LineNumber != 0) {
             // A file's absolute path by its name, as the trap's own place
             // gives it; a relative one (the library's) as it is.
@@ -152,9 +154,9 @@ static void name_frame(void *frame, char *text, size_t size) {
                 }
             }
 
-            snprintf(text, size, "%s at %s:%lu", symbol.info.Name, file, (unsigned long)line.LineNumber);
+            snprintf(text, size, "%s at %s:%lu", name, file, (unsigned long)line.LineNumber);
         } else {
-            snprintf(text, size, "%s + %lld", symbol.info.Name, (long long)offset + 1);
+            snprintf(text, size, "%s + %lld", name, (long long)offset + 1);
         }
     } else {
         snprintf(text, size, "%p", frame);

@@ -35,6 +35,7 @@ typedef struct SableArrayInstance {
     const SableTypeMetadata *element;  // the element's, which the witnesses take
     SableTypeMetadata type;            // the array type's, [T]
     const SableTypeMetadata *argument; // its one type argument: the element
+    SableRef argument_ref;             // the same, as its metadata's arguments hold it
     SableTypeMetadata slice;           // a slice's of it, [T:], which has the same argument
     struct SableArrayInstance *next;
 } SableArrayInstance;
@@ -124,7 +125,7 @@ static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
     }
 
     SableArrayInstance *made = calloc(1, sizeof *made);
-    size_t length = element->name == NULL ? 0 : strlen(element->name);
+    size_t length = type_name_of(element) == NULL ? 0 : strlen(type_name_of(element));
     char *name = malloc(length + 3);
     char *slice_name = malloc(length + 4);
     if (made == NULL || name == NULL || slice_name == NULL) {
@@ -132,7 +133,7 @@ static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
     }
 
     name[0] = '[';
-    memcpy(name + 1, element->name == NULL ? "" : element->name, length);
+    memcpy(name + 1, type_name_of(element) == NULL ? "" : type_name_of(element), length);
     name[length + 1] = ']';
     name[length + 2] = 0;
     memcpy(slice_name, name, length + 1);
@@ -149,22 +150,23 @@ static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
     made->elements.alignment = (int64_t)_Alignof(SableArray);
     made->elements.visit = trivial ? NULL : witnessed_element_visit;
     made->argument = element;
+    sable_set_ref(&made->argument_ref, element);
     made->type.kind = SABLE_KIND_ARRAY;
-    made->type.name = name;
+    sable_set_ref(&made->type.name, name);
     made->type.size = (int64_t)sizeof(void *);
     made->type.alignment = (int64_t)_Alignof(void *);
     made->type.stride = (int64_t)sizeof(void *);
     made->type.witnesses = &sable_reference_witnesses;
     made->type.argument_count = 1;
-    made->type.arguments = &made->argument;
+    sable_set_ref(&made->type.arguments, &made->argument_ref);
     made->slice.kind = SABLE_KIND_SLICE;
-    made->slice.name = slice_name;
+    sable_set_ref(&made->slice.name, slice_name);
     made->slice.size = (int64_t)sizeof(SableSlice);
     made->slice.alignment = (int64_t)_Alignof(SableSlice);
     made->slice.stride = (int64_t)sizeof(SableSlice);
     made->slice.witnesses = &slice_witnesses;
     made->slice.argument_count = 1;
-    made->slice.arguments = &made->argument;
+    sable_set_ref(&made->slice.arguments, &made->argument_ref);
 
     // Another thread may have made one meanwhile: either serves, and both are kept.
     made->next = __atomic_load_n(&array_instances, __ATOMIC_ACQUIRE);
@@ -1137,7 +1139,8 @@ int64_t sable_array_mismatch(const SableArray *a, int64_t aStart, int64_t aCount
 // '==' compares its bits, which of the scalars all but the floats ('F16' …
 // 'F64', 'BF16') are.
 int64_t sable_opaque_mismatch(const SableArray *a, int64_t aStart, int64_t aCount, const SableArray *b, int64_t bStart, int64_t bCount, const SableTypeMetadata *type) {
-    if (type->kind != SABLE_KIND_SCALAR || type->name == NULL || type->name[0] == 'F' || (type->name[0] == 'B' && type->name[1] == 'F')) {
+    const char *name = type_name_of(type);
+    if (type->kind != SABLE_KIND_SCALAR || name == NULL || name[0] == 'F' || (name[0] == 'B' && name[1] == 'F')) {
         return -1;
     }
 

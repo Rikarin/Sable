@@ -256,6 +256,59 @@ public sealed class ProfileTests {
     }
 
     /// <summary>
+    ///     <c>strip = "local"</c> (#300) leaves the program's own symbols out of
+    ///     a debug build — every one is hidden, so local in the executable —
+    ///     and a trap's backtrace names each frame by the function its debug
+    ///     information says the frame is in, and the line, as before.
+    /// </summary>
+    [Fact]
+    public async Task ABacktraceNamesFramesByTheirDebugInformationWhereTheSymbolsAreStripped() {
+        if (!CanBuild || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "1.0.0", """
+            [profile.dev]
+            strip = "local"
+            """,
+            ("src/main.sb", """
+                module App
+
+                fn inner(_ n: Int) -> Int {
+                    precondition(n < 3, "small")
+                    return n
+                }
+
+                fn outer(_ n: Int) -> Int {
+                    return inner(n) + 1
+                }
+
+                fn main() {
+                    print(outer(1))
+                    print(outer(5))
+                }
+                """));
+
+        var dev = Assert.Single(PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new())!);
+        using (var nm = Process.Start(new ProcessStartInfo("nm", [dev.Path]) { RedirectStandardOutput = true }.Utf8())!) {
+            var symbols = nm.StandardOutput.ReadToEnd();
+            nm.WaitForExit();
+            Assert.DoesNotContain("sable.App.inner", symbols, StringComparison.Ordinal);
+        }
+
+        var start = new ProcessStartInfo(dev.Path) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
+        start.Environment["SABLE_BACKTRACE"] = "1";
+        using var process = Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEndAsync();
+        var trace = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.Equal("2\n", await output);
+        Assert.Matches(@"App\.inner at (src/)?main\.sb:4", trace.Replace('\\', '/'));
+        Assert.Matches(@"App\.outer at (src/)?main\.sb:9", trace.Replace('\\', '/'));
+    }
+
+    /// <summary>
     ///     A profile of the package's own, <c>--profile</c>'s: release's
     ///     settings as the manifest has them, changed, built to
     ///     <c>target/&lt;name&gt;/</c>; a profile the manifest lacks is refused.

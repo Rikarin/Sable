@@ -1113,6 +1113,8 @@ public sealed class IncrementalTests {
         Assert.Equal(["-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
             NativeBuild.LinkFlags(release with { Strip = StripMode.Symbols, Rpath = true }, NativePlatform.Linux));
         Assert.Equal(["-Wl,-dead_strip", "-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
+        Assert.Equal(["-Wl,-dead_strip", "-Wl,-x"], NativeBuild.LinkFlags(release with { Strip = StripMode.Local }, NativePlatform.MacOS));
+        Assert.Equal(["-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--discard-all"], NativeBuild.LinkFlags(release with { Strip = StripMode.Local }, NativePlatform.Linux));
         Assert.Equal(["a.o", "-o", "program", "-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--strip-debug"],
             NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
         Assert.Equal(["-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--no-gc-sections"],

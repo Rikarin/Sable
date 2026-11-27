@@ -327,8 +327,8 @@ enum { CYCLES_SHOWN = 5, CYCLE_LENGTH_SHOWN = 8 };
 // the next, when its metadata names it.
 static void print_step(const SableObject *object, const SableObject *next) {
     const SableField *field = field_holding(object->type, object, next);
-    if (field != NULL && field->name != NULL) {
-        fprintf(stderr, "%s.%s", type_name(object), field->name);
+    if (field != NULL && field_name(field) != NULL) {
+        fprintf(stderr, "%s.%s", type_name(object), field_name(field));
     } else {
         fprintf(stderr, "%s", type_name(object));
     }

@@ -531,7 +531,7 @@ public sealed class OptionalAndUnionTests {
     public void EnumsTakeTheLeastRoomTheirCasesAllow() {
         var result = Pipeline.Compile(new SourceText(Program(Layouts, "    let f = Fields(flag: none, letter: none, name: none, color: Color.Red)\n    print(describe(f.flag) + letter(f.letter) + name(f.name) + area(Shape.Empty) + small(Small.C))"), "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        var ir = result.LlvmIr!;
+        var ir = SymbolNames.DemangleIr(result.LlvmIr!);
         Assert.Contains("@\"sable.Test.describe\"(i8 %p0)", ir, StringComparison.Ordinal);
         Assert.Contains("@\"sable.Test.letter\"(i32 %p0)", ir, StringComparison.Ordinal);
         Assert.Contains("@\"sable.Test.name\"(ptr %p0)", ir, StringComparison.Ordinal);

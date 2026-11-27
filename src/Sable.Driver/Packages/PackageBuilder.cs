@@ -453,6 +453,14 @@ public static class PackageBuilder {
                     environment.Status.WriteLine($"       Built {bin.Name}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
                 }
 
+                // Its local symbols stripped (#300), a frame is named by the debug
+                // information, which on macOS a backtrace reads from the .dSYM: the
+                // debugger finds it in the objects, the program only there.
+                if (profile.Debug && profile.Strip == StripMode.Local
+                    && File.GetLastWriteTimeUtc(executable) > Directory.GetLastWriteTimeUtc(executable + ".dSYM")) {
+                    NativeBuild.GatherDebugInfo(executable, request.Target ?? NativeTarget.Host);
+                }
+
                 built.Add(new(member.Name, bin.Name, executable, profile));
             }
         }

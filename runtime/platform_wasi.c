@@ -30,6 +30,7 @@ static int capture_frames(void **frames, int capacity) {
 }
 
 static void name_frame(void *frame, char *text, size_t size) {
+    (void)symbol_demangle; // no symbols to read back
     snprintf(text, size, "%p", frame);
 }
 

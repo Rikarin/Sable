@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using static Sable.CodeGen.Tests.Programs;
 
 namespace Sable.CodeGen.Tests;
@@ -131,12 +132,17 @@ public sealed class ExistentialRegistryTests {
     [Fact]
     public void AConformanceRecordPointsAtItsWitnessTable() {
         var source = Program(Declarations, "    print(describe(Point { x: 1 }))");
-        var ir = Pipeline.Compile(new SourceText(source, "test.sb")).LlvmIr!;
+        // Read with its symbols as their SIL names (SymbolNames).
+        var ir = SymbolNames.DemangleIr(Pipeline.Compile(new SourceText(source, "test.sb")).LlvmIr!);
         Assert.Contains("@sable_witness_table(ptr", ir, StringComparison.Ordinal);
         var records = ir.Split('\n').Single(l => l.StartsWith("@\"sable.conformances.Test.Point\" = ", StringComparison.Ordinal));
-        Assert.Contains("ptr @\"sable.protocol.Test.Sized\", ptr @\"sable.witnesses.Test.Point.Test.Sized\"", records, StringComparison.Ordinal);
+        // Its pointers to data are distances from their fields but on Windows (#300).
+        string Ref(string target) => OperatingSystem.IsWindows() ? $"ptr {target}" : $"i64 sub (i64 ptrtoint (ptr {target} to i64)";
+        var none = OperatingSystem.IsWindows() ? "ptr null" : "i64 0";
+        Assert.Matches($"{Regex.Escape(Ref("@\"sable.protocol.Test.Sized\""))}.*{Regex.Escape(Ref("@\"sable.witnesses.Test.Point.Test.Sized\""))}", records);
         var table = ir.Split('\n').Single(l => l.StartsWith("@\"sable.witnesses.Test.Point.Test.Sized\" = ", StringComparison.Ordinal));
-        Assert.Contains("{ ptr @\"sable.protocol.Test.Sized\", i64 0, ptr null, i64 0, ptr null, i64 0, ptr null, i64 1, [1 x ptr] [ptr @\"sable.$generic$witness$Test.Point$Test.Sized$0$", table, StringComparison.Ordinal);
+        Assert.Contains($"{{ {Ref("@\"sable.protocol.Test.Sized\"")}", table, StringComparison.Ordinal);
+        Assert.Contains($"i64 0, {none}, i64 0, {none}, i64 0, {none}, i64 1, [1 x ptr] [ptr @\"sable.$generic$witness$Test.Point$Test.Sized$0$", table, StringComparison.Ordinal);
         Assert.DoesNotContain("$cast$to$any$Test.Sized\"(ptr %0) {\nentry:\n  %t0 = call zeroext i1 @sable_class_is", ir, StringComparison.Ordinal);
     }
 }

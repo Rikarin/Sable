@@ -73,9 +73,13 @@ public enum OptSize {
     minSize
 }
 
-/// What the link leaves out of the executable; with none, nothing.
+/// What the link leaves out of the executable; with none, nothing. `local`
+/// leaves out the symbols nothing needs by name, the program's own
+/// functions' and records', and keeps the debug information, which a
+/// backtrace and the debugger name its functions by.
 public enum Strip {
     debuginfo,
+    local,
     symbols
 }
 

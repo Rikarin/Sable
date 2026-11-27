@@ -32,6 +32,9 @@ public enum LtoMode {
 public enum StripMode {
     None,
     DebugInfo,
+
+    /// <summary>The local symbols (#300): every one of the program's own, which nothing looks up by name; the debug information stays, and names its functions to a backtrace and the debugger.</summary>
+    Local,
     Symbols,
 }
 
@@ -420,7 +423,7 @@ public static class NativeBuild {
         }
     }
 
-    /// <summary>The functions of an assembly file, as clang writes one: each symbol, without the platform's underscore, and its lines.</summary>
+    /// <summary>The functions of an assembly file, as clang writes one: each symbol, without the platform's underscore and read back as its SIL name (SymbolNames), and its lines.</summary>
     public static IEnumerable<(string Symbol, string Text)> FunctionsOf(string assembly) {
         string? symbol = null;
         var text = new System.Text.StringBuilder();
@@ -429,6 +432,7 @@ public static class NativeBuild {
             if (symbol is null && line.Length > 0 && line[0] is not (' ' or '\t' or '.' or '#' or ';' or '/') && line.LastIndexOf(':') is var colon and > 0) {
                 var name = line[..colon].Trim('"');
                 symbol = name.StartsWith("_sable.", StringComparison.Ordinal) ? name[1..] : name;
+                symbol = symbol.StartsWith(LlvmEmitter.SymbolPrefix, StringComparison.Ordinal) ? LlvmEmitter.SymbolPrefix + SymbolNames.Demangle(symbol[LlvmEmitter.SymbolPrefix.Length..]) : symbol;
             }
 
             if (symbol is null) {
@@ -650,12 +654,14 @@ public static class NativeBuild {
     ///     What the runtime is compiled with for <paramref name="options" />:
     ///     without debug information as the program is; with it, optimised
     ///     and without debug information — it is not the program's code, and
-    ///     stepping goes over it as over a system library.
+    ///     stepping goes over it as over a system library. Its functions are
+    ///     hidden, as the program's are (#300): only the program calls them,
+    ///     and C reaches a library through the functions it exports.
     /// </summary>
     public static IReadOnlyList<string> RuntimeFlags(NativeOptions options, IReadOnlyList<string> lto) {
         var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
         return [
-            ..options.TargetOrHost.ClangFlags, ..SysrootFlags(options), "-c", level, ..SectionFlags(options.TargetOrHost), ..PositionIndependentFlags(options),
+            ..options.TargetOrHost.ClangFlags, ..SysrootFlags(options), "-c", level, "-fvisibility=hidden", ..SectionFlags(options.TargetOrHost), ..PositionIndependentFlags(options),
             ..lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal)),
         ];
     }
@@ -732,8 +738,10 @@ public static class NativeBuild {
         // map, and -x for local symbols — a program's exported ones it keeps.
         flags.AddRange((options.Strip, platform) switch {
             (StripMode.DebugInfo, NativePlatform.Linux) => ["-Wl,--strip-debug"],
+            (StripMode.Local, NativePlatform.Linux) => ["-Wl,--discard-all"],
             (StripMode.Symbols, NativePlatform.Linux) => ["-Wl,--strip-all"],
             (StripMode.DebugInfo, NativePlatform.MacOS) => ["-Wl,-S"],
+            (StripMode.Local, NativePlatform.MacOS) => ["-Wl,-x"],
             (StripMode.Symbols, NativePlatform.MacOS) => ["-Wl,-S", "-Wl,-x"],
             _ => [],
         });

@@ -250,18 +250,29 @@ public sealed class TypeValueTests {
             return;
         }
 
+        // A record's pointers to data are SableRefs (#300): on macOS and
+        // Linux the distance from the field, set here as the program starts.
         const string c = """
                          #include <stdint.h>
                          #include <stdio.h>
                          #include <stdbool.h>
 
-                         typedef struct { const char *name; } SableProtocol;
-                         typedef struct { const SableProtocol *protocol; const void *witnesses; } SableConformance;
+                         typedef struct { uintptr_t bits; } Ref;
+                         static void set(Ref *ref, const void *to) {
+                         #if defined(_WIN32)
+                             ref->bits = (uintptr_t)to;
+                         #else
+                             ref->bits = to == 0 ? 0 : (uintptr_t)((const char *)to - (const char *)ref);
+                         #endif
+                         }
+
+                         typedef struct { Ref name; } SableProtocol;
+                         typedef struct { Ref protocol; Ref witnesses; } SableConformance;
                          struct SableMetadata;
                          typedef struct {
-                             int64_t kind, field_count; const void *fields; int64_t conformance_count; const SableConformance *conformances;
-                             const char *name; int64_t size, alignment, stride, flags; const void *witnesses;
-                             int64_t argument_count; const void *arguments; const struct SableMetadata *object;
+                             int64_t kind, field_count; Ref fields; int64_t conformance_count; Ref conformances;
+                             Ref name; int64_t size, alignment, stride, flags; const void *witnesses;
+                             int64_t argument_count; Ref arguments; Ref object;
                          } SableTypeMetadata;
                          typedef struct SableMetadata {
                              void (*destroy)(void *); const char *name; int64_t element_size;
@@ -273,20 +284,31 @@ public sealed class TypeValueTests {
                          uint64_t sable_metadata_hash(const SableTypeMetadata *);
                          bool sable_metadata_is_subtype(const SableTypeMetadata *, const SableTypeMetadata *);
 
-                         static const SableProtocol named = { "Zoo.Named" };
-                         static const SableConformance point_records[] = { { &named, 0 } };
-                         static const SableTypeMetadata point = { 2, 0, 0, 1, point_records, "Zoo.Point", 16, 8, 16, 1, 0, 0, 0, 0 };
-                         static const SableTypeMetadata point_elsewhere = { 2, 0, 0, 0, 0, "Zoo.Point", 16, 8, 16, 1, 0, 0, 0, 0 };
-                         static const SableTypeMetadata other = { 2, 0, 0, 0, 0, "Zoo.Other", 16, 8, 16, 1, 0, 0, 0, 0 };
-                         static const SableTypeMetadata any_named = { 10, 0, 0, 0, 0, "any Zoo.Named", 16, 8, 16, 0, 0, 0, 0, 0 };
-                         static const SableTypeMetadata any_any = { 10, 0, 0, 0, 0, "any Any", 8, 8, 8, 0, 0, 0, 0, 0 };
-                         static const SableMetadata animal, dog;
-                         static const SableTypeMetadata animal_type = { 1, 0, 0, 0, 0, "Zoo.Animal", 8, 8, 8, 0, 0, 0, 0, &animal };
-                         static const SableTypeMetadata dog_type = { 1, 0, 0, 0, 0, "Zoo.Dog", 8, 8, 8, 0, 0, 0, 0, &dog };
+                         static SableProtocol named;
+                         static SableConformance point_records[1];
+                         static SableTypeMetadata point = { 2, 0, {0}, 1, {0}, {0}, 16, 8, 16, 1, 0, 0, {0}, {0} };
+                         static SableTypeMetadata point_elsewhere = { 2, 0, {0}, 0, {0}, {0}, 16, 8, 16, 1, 0, 0, {0}, {0} };
+                         static SableTypeMetadata other = { 2, 0, {0}, 0, {0}, {0}, 16, 8, 16, 1, 0, 0, {0}, {0} };
+                         static SableTypeMetadata any_named = { 10, 0, {0}, 0, {0}, {0}, 16, 8, 16, 0, 0, 0, {0}, {0} };
+                         static SableTypeMetadata any_any = { 10, 0, {0}, 0, {0}, {0}, 8, 8, 8, 0, 0, 0, {0}, {0} };
+                         static SableTypeMetadata animal_type = { 1, 0, {0}, 0, {0}, {0}, 8, 8, 8, 0, 0, 0, {0}, {0} };
+                         static SableTypeMetadata dog_type = { 1, 0, {0}, 0, {0}, {0}, 8, 8, 8, 0, 0, 0, {0}, {0} };
                          static const SableMetadata animal = { 0, "Zoo.Animal", 0, 0, 0, 16, 8, 0, &animal_type };
                          static const SableMetadata dog = { 0, "Zoo.Dog", 0, &animal, 0, 16, 8, 0, &dog_type };
 
                          int main(void) {
+                             set(&named.name, "Zoo.Named");
+                             set(&point_records[0].protocol, &named);
+                             set(&point.conformances, point_records);
+                             set(&point.name, "Zoo.Point");
+                             set(&point_elsewhere.name, "Zoo.Point");
+                             set(&other.name, "Zoo.Other");
+                             set(&any_named.name, "any Zoo.Named");
+                             set(&any_any.name, "any Any");
+                             set(&animal_type.name, "Zoo.Animal");
+                             set(&animal_type.object, &animal);
+                             set(&dog_type.name, "Zoo.Dog");
+                             set(&dog_type.object, &dog);
                              printf("%d %d %d %d %d %d %d %d\n",
                                  sable_metadata_equal(&point, &point_elsewhere),
                                  sable_metadata_hash(&point) == sable_metadata_hash(&point_elsewhere),

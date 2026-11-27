@@ -215,12 +215,20 @@ CLASS, STRUCT, ENUM, UNION, OPTIONAL, TUPLE, FUNCTION, ARRAY, SLICE, EXISTENTIAL
 FIELD_TYPES, NULLABLE, BOOL_NICHE, CHAR_NICHE = 16, 32, 64, 128
 
 
+def _ref(field_address, bits):
+    """A record's pointer to data (SableRef, runtime/objects.c), read: the distance from its field, as macOS and Linux keep it; 0 for none."""
+    return (field_address + bits) & 0xFFFFFFFFFFFFFFFF if bits else 0
+
+
 class TypeInfo(object):
     """A SableTypeMetadata, read and checked."""
 
     def __init__(self, process, address, record, name):
-        (self.kind, self.field_count, self._fields, _, _, _, self.size, self.alignment,
-         self.stride, self.flags, _, self.argument_count, self._arguments, self.object) = record
+        (self.kind, self.field_count, fields, _, _, _, self.size, self.alignment,
+         self.stride, self.flags, _, self.argument_count, arguments, obj) = record
+        self._fields = _ref(address + 16, fields)
+        self._arguments = _ref(address + 96, arguments)
+        self.object = _ref(address + 104, obj)
         self.process = process
         self.address = address
         self.name = name
@@ -235,6 +243,8 @@ class TypeInfo(object):
             fields = []
             for i in range(self.field_count if data is not None else 0):
                 name, type_name, offset, _, sbtype = struct.unpack_from("<QQqqQ", data, 40 * i)
+                at = self._fields + 40 * i
+                name, type_name, sbtype = _ref(at, name), _ref(at + 8, type_name), _ref(at + 32, sbtype)
                 fields.append((_read_cstring(self.process, name) or str(i), _read_cstring(self.process, type_name) or "", offset, sbtype))
             self._field_list = fields if all(0 <= f[2] < SIZE_LIMIT for f in fields) else []
         return self._field_list
@@ -242,7 +252,7 @@ class TypeInfo(object):
     def arguments(self):
         if self._argument_list is None:
             data = _read(self.process, self._arguments, 8 * self.argument_count) if self.argument_count else b""
-            self._argument_list = list(struct.unpack("<%dQ" % self.argument_count, data)) if data is not None else []
+            self._argument_list = [_ref(self._arguments + 8 * i, bits) for i, bits in enumerate(struct.unpack("<%dQ" % self.argument_count, data))] if data is not None else []
         return self._argument_list
 
     def argument(self, index):
@@ -337,7 +347,7 @@ def _type_info(process, address):
     if not (1 <= kind <= 15 and 0 <= field_count <= FIELD_LIMIT and 0 <= argument_count <= FIELD_LIMIT
             and 0 <= size <= SIZE_LIMIT and 0 <= stride <= SIZE_LIMIT and 0 <= alignment <= 65536 and alignment & (alignment - 1) == 0):
         return None
-    text = _read_cstring(process, name)
+    text = _read_cstring(process, _ref(address + 40, name))
     if text is None:
         return None
     info = TypeInfo(process, address, record, text)

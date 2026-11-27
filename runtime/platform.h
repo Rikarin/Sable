@@ -64,6 +64,9 @@ static void name_frame(void *frame, char *text, size_t size);
 typedef struct LineSections {
     const uint8_t *line, *line_str, *str;
     size_t line_size, line_str_size, str_size;
+    // And what names the functions (#300), for a frame whose symbol is stripped.
+    const uint8_t *info, *abbrev, *str_offsets, *addr;
+    size_t info_size, abbrev_size, str_offsets_size, addr_size;
     intptr_t slide;
     const void *image;
 } LineSections;

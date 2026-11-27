@@ -1,0 +1,29 @@
+module Sable.Net.Tls
+
+import Sable.Crypto.X509
+
+/// Which servers' certificates a client believes.
+///
+/// ```sable
+/// import Sable.Crypto.X509
+///
+/// let trust = TlsServerTrust.Verified(CertificateVerifier(roots: TrustStore([])))
+/// match trust {
+///     case .Verified(let verifier) => assert(verifier.roots.certificates.isEmpty)
+///     default => assert(false)
+/// }
+/// ```
+public union TlsServerTrust: Sendable {
+    /// A path from the server's certificate to one the verifier trusts, the
+    /// certificate of the host connected to (RFC 5280, RFC 6125).
+    Verified(CertificateVerifier)
+
+    /// The server's certificate is one of these, whatever its name, issuer
+    /// or time: a server known by its certificate alone.
+    Pinned(Certificate[>..])
+
+    /// The system's trusted certificates, verified.
+    public static fn system() -> TlsServerTrust {
+        return .Verified(CertificateVerifier(roots: TrustStore.system()))
+    }
+}

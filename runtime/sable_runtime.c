@@ -57,6 +57,11 @@ static bool frame_place(const void *at, const void *image, char *place, size_t s
     (void)at, (void)image, (void)place, (void)size;
     return false;
 }
+// Nor DWARF: a stripped frame keeps no name.
+static bool frame_function(const void *at, const void *image, const char **name, const void **start) {
+    (void)at, (void)image, (void)name, (void)start;
+    return false;
+}
 #endif
 #include "symbols.c"
 

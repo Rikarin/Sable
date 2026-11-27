@@ -7,7 +7,7 @@ import Sable.Testing
 // connection and serves it in a task of its own — a request line read, a
 // reply of a few hundred bytes written — while fifty client tasks
 // each connect, ask, and read to the end, all at once, forty times over
-// (fifty: well inside the listen backlog, 128 on macOS).
+// (fifty: well inside the handshakes macOS takes at once, kern.ipc.somaxconn).
 // Every wait is on the I/O reactor.
 
 fn reply(_ connection: TcpStream) async {

@@ -879,7 +879,11 @@ internal static class ConformanceChecker {
                 return;
             }
 
-            ReportIsolatedWitness(type, protocol, candidate, diagnostics, required);
+            // An async requirement waits: its witness hops into the actor.
+            if (!requirement.IsAsync) {
+                ReportIsolatedWitness(type, protocol, candidate, diagnostics, required);
+            }
+
             return;
         }
 
@@ -975,8 +979,10 @@ internal static class ConformanceChecker {
     ///     state not a 'let' — meets no requirement (SYNTAX.md §19): code
     ///     reaching it through the protocol, as a generic's or an
     ///     existential's, would call into the actor without waiting its
-    ///     turn. Swift's rule, for synchronous requirements and asynchronous
-    ///     ones alike here.
+    ///     turn. Swift's rule. An async requirement is met — its caller
+    ///     waits, and the witness hops into the actor first (SilGen's
+    ///     Crossing, as any call from outside the actor) — so this is asked
+    ///     of synchronous ones and of properties.
     /// </summary>
     static void ReportIsolatedWitness(NamedTypeSymbol type, NamedTypeSymbol protocol, Symbol witness, DiagnosticBag diagnostics, DiagnosticLocation? required) {
         if (type.TypeKind != TypeKind.Actor || witness is FunctionSymbol { IsStatic: true } || witness is FunctionSymbol { FunctionKind: FunctionKind.Initializer }
@@ -1007,7 +1013,9 @@ internal static class ConformanceChecker {
             return false;
         }
 
-        if (candidate.IsAsync != requirement.IsAsync) {
+        // A synchronous function meets an async requirement, as in Swift:
+        // its caller awaits what does not wait. Not the other way round.
+        if (candidate.IsAsync && !requirement.IsAsync) {
             return false;
         }
 

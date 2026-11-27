@@ -48,10 +48,22 @@ public abstract class BoundExpression(SyntaxNode syntax, TypeSymbol type) : Boun
             BoundConversion { ConversionKind: ConversionKind.Reference, Operand: var place } => place.IsAssignable,
             BoundConversion { ConversionKind: ConversionKind.Identity, Operand: var same } => IsWritableReference(same),
             BoundCall { Function.IsMutating: true, Type: ReferenceTypeSymbol } => true,
+            BoundCall { Function: var allocation, Type: ReferenceTypeSymbol } when IsRegionAllocation(allocation) => true,
             BoundLocalAccess { Local.IsWritableReference: true } => true,
             BoundConditional conditional => IsWritableReference(conditional.WhenTrue) && IsWritableReference(conditional.WhenFalse),
             _ => false,
         };
+
+    /// <summary>
+    ///     Sable.Core's <c>Region.alloc</c>: what it gives is the region's
+    ///     new value, the caller's to change, so the reference writes.
+    /// </summary>
+    public static bool IsRegionAllocation(BoundExpression expression) =>
+        expression is BoundCall { Function: var allocation } && IsRegionAllocation(allocation)
+        || expression is BoundConversion { ConversionKind: ConversionKind.Identity, Operand: var same } && IsRegionAllocation(same);
+
+    static bool IsRegionAllocation(FunctionSymbol function) =>
+        function is { Name: "alloc", ContainingSymbol: ExtensionSymbol { ExtendedType: NamedTypeSymbol { Name: "Region", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } } or NamedTypeSymbol { Name: "Region", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } };
 }
 
 public abstract class BoundStatement(SyntaxNode syntax) : BoundNode(syntax);

@@ -396,7 +396,7 @@ public static partial class RootChecker {
             var fix = root.StartsWith("parameter", StringComparison.Ordinal)
                 ? "take the parameter as 'ref', so the reference is rooted in the caller's value; or return an owned copy"
                 : root.StartsWith("region", StringComparison.Ordinal)
-                    ? "return a copy of the value, out of the region; or allocate it in a region the caller passes (fn f(in r: Region) -> T&)"
+                    ? "return a copy of the value, out of the region (r.toOwned()); or allocate it in a region the caller passes (fn f(in r: Region) -> T&)"
                     : "return an owned value instead (copy what it refers to); allocate in the caller's region (fn f(in r: Region) -> T&); or return the whole value";
             diagnostics.Error(
                 ErrorCode.ERR_ReferenceOutlivesRoot,

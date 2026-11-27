@@ -34,8 +34,23 @@ typedef struct SableCleanup {
 typedef struct SableRegionMark {
     SableChunk *chunk;
     size_t used;
-    int64_t cleanup_count;
+    int64_t cleanup_count, guard_count;
 } SableRegionMark;
+
+// With SABLE_CHECK_REGIONS set, a region checks how its memory is used
+// (docs/02 §2.1): each value is followed by guard bytes, looked at when the
+// value is given back, and what is given back — by a reset, the end of a
+// 'region frame = pool' block, or the region's end — is poisoned, so that a
+// raw address kept past it reads REGION_POISON rather than the old value.
+#define REGION_GUARD_SIZE 16
+#define REGION_GUARD 0xFD
+#define REGION_POISON 0xDE
+
+// Checking: where a value's guard bytes are, and how big the value is.
+typedef struct SableRegionGuard {
+    unsigned char *at;
+    size_t size;
+} SableRegionGuard;
 
 typedef struct SableRegion {
     SableObject header;
@@ -44,7 +59,26 @@ typedef struct SableRegion {
     int64_t cleanup_count, cleanup_capacity;
     SableRegionMark *marks;
     int64_t mark_count, mark_capacity;
+    bool checking;
+    SableRegionGuard *guards;
+    int64_t guard_count, guard_capacity;
 } SableRegion;
+
+// Traps unless every guard from 'count' on is as it was put.
+static void region_check_guards(SableRegion *region, int64_t count) {
+    for (int64_t i = region->guard_count - 1; i >= count; i--) {
+        for (int k = 0; k < REGION_GUARD_SIZE; k++) {
+            if (region->guards[i].at[k] != REGION_GUARD) {
+                char message[160];
+                snprintf(message, sizeof message, "a write ran past a value of %lld bytes in a region: the guard bytes after it were overwritten",
+                    (long long)region->guards[i].size);
+                sable_trap(message);
+            }
+        }
+    }
+
+    region->guard_count = count;
+}
 
 static void sable_region_destroy(void *pointer) {
     SableRegion *region = pointer;
@@ -52,10 +86,19 @@ static void sable_region_destroy(void *pointer) {
         region->cleanups[i].destroy(region->cleanups[i].value);
     }
 
+    if (region->checking) {
+        region_check_guards(region, 0);
+    }
+
     free(region->cleanups);
     free(region->marks);
+    free(region->guards);
     for (SableChunk *chunk = region->chunk; chunk != NULL;) {
         SableChunk *next = chunk->next;
+        if (region->checking) {
+            memset(chunk->bytes, REGION_POISON, chunk->size);
+        }
+
         free(chunk);
         chunk = next;
     }
@@ -63,15 +106,26 @@ static void sable_region_destroy(void *pointer) {
 
 static const SableMetadata region_metadata = { sable_region_destroy, "Region", 0, NULL, NULL, sizeof(SableRegion), _Alignof(SableRegion), NULL, NULL };
 
+// Whether SABLE_CHECK_REGIONS is set: -1 until a region asks.
+static int region_checking = -1;
+
 void *sable_region_create(void) {
-    return sable_alloc(&region_metadata, (int64_t)sizeof(SableRegion));
+    SableRegion *region = sable_alloc(&region_metadata, (int64_t)sizeof(SableRegion));
+    int checking = __atomic_load_n(&region_checking, __ATOMIC_RELAXED);
+    if (checking < 0) {
+        checking = getenv("SABLE_CHECK_REGIONS") != NULL;
+        __atomic_store_n(&region_checking, checking, __ATOMIC_RELAXED);
+    }
+
+    region->checking = checking != 0;
+    return region;
 }
 
 // Room for a value of 'size' bytes, aligned to 16; with a destroy, it is
 // destroyed when the region goes. The memory is zero: empty, until stored.
 void *sable_region_alloc(void *pointer, int64_t size, void (*destroy)(void *value)) {
     SableRegion *region = pointer;
-    size_t rounded = ((size_t)size + 15) & ~(size_t)15;
+    size_t rounded = ((size_t)size + (region->checking ? REGION_GUARD_SIZE : 0) + 15) & ~(size_t)15;
     SableChunk *chunk = region->chunk;
     if (chunk == NULL || chunk->used + rounded > chunk->size) {
         size_t capacity = chunk == NULL ? 4096 : chunk->size * 2;
@@ -91,6 +145,21 @@ void *sable_region_alloc(void *pointer, int64_t size, void (*destroy)(void *valu
 
     void *value = chunk->bytes + chunk->used;
     chunk->used += rounded;
+    if (region->checking) {
+        // Poisoned when it was last given back: zero again, then the guard.
+        unsigned char *guard = (unsigned char *)value + size;
+        memset(value, 0, rounded);
+        memset(guard, REGION_GUARD, REGION_GUARD_SIZE);
+        if (region->guard_count == region->guard_capacity) {
+            region->guard_capacity = region->guard_capacity == 0 ? 16 : region->guard_capacity * 2;
+            region->guards = realloc(region->guards, (size_t)region->guard_capacity * sizeof(SableRegionGuard));
+            if (region->guards == NULL) {
+                sable_trap("out of memory");
+            }
+        }
+
+        region->guards[region->guard_count++] = (SableRegionGuard){ guard, (size_t)size };
+    }
 
     if (destroy != NULL) {
         if (region->cleanup_count == region->cleanup_capacity) {
@@ -106,21 +175,31 @@ void *sable_region_alloc(void *pointer, int64_t size, void (*destroy)(void *valu
 
 // Destroys what was allocated since cleanup 'count', last first, and frees
 // the chunks begun since 'chunk', bumping back to 'used' in it.
-static void region_back_to(SableRegion *region, SableChunk *chunk, size_t used, int64_t count) {
+// Checking, the guards put since 'guards' are looked at first, and what is
+// given back is poisoned rather than zeroed.
+static void region_back_to(SableRegion *region, SableChunk *chunk, size_t used, int64_t count, int64_t guards) {
     for (int64_t i = region->cleanup_count - 1; i >= count; i--) {
         region->cleanups[i].destroy(region->cleanups[i].value);
     }
 
     region->cleanup_count = count;
+    if (region->checking) {
+        region_check_guards(region, guards);
+    }
+
     while (region->chunk != chunk) {
         SableChunk *next = region->chunk->next;
+        if (region->checking) {
+            memset(region->chunk->bytes, REGION_POISON, region->chunk->size);
+        }
+
         free(region->chunk);
         region->chunk = next;
     }
 
     if (chunk != NULL) {
+        memset(chunk->bytes + used, region->checking ? REGION_POISON : 0, chunk->used - used);
         chunk->used = used;
-        memset(chunk->bytes + used, 0, chunk->size - used);
     }
 }
 
@@ -129,10 +208,14 @@ static void region_back_to(SableRegion *region, SableChunk *chunk, size_t used, 
 void sable_region_reset(void *pointer) {
     SableRegion *region = pointer;
     SableChunk *newest = region->chunk;
-    region_back_to(region, newest, 0, 0);
+    region_back_to(region, newest, 0, 0, 0);
     if (newest != NULL) {
         for (SableChunk *older = newest->next; older != NULL;) {
             SableChunk *next = older->next;
+            if (region->checking) {
+                memset(older->bytes, REGION_POISON, older->size);
+            }
+
             free(older);
             older = next;
         }
@@ -154,7 +237,7 @@ void sable_region_push(void *pointer) {
     }
 
     region->marks[region->mark_count++] = (SableRegionMark){
-        region->chunk, region->chunk == NULL ? 0 : region->chunk->used, region->cleanup_count,
+        region->chunk, region->chunk == NULL ? 0 : region->chunk->used, region->cleanup_count, region->guard_count,
     };
 }
 
@@ -165,7 +248,7 @@ void sable_region_pop(void *pointer) {
     }
 
     SableRegionMark mark = region->marks[--region->mark_count];
-    region_back_to(region, mark.chunk, mark.used, mark.cleanup_count);
+    region_back_to(region, mark.chunk, mark.used, mark.cleanup_count, mark.guard_count);
 }
 
 // ---- Unowned references --------------------------------------------------

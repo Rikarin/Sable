@@ -2107,10 +2107,20 @@ unowned let parent: Node
 unowned(unsafe) let fast: Node      // no trap, no check
 
 region arena { }                    // scoped bump allocator
-let node = arena.alloc(Node)
+let node = arena.alloc(Node(v: 1))  // a 'Node&' that writes: node.v = 2
+let tokens = arena.alloc(Token[>..]())  // a growable array held in the region
+lex(src, into: &tokens)             // an 'inout Token[>..]': what 'tokens' refers to
 fn build(in r: region) -> Node&     // root inferred as 'r'; 'in' is the label
 let tree = build(in: arena)
+return tree.toOwned()               // a 'T&''s value copied out, to outlive the region
 ```
+
+What `alloc` gives refers to the region's new value, and writes: through a
+`let` that holds it, or used where it is made. A `var` given it reads, as one
+rebound along a list, to references that read, would be refused. `r.toOwned()`
+of any reference is what it refers to, copied into a value of its own; a
+value that holds references holds them still, rooted where they were, so
+returning one out of its region is refused as the reference would be.
 
 See [../docs/02-memory-model.md](../docs/02-memory-model.md) for the semantics.
 

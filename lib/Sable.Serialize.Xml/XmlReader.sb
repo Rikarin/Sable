@@ -5,7 +5,7 @@ module Sable.Serialize.Xml
 struct XmlFrame {
     var bytes: U8[>..]
     var at: Int
-    // How many elements were openNames where the entity was referred to.
+    // How many elements were open where the entity was referred to.
     var depth: Int
 }
 
@@ -19,6 +19,13 @@ struct XmlEntity {
     var isUnparsed: Bool
 }
 
+// What a name of the name table is: with a colon; a QName; `xmlns`; and
+// `xmlns:p`.
+let xmlNameColon = 1
+let xmlNameQName = 2
+let xmlNameXmlns = 4
+let xmlNameXmlnsPrefixed = 8
+
 /// Reads an XML 1.0 document a node at a time, as it is asked: .NET's
 /// `XmlReader`, Java's StAX. It checks that the document is well-formed —
 /// every error has its line and column — and, by default, reads names with
@@ -30,6 +37,10 @@ struct XmlEntity {
 /// much text (XmlOptions), which stops a "billion laughs"; an external
 /// entity is never fetched, but read as an `EntityReference`. An empty
 /// element is a StartElement, with `isEmptyElement`, and an EndElement.
+///
+/// Each name is made a string once, the first time it is read, and is the
+/// same string after (.NET's XmlNameTable); a node's value and an
+/// attribute's are made only when they are asked for.
 ///
 /// ```sable
 /// let reader = XmlReader("<list xmlns='urn:l'><item n='1'>a &amp; b</item><item n='2'/></list>")
@@ -46,11 +57,21 @@ struct XmlEntity {
 /// ```
 public final class XmlReader {
     let options: XmlOptions
-    let document: U8[>..]
     // The text being read, and where; the texts it is in, outermost first.
+    // The document's text is the bytes when no entity is being read, and
+    // the first frame's when one is.
     var bytes: U8[>..]
     var at: Int = 0
     var frames: XmlFrame[>..] = []
+    // Where the document's text starts (past a byte order mark); of a
+    // streaming reader, how many of its bytes were let go of, whether no
+    // more will come, and whether the node asked for is not all there.
+    var origin: Int = 0
+    var dropped: Int = 0
+    var isFinal: Bool = true
+    var wantsMore: Bool = false
+    var input: XmlInput = XmlInput()
+    var tookEncoding: Bool = false
     // The entities being read, by name (a parameter entity's with '%').
     var expanding: String[>..] = []
     var expanded: Int = 0
@@ -71,16 +92,41 @@ public final class XmlReader {
     // 0 before the root element, 1 in it, 2 after it.
     var state: Int = 0
     var sawDocumentType: Bool = false
-    var openNames: String[>..] = []
+    // The names read, each made a string once: by number, its text, prefix
+    // and local name, what it is (xmlNameColon and the rest), its hash and
+    // where its bytes are in the pool. The slots find a number by bytes.
+    var nameText: String[>..] = []
+    var namePrefix: String[>..] = []
+    var nameLocal: String[>..] = []
+    var nameFlags: Int[>..] = []
+    var nameHash: Int[>..] = []
+    var nameStart: Int[>..] = []
+    var namePool: U8[>..] = []
+    var nameSlots: Int[>..] = Int[>..](repeating: -1, count: 64)
+    // The open elements' names, by number.
+    var openNames: Int[>..] = []
     var scopePrefixes: String[>..] = []
     var scopeUris: String[>..] = []
     var scopeCounts: Int[>..] = []
     var pendingEnd: Bool = false
+    // A start tag's attributes: each one's name by number, its namespace,
+    // and where its value starts in their bytes, references replaced (it
+    // ends where the next starts); a value is made a string when asked for.
+    var attributeNames: Int[>..] = []
+    var attributeNamespaces: String[>..] = []
+    var attributeStarts: Int[>..] = []
+    var attributeBytes: U8[>..] = []
+    // The node's text, made a string when `value` is first asked for.
     var buffer: U8[>..] = []
+    var made: String? = none
+    var isBuffered: Bool = false
+    var isWhite: Bool = false
     var nodeStart: Int = 0
     var placeOffset: Int = 0
     var placeLine: Int = 1
     var placeColumn: Int = 1
+    var originLine: Int = 1
+    var originColumn: Int = 1
 
     /// What the reader read last.
     public internal(set) var kind: XmlNodeKind = .Declaration
@@ -92,11 +138,6 @@ public final class XmlReader {
     public internal(set) var `prefix`: String = ""
     /// The namespace an element is in; "" for none.
     public internal(set) var namespace: String = ""
-    /// Text, CDATA's or a comment's content, a processing instruction's
-    /// data, or the DOCTYPE's internal subset as written.
-    public internal(set) var value: String = ""
-    /// A start tag's attributes, namespace declarations among them.
-    public internal(set) var attributes: XmlAttribute[>..] = []
     /// Whether the start tag was of an empty element: `<a/>`.
     public internal(set) var isEmptyElement: Bool = false
     /// How many elements are around the node: 0 for the root element.
@@ -113,24 +154,19 @@ public final class XmlReader {
     /// A reader of the text.
     public init(_ text: String, _ options: XmlOptions = XmlOptions()) {
         var bytes: U8[>..] = []
-        bytes.reserveCapacity(text.utf8Count)
-        var skip = text.hasPrefix("\u{FEFF}") ? 3 : 0
-        for byte in text.utf8 {
-            if skip > 0 {
-                skip -= 1
-            } else {
-                bytes.append(byte)
-            }
-        }
+        bytes.append(utf8: text)
+        let origin = text.hasPrefix("\u{FEFF}") ? 3 : 0
         self.options = options
-        self.document = bytes
         self.bytes = bytes
+        self.origin = origin
+        self.at = origin
+        self.placeOffset = origin
         self.detected = "text"
     }
 
     /// A reader of the bytes: UTF-8 or UTF-16, told apart by a byte order
     /// mark or the zeros of the first '<', or US-ASCII or ISO-8859-1 as the
-    /// declaration says.
+    /// declaration says. UTF-8 is read where it is, not copied.
     ///
     /// ```sable
     /// let utf16: U8[>..] = [0xFF, 0xFE, 0x3C, 0, 0x61, 0, 0x3E, 0, 0xE9, 0, 0x3C, 0, 0x2F, 0, 0x61, 0, 0x3E, 0]
@@ -141,14 +177,79 @@ public final class XmlReader {
     /// ```
     public init(bytes: U8[>..], _ options: XmlOptions = XmlOptions()) throws(XmlError) {
         var encoding = ""
-        let text = try xmlUtf8(bytes, &encoding)
+        var origin = 0
+        let text = try xmlUtf8(bytes, &encoding, &origin)
         self.options = options
-        self.document = text
         self.bytes = text
+        self.origin = origin
+        self.at = origin
+        self.placeOffset = origin
         self.encoding = encoding
         let b0 = bytes.count > 0 ? bytes[0] : 0
         self.detected = encoding.hasPrefix("UTF-16") ? encoding : b0 == 0xEF ? "UTF-8" : ""
     }
+
+    /// A reader given the document's bytes as they come: by `append` and
+    /// `finish`, or by `next(from:)` from a Reader or an AsyncReader. They
+    /// may be in any encoding `init(bytes:)` reads, told apart the same
+    /// way. It keeps the bytes of the node it is reading and no more, and
+    /// `next()` is none while that node is not all there and more may come.
+    ///
+    /// ```sable
+    /// let reader = XmlReader.streaming()
+    /// try! reader.append([0x3C, 0x61, 0x3E, 0x68, 0x69])
+    /// assert(try! reader.next() == .StartElement)
+    /// assert(try! reader.next() == none && reader.needsMore)
+    /// try! reader.append([0x3C, 0x2F, 0x61, 0x3E])
+    /// try! reader.finish()
+    /// assert(try! reader.next() == .Text && reader.value == "hi")
+    /// assert(try! reader.next() == .EndElement && try! reader.next() == none)
+    /// ```
+    public static fn streaming(_ options: XmlOptions = XmlOptions()) -> XmlReader {
+        let reader = XmlReader("", options)
+        reader.isFinal = false
+        reader.detected = ""
+        return reader
+    }
+
+    /// Whether the last `next()` was none only as the node it came to is
+    /// not all there, and more bytes may come.
+    public var needsMore: Bool => wantsMore
+
+    /// More of the document's bytes, for a streaming reader; an error if
+    /// they are not of the encoding.
+    public fn append(_ chunk: U8[:]) throws(XmlError) {
+        if frames.isEmpty {
+            try input.decode(chunk, atEnd: false, into: &bytes)
+        } else {
+            try input.decode(chunk, atEnd: false, into: &frames[0].bytes)
+        }
+        takeEncoding()
+    }
+
+    /// That no more bytes will come: an error if those there are end in
+    /// the middle of a character.
+    public fn finish() throws(XmlError) {
+        isFinal = true
+        if frames.isEmpty {
+            try input.decode([], atEnd: true, into: &bytes)
+        } else {
+            try input.decode([], atEnd: true, into: &frames[0].bytes)
+        }
+        takeEncoding()
+    }
+
+    // What the first bytes told of their encoding, once there are enough.
+    fn takeEncoding() {
+        if !tookEncoding && input.isDecided {
+            tookEncoding = true
+            encoding = input.encoding
+            detected = input.detected
+        }
+    }
+
+    // The document's text.
+    var document: U8[>..] => frames.isEmpty ? bytes : frames[0].bytes
 
     // ---- Where -----------------------------------------------------------
 
@@ -170,13 +271,14 @@ public final class XmlReader {
 
     fn locate(_ offset: Int) {
         if offset < placeOffset {
-            placeOffset = 0
-            placeLine = 1
-            placeColumn = 1
+            placeOffset = origin
+            placeLine = originLine
+            placeColumn = originColumn
         }
-        while placeOffset < offset && placeOffset < document.count {
-            let b = document[placeOffset]
-            if b == 0x0A || b == 0x0D && (placeOffset + 1 >= document.count || document[placeOffset + 1] != 0x0A) {
+        let text = document
+        while placeOffset < offset && placeOffset < text.count {
+            let b = text[placeOffset]
+            if b == 0x0A || b == 0x0D && (placeOffset + 1 >= text.count || text[placeOffset + 1] != 0x0A) {
                 placeLine += 1
                 placeColumn = 1
             } else if b != 0x0D && (b & 0xC0) != 0x80 {
@@ -194,27 +296,203 @@ public final class XmlReader {
         return XmlError { line: placeLine, column: placeColumn, reason: reason }
     }
 
+    // ---- Names -----------------------------------------------------------
+
+    // The number of the name of those bytes, made one if it is new.
+    fn intern(_ source: U8[>..], _ start: Int, _ end: Int) -> Int {
+        var hash = 5381
+        var i = start
+        while i < end {
+            hash = (hash &* 33) ^ Int(source[i])
+            i += 1
+        }
+        let count = end - start
+        var mask = nameSlots.count - 1
+        var slot = hash & mask
+        while true {
+            let id = nameSlots[slot]
+            if id < 0 {
+                break
+            }
+            if nameHash[id] == hash {
+                let from = nameStart[id]
+                if nameStart[id + 1] - from == count {
+                    var same = true
+                    var j = 0
+                    while j < count {
+                        if namePool[from + j] != source[start + j] {
+                            same = false
+                            break
+                        }
+                        j += 1
+                    }
+                    if same {
+                        return id
+                    }
+                }
+            }
+            slot = (slot + 1) & mask
+        }
+        let id = nameText.count
+        let text = xmlString(source[start..<end])
+        var flags = 0
+        if xmlColon(text) >= 0 {
+            flags |= xmlNameColon
+            if xmlIsQName(text) {
+                flags |= xmlNameQName
+            }
+        }
+        if text == "xmlns" {
+            flags |= xmlNameXmlns
+        } else if text.hasPrefix("xmlns:") {
+            flags |= xmlNameXmlnsPrefixed
+        }
+        if nameStart.isEmpty {
+            nameStart.append(0)
+        }
+        namePool.append(contentsOf: source[start..<end])
+        nameStart.append(namePool.count)
+        nameText.append(text)
+        namePrefix.append(xmlPrefix(text))
+        nameLocal.append(xmlLocalName(text))
+        nameFlags.append(flags)
+        nameHash.append(hash)
+        if nameText.count * 2 > nameSlots.count {
+            nameSlots = Int[>..](repeating: -1, count: nameSlots.count * 2)
+            mask = nameSlots.count - 1
+            for other in 0..<nameText.count {
+                var at = nameHash[other] & mask
+                while nameSlots[at] >= 0 {
+                    at = (at + 1) & mask
+                }
+                nameSlots[at] = other
+            }
+        } else {
+            nameSlots[slot] = id
+        }
+        return id
+    }
+
     // ---- Attributes ------------------------------------------------------
 
     /// The value of the start tag's attribute of that name as written, or
     /// of that local name in that namespace.
     public fn attribute(_ name: String, namespace: String? = none) -> String? {
-        for attribute in attributes {
+        for i in 0..<attributeNames.count {
+            let id = attributeNames[i]
             if let namespace = namespace {
-                if attribute.localName == name && attribute.namespace == namespace {
-                    return attribute.value
+                if nameLocal[id] == name && attributeNamespaces[i] == namespace {
+                    return attributeValue(at: i)
                 }
-            } else if attribute.name == name {
-                return attribute.value
+            } else if nameText[id] == name {
+                return attributeValue(at: i)
             }
         }
         return none
     }
 
+    /// A start tag's attributes, namespace declarations among them, made
+    /// when they are asked for.
+    public var attributes: XmlAttribute[>..] {
+        get {
+            var all: XmlAttribute[>..] = []
+            for i in 0..<attributeNames.count {
+                let id = attributeNames[i]
+                all.append(XmlAttribute(name: nameText[id], bound: namePrefix[id], local: nameLocal[id], namespace: attributeNamespaces[i], value: attributeValue(at: i)))
+            }
+            return all
+        }
+    }
+
+    fn attributeValue(at i: Int) -> String {
+        let end = i + 1 < attributeStarts.count ? attributeStarts[i + 1] : attributeBytes.count
+        return xmlString(attributeBytes[attributeStarts[i]..<end])
+    }
+
+    /// Text, CDATA's or a comment's content, a processing instruction's
+    /// data, or the DOCTYPE's internal subset as written: made a string the
+    /// first time it is asked for.
+    public var value: String {
+        get {
+            if let made = made {
+                return made
+            }
+            var text = ""
+            if isWhite && buffer.count <= 64 {
+                // An indented document's white space is a few strings,
+                // kept in the name table and made once.
+                let id = intern(buffer, 0, buffer.count)
+                text = nameText[id]
+            } else if isBuffered {
+                text = xmlString(buffer[0..<buffer.count])
+            }
+            made = text
+            return text
+        }
+    }
+
     // ---- Reading ---------------------------------------------------------
 
-    /// The kind of the next node, or none at the end of the document.
+    /// The kind of the next node, or none at the end of the document (or,
+    /// of a streaming reader, where `needsMore`).
     public fn next() throws(XmlError) -> XmlNodeKind? {
+        wantsMore = false
+        if isFinal {
+            return try step()
+        }
+        if frames.isEmpty && at >= 4096 && at * 2 >= bytes.count {
+            drop()
+        }
+        // What a node that is not all there is read again from.
+        let start = at
+        let total = expanded
+        let inside = !frames.isEmpty
+        var savedFrames: XmlFrame[>..] = []
+        var savedBytes: U8[>..] = []
+        var savedExpanding: String[>..] = []
+        if inside {
+            savedFrames = frames
+            savedBytes = bytes
+            savedExpanding = expanding
+        }
+        do {
+            let kind = try step()
+            if !wantsMore {
+                return kind
+            }
+        } catch {
+            if !frames.isEmpty || at + 16 < bytes.count {
+                throw error
+            }
+            wantsMore = true
+        }
+        at = start
+        expanded = total
+        if inside {
+            frames = savedFrames
+            bytes = savedBytes
+            expanding = savedExpanding
+        }
+        return none
+    }
+
+    // The document's bytes before where the reader is let go of.
+    fn drop() {
+        locate(at)
+        var kept: U8[>..] = []
+        kept.reserveCapacity(bytes.count - at + 65536)
+        kept.append(contentsOf: bytes[at..<bytes.count])
+        bytes = kept
+        dropped += at
+        placeOffset = 0
+        origin = 0
+        originLine = placeLine
+        originColumn = placeColumn
+        nodeStart = 0
+        at = 0
+    }
+
+    fn step() throws(XmlError) -> XmlNodeKind? {
         if pendingEnd {
             pendingEnd = false
             endElement()
@@ -226,8 +504,12 @@ public final class XmlReader {
                     try popFrame()
                     continue
                 }
+                if !isFinal {
+                    wantsMore = true
+                    return none
+                }
                 if state != 2 {
-                    throw fail(state == 0 ? "no root element" : "the text ends inside <\(openNames[openNames.count - 1])>")
+                    throw fail(state == 0 ? "no root element" : "the text ends inside <\(nameText[openNames[openNames.count - 1]])>")
                 }
                 return none
             }
@@ -254,7 +536,8 @@ public final class XmlReader {
     }
 
     /// Goes past the element the reader is at the start of, to its end;
-    /// past the node, for any other.
+    /// past the node, for any other. A streaming reader's element must be
+    /// all there: `skip(from:)` reads on as it needs.
     public fn skip() throws(XmlError) {
         if kind != .StartElement {
             return
@@ -303,8 +586,8 @@ public final class XmlReader {
         }
     }
 
-    // A Name (§2.3).
-    fn readName() throws(XmlError) -> String {
+    // A Name (§2.3), by its number in the name table.
+    fn readName() throws(XmlError) -> Int {
         let start = at
         while at < bytes.count {
             let b = bytes[at]
@@ -324,7 +607,12 @@ public final class XmlReader {
         if at == start {
             throw fail(peek(0) < 0 ? "the text ends where a name is wanted" : "a name is wanted here")
         }
-        return xmlString(bytes[start..<at])
+        return intern(bytes, start, at)
+    }
+
+    fn readNameText() throws(XmlError) -> String {
+        let id = try readName()
+        return nameText[id]
     }
 
     // One character the document may hold at all, appended; '\r' and
@@ -347,20 +635,25 @@ public final class XmlReader {
         at += 1
     }
 
-    // The text up to the terminator, which is gone past.
-    fn until(_ end: String, _ what: String) throws(XmlError) -> String {
-        var terminator: U8[>..] = []
-        terminator.append(utf8: end)
-        var made: U8[>..] = []
+    // The text up to the terminator, '?>' or ']]>', which is gone past, in
+    // the buffer.
+    fn until(_ question: Bool, _ what: String) throws(XmlError) {
+        buffer.removeAll(keepingCapacity: true)
         while true {
             if at >= bytes.count {
                 throw fail("the text ends inside \(what)")
             }
-            if bytes[at] == terminator[0] && xmlMatches(bytes, at, terminator) {
-                at += terminator.count
-                return xmlString(made)
+            let b = bytes[at]
+            if question {
+                if b == 0x3F && peek(1) == 0x3E {
+                    at += 2
+                    return
+                }
+            } else if b == 0x5D && peek(1) == 0x5D && peek(2) == 0x3E {
+                at += 3
+                return
             }
-            try character(&made)
+            try character(&buffer)
         }
     }
 
@@ -456,6 +749,10 @@ public final class XmlReader {
         while true {
             if at >= bytes.count {
                 if frames.isEmpty {
+                    if !isFinal {
+                        wantsMore = true
+                        return true
+                    }
                     break
                 }
                 try popFrame()
@@ -473,7 +770,7 @@ public final class XmlReader {
                 }
                 let start = at
                 at += 1
-                let name = try readName()
+                let name = try readNameText()
                 try expect(0x3B, "';' after the entity's name")
                 let code = predefined(name)
                 if code >= 0 {
@@ -532,7 +829,8 @@ public final class XmlReader {
         if buffer.isEmpty || white && options.ignoresWhitespace {
             return false
         }
-        mark(.Text, value: xmlString(buffer))
+        markBuffered(.Text)
+        isWhite = white
         return true
     }
 
@@ -543,16 +841,36 @@ public final class XmlReader {
     }
 
     fn mark(_ kind: XmlNodeKind, value: String) {
+        dropAttributes()
+        clear(kind)
+        made = value
+        isBuffered = false
+    }
+
+    // A node whose value is the buffer's text.
+    fn markBuffered(_ kind: XmlNodeKind) {
+        dropAttributes()
+        clear(kind)
+        made = none
+        isBuffered = true
+        isWhite = false
+    }
+
+    fn clear(_ kind: XmlNodeKind) {
         self.kind = kind
-        self.value = value
         self.name = ""
         self.localName = ""
         self.prefix = ""
         self.namespace = ""
         self.isEmptyElement = false
         self.depth = openNames.count
-        if !attributes.isEmpty {
-            attributes = []
+    }
+
+    fn dropAttributes() {
+        if !attributeNames.isEmpty {
+            attributeNames.removeAll(keepingCapacity: true)
+            attributeNamespaces.removeAll(keepingCapacity: true)
+            attributeStarts.removeAll(keepingCapacity: true)
         }
     }
 
@@ -569,7 +887,8 @@ public final class XmlReader {
         }
         if c == 0x21 {
             if starts("<!--") {
-                mark(.Comment, value: try comment())
+                try comment()
+                markBuffered(.Comment)
                 return true
             }
             if starts("<![CDATA[") {
@@ -577,7 +896,8 @@ public final class XmlReader {
                     throw fail("a CDATA section outside the root element")
                 }
                 at += 9
-                mark(.CData, value: try until("]]>", "a CDATA section"))
+                try until(false, "a CDATA section")
+                markBuffered(.CData)
                 return true
             }
             if starts("<!DOCTYPE") {
@@ -590,9 +910,10 @@ public final class XmlReader {
         return true
     }
 
-    fn comment() throws(XmlError) -> String {
+    // A comment, its content in the buffer.
+    fn comment() throws(XmlError) {
         at += 4
-        var made: U8[>..] = []
+        buffer.removeAll(keepingCapacity: true)
         while true {
             if at >= bytes.count {
                 throw fail("the text ends inside a comment")
@@ -602,18 +923,18 @@ public final class XmlReader {
                     throw fail("'--' inside a comment")
                 }
                 at += 3
-                return xmlString(made)
+                return
             }
-            try character(&made)
+            try character(&buffer)
         }
     }
 
     fn instruction() throws(XmlError) -> Bool {
         let start = at
         at += 2
-        let target = try readName()
+        let target = try readNameText()
         if xmlLower(target) == "xml" {
-            if target == "xml" && start == 0 && frames.isEmpty && document.count > 0 {
+            if target == "xml" && start == origin && dropped == 0 && frames.isEmpty {
                 try declaration()
                 return true
             }
@@ -622,14 +943,14 @@ public final class XmlReader {
         if options.namespaces && xmlColon(target) >= 0 {
             throw fail("a colon in the target \(target)")
         }
-        var data = ""
         if starts("?>") {
             at += 2
+            buffer.removeAll(keepingCapacity: true)
         } else {
             try requireSpace("after the target")
-            data = try until("?>", "a processing instruction")
+            try until(true, "a processing instruction")
         }
-        mark(.ProcessingInstruction, value: data)
+        markBuffered(.ProcessingInstruction)
         name = target
         return true
     }
@@ -721,8 +1042,8 @@ public final class XmlReader {
         }
         at += 1
         let qualified = try readName()
-        var names: String[>..] = []
-        var values: String[>..] = []
+        dropAttributes()
+        attributeBytes.removeAll(keepingCapacity: true)
         var empty = false
         while true {
             let spaced = space()
@@ -737,51 +1058,109 @@ public final class XmlReader {
                 break
             }
             if b < 0 {
-                throw fail("the text ends inside the tag <\(qualified)>")
+                throw fail("the text ends inside the tag <\(nameText[qualified])>")
             }
             if !spaced {
                 throw fail("white space is wanted before an attribute")
             }
             let name = try readName()
             _ = space()
-            try expect(0x3D, "'=' after the attribute \(name)")
+            if peek(0) != 0x3D {
+                // The message is made only when it is wanted.
+                try expect(0x3D, "'=' after the attribute \(nameText[name])")
+            }
+            at += 1
             _ = space()
-            let value = try attributeValue()
-            if names.contains(name) {
-                throw fail("the attribute \(name) twice")
+            let start = attributeBytes.count
+            try attributeValue(&attributeBytes)
+            if attributeNames.contains(name) {
+                throw fail("the attribute \(nameText[name]) twice")
             }
-            names.append(name)
-            values.append(value)
+            attributeNames.append(name)
+            attributeStarts.append(start)
         }
-        if let declared = declaredNames[qualified] {
-            let tokenized = declaredTokenized[qualified]!
-            let defaults = declaredDefaults[qualified]!
-            for i in 0..<declared.count {
-                var found = -1
-                for j in 0..<names.count {
-                    if names[j] == declared[i] {
-                        found = j
-                    }
-                }
-                if found >= 0 {
-                    if tokenized[i] {
-                        values[found] = xmlCollapsed(values[found])
-                    }
-                } else if let value = defaults[i] {
-                    names.append(declared[i])
-                    values.append(value)
-                }
-            }
+        if !declaredNames.isEmpty {
+            try declaredAttributes(nameText[qualified])
         }
         if openNames.count >= options.maxDepth {
             throw fail("elements nested deeper than \(options.maxDepth)")
         }
-        mark(.StartElement, value: "")
+        let count = attributeNames.count
+        // The attributes are the tag's, past this mark.
+        clear(.StartElement)
+        made = ""
+        isBuffered = false
         state = 1
         openNames.append(qualified)
-        try resolve(qualified, names, values)
+        try resolve(qualified, count)
         isEmptyElement = empty
         pendingEnd = empty
+    }
+
+    // The defaults of the attributes the element's list declares and the
+    // tag does not have, and tokenized values collapsed.
+    fn declaredAttributes(_ element: String) throws(XmlError) {
+        guard let declared = declaredNames[element] else {
+            return
+        }
+        let tokenized = declaredTokenized[element]!
+        let defaults = declaredDefaults[element]!
+        let given = attributeNames.count
+        for i in 0..<declared.count {
+            var found = -1
+            for j in 0..<given {
+                if nameText[attributeNames[j]] == declared[i] {
+                    found = j
+                }
+            }
+            if found >= 0 {
+                if tokenized[i] {
+                    collapse(found)
+                }
+            } else if let value = defaults[i] {
+                var bytes: U8[>..] = []
+                bytes.append(utf8: declared[i])
+                let id = intern(bytes, 0, bytes.count)
+                attributeNames.append(id)
+                attributeStarts.append(attributeBytes.count)
+                attributeBytes.append(utf8: value)
+            }
+        }
+    }
+
+    // A tokenized attribute's value: no space at either end, and one
+    // between, in place.
+    fn collapse(_ i: Int) {
+        let start = attributeStarts[i]
+        let end = i + 1 < attributeStarts.count ? attributeStarts[i + 1] : attributeBytes.count
+        var collapsed: U8[>..] = []
+        var pending = false
+        var j = start
+        while j < end {
+            let byte = attributeBytes[j]
+            if byte == 0x20 {
+                pending = !collapsed.isEmpty
+            } else {
+                if pending {
+                    collapsed.append(0x20)
+                    pending = false
+                }
+                collapsed.append(byte)
+            }
+            j += 1
+        }
+        // The values after it move back by what it lost.
+        var rest: U8[>..] = []
+        rest.append(contentsOf: attributeBytes[end..<attributeBytes.count])
+        attributeBytes.removeLast(attributeBytes.count - start)
+        attributeBytes.append(contentsOf: collapsed[0..<collapsed.count])
+        attributeBytes.append(contentsOf: rest[0..<rest.count])
+        let lost = end - start - collapsed.count
+        var k = i + 1
+        while k < attributeStarts.count {
+            attributeStarts[k] -= lost
+            k += 1
+        }
     }
 
     fn lookup(_ p: String) -> String? {
@@ -803,25 +1182,24 @@ public final class XmlReader {
 
     // The element's and its attributes' namespaces, the declarations among
     // them in scope from here.
-    fn resolve(_ qualified: String, _ names: String[>..], _ values: String[>..]) throws(XmlError) {
-        name = qualified
-        var declared = 0
+    fn resolve(_ qualified: Int, _ count: Int) throws(XmlError) {
+        name = nameText[qualified]
         if !options.namespaces {
-            localName = qualified
-            for i in 0..<names.count {
-                let name = names[i]
-                attributes.append(XmlAttribute(name: name, bound: "", local: name, namespace: "", value: values[i]))
+            localName = name
+            for _ in 0..<count {
+                attributeNamespaces.append("")
             }
             scopeCounts.append(0)
             return
         }
-        for i in 0..<names.count {
-            let name = names[i]
-            if name != "xmlns" && !name.hasPrefix("xmlns:") {
+        var declared = 0
+        for i in 0..<count {
+            let flags = nameFlags[attributeNames[i]]
+            if (flags & (xmlNameXmlns | xmlNameXmlnsPrefixed)) == 0 {
                 continue
             }
-            let bound = name == "xmlns" ? "" : xmlLocalName(name)
-            let uri = values[i]
+            let bound = (flags & xmlNameXmlns) != 0 ? "" : nameLocal[attributeNames[i]]
+            let uri = attributeValue(at: i)
             if bound == "xmlns" {
                 throw fail("the prefix xmlns declared")
             }
@@ -839,23 +1217,25 @@ public final class XmlReader {
             declared += 1
         }
         scopeCounts.append(declared)
-        if xmlColon(qualified) >= 0 && !xmlIsQName(qualified) {
-            throw fail("the name \(qualified), which is not a name with at most one colon", at: nodeStart)
+        let flags = nameFlags[qualified]
+        if (flags & xmlNameColon) != 0 && (flags & xmlNameQName) == 0 {
+            throw fail("the name \(name), which is not a name with at most one colon", at: nodeStart)
         }
-        self.prefix = xmlPrefix(qualified)
-        localName = xmlLocalName(qualified)
+        self.prefix = namePrefix[qualified]
+        localName = nameLocal[qualified]
         guard let uri = lookup(self.prefix) else {
             throw fail("the prefix \(self.prefix), which is not bound to a namespace", at: nodeStart)
         }
         namespace = uri
-        for i in 0..<names.count {
-            let name = names[i]
-            if xmlColon(name) >= 0 && !xmlIsQName(name) {
-                throw fail("the attribute name \(name), which is not a name with at most one colon")
+        for i in 0..<count {
+            let id = attributeNames[i]
+            let flags = nameFlags[id]
+            if (flags & xmlNameColon) != 0 && (flags & xmlNameQName) == 0 {
+                throw fail("the attribute name \(nameText[id]), which is not a name with at most one colon")
             }
-            let attributePrefix = xmlPrefix(name)
+            let attributePrefix = namePrefix[id]
             var attributeNamespace = ""
-            if name == "xmlns" {
+            if (flags & xmlNameXmlns) != 0 {
                 attributeNamespace = xmlNamespaceXmlns
             } else if !attributePrefix.isEmpty {
                 guard let bound = lookup(attributePrefix) else {
@@ -863,26 +1243,27 @@ public final class XmlReader {
                 }
                 attributeNamespace = bound
             }
-            let local = xmlLocalName(name)
             if !attributeNamespace.isEmpty {
-                for other in attributes {
-                    if other.localName == local && other.namespace == attributeNamespace {
+                let local = nameLocal[id]
+                for j in 0..<i {
+                    if nameLocal[attributeNames[j]] == local && attributeNamespaces[j] == attributeNamespace {
                         throw fail("the attribute {\(attributeNamespace)}\(local) twice")
                     }
                 }
             }
-            attributes.append(XmlAttribute(name: name, bound: attributePrefix, local: local, namespace: attributeNamespace, value: values[i]))
+            attributeNamespaces.append(attributeNamespace)
         }
     }
 
-    fn attributeValue() throws(XmlError) -> String {
+    // An attribute's value, references replaced and white space made
+    // spaces, appended.
+    fn attributeValue(_ into: inout U8[>..]) throws(XmlError) {
         let quote = peek(0)
         if quote != 0x22 && quote != 0x27 {
             throw fail("a quoted value is wanted here")
         }
         at += 1
         let base = frames.count
-        var made: U8[>..] = []
         while true {
             if at >= bytes.count {
                 if frames.count > base {
@@ -894,22 +1275,22 @@ public final class XmlReader {
             let b = bytes[at]
             if Int(b) == quote && frames.count == base {
                 at += 1
-                return xmlString(made)
+                return
             }
             if b == 0x3C {
                 throw fail("'<' in an attribute's value")
             }
             if b == 0x26 {
                 if peek(1) == 0x23 {
-                    xmlAppend(try characterReference(), to: &made)
+                    xmlAppend(try characterReference(), to: &into)
                     continue
                 }
                 at += 1
-                let name = try readName()
+                let name = try readNameText()
                 try expect(0x3B, "';' after the entity's name")
                 let code = predefined(name)
                 if code >= 0 {
-                    made.append(U8(code))
+                    into.append(U8(code))
                     continue
                 }
                 guard let entity = entities[name] else {
@@ -922,11 +1303,25 @@ public final class XmlReader {
                 continue
             }
             if xmlIsSpace(b) {
-                made.append(0x20)
+                into.append(0x20)
                 at += b == 0x0D && frames.isEmpty && peek(1) == 0x0A ? 2 : 1
                 continue
             }
-            try character(&made)
+            if b >= 0x20 && b < 0x80 && Int(b) != quote && b != 0x26 {
+                // A run of plain ASCII at once.
+                let run = at
+                at += 1
+                while at < bytes.count {
+                    let c = bytes[at]
+                    if c < 0x21 || c >= 0x80 || Int(c) == quote || c == 0x26 || c == 0x3C {
+                        break
+                    }
+                    at += 1
+                }
+                into.append(contentsOf: bytes[run..<at])
+                continue
+            }
+            try character(&into)
         }
     }
 
@@ -936,10 +1331,11 @@ public final class XmlReader {
         _ = space()
         try expect(0x3E, "'>' to end the end tag")
         if openNames.isEmpty {
-            throw fail("the end tag </\(name)> after the root element", at: nodeStart)
+            throw fail("the end tag </\(nameText[name])> after the root element", at: nodeStart)
         }
-        if name != openNames[openNames.count - 1] {
-            throw fail("</\(name)> where </\(openNames[openNames.count - 1])> is wanted", at: nodeStart)
+        let innermost = openNames[openNames.count - 1]
+        if name != innermost {
+            throw fail("</\(nameText[name])> where </\(nameText[innermost])> is wanted", at: nodeStart)
         }
         if !frames.isEmpty && openNames.count <= frames[frames.count - 1].depth {
             throw fail("an entity's end tag for an element it does not start")
@@ -950,13 +1346,13 @@ public final class XmlReader {
     fn endElement() {
         let qualified = openNames.removeLast()
         mark(.EndElement, value: "")
-        name = qualified
+        name = nameText[qualified]
         if options.namespaces {
-            self.prefix = xmlPrefix(qualified)
-            localName = xmlLocalName(qualified)
+            self.prefix = namePrefix[qualified]
+            localName = nameLocal[qualified]
             namespace = lookup(self.prefix) ?? ""
         } else {
-            localName = qualified
+            localName = name
         }
         var declared = scopeCounts.removeLast()
         while declared > 0 {
@@ -978,10 +1374,34 @@ public final class XmlReader {
         if sawDocumentType || state != 0 {
             throw fail("a DOCTYPE after the root element or another DOCTYPE")
         }
+        // What the declarations change, as it was, should the DOCTYPE not
+        // be all there and be read again.
+        let entities = self.entities
+        let parameters = self.parameters
+        let declaredNames = self.declaredNames
+        let declaredTokenized = self.declaredTokenized
+        let declaredDefaults = self.declaredDefaults
+        do {
+            try readDocumentType()
+        } catch {
+            sawDocumentType = false
+            hasExternalSubset = false
+            skippedDeclarations = false
+            sawParameterReference = false
+            self.entities = entities
+            self.parameters = parameters
+            self.declaredNames = declaredNames
+            self.declaredTokenized = declaredTokenized
+            self.declaredDefaults = declaredDefaults
+            throw error
+        }
+    }
+
+    fn readDocumentType() throws(XmlError) {
         sawDocumentType = true
         at += 9
         try requireSpace("after DOCTYPE")
-        let name = try readName()
+        let name = try readNameText()
         let spaced = space()
         if starts("SYSTEM") || starts("PUBLIC") {
             if !spaced {
@@ -1057,7 +1477,7 @@ public final class XmlReader {
             }
             if b == 0x25 {
                 at += 1
-                let name = try readName()
+                let name = try readNameText()
                 try expect(0x3B, "';' after the parameter entity's name")
                 sawParameterReference = true
                 if let entity = parameters[name] {
@@ -1078,7 +1498,7 @@ public final class XmlReader {
                 continue
             }
             if starts("<!--") {
-                _ = try comment()
+                try comment()
             } else if starts("<?") {
                 _ = try instruction()
             } else if starts("<!ENTITY") {
@@ -1109,7 +1529,7 @@ public final class XmlReader {
             try requireSpace("after '%'")
             parameter = true
         }
-        let name = try readName()
+        let name = try readNameText()
         if options.namespaces && xmlColon(name) >= 0 {
             throw fail("a colon in the entity name \(name)")
         }
@@ -1253,7 +1673,7 @@ public final class XmlReader {
     fn attributeListDeclaration() throws(XmlError) {
         at += 9
         try requireSpace("after <!ATTLIST")
-        let element = try readName()
+        let element = try readNameText()
         let keep = !(skippedDeclarations && standalone != true)
         var names = declaredNames[element] ?? []
         var tokenized = declaredTokenized[element] ?? []
@@ -1272,7 +1692,7 @@ public final class XmlReader {
             if !spaced {
                 throw fail("white space is wanted before an attribute's definition")
             }
-            let name = try readName()
+            let name = try readNameText()
             try requireSpace("after the attribute's name")
             let isTokenized = !starts("CDATA")
             try attributeType()
@@ -1287,7 +1707,9 @@ public final class XmlReader {
                     at += 6
                     try requireSpace("after #FIXED")
                 }
-                value = try attributeValue()
+                var literal: U8[>..] = []
+                try attributeValue(&literal)
+                value = xmlString(literal)
             }
             if !names.contains(name) {
                 names.append(name)
@@ -1339,7 +1761,7 @@ public final class XmlReader {
     fn notationDeclaration() throws(XmlError) {
         at += 10
         try requireSpace("after <!NOTATION")
-        let name = try readName()
+        let name = try readNameText()
         if options.namespaces && xmlColon(name) >= 0 {
             throw fail("a colon in the notation name \(name)")
         }

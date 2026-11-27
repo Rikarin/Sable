@@ -1,0 +1,157 @@
+module Sable.Serialize.Xml
+
+import Sable.IO
+
+// A streaming XmlReader given its bytes by what they come from: it asks
+// for more only when those it has are not a whole node.
+
+extension XmlReader {
+    /// The kind of the next node, or none at the end of the document; the
+    /// bytes are read from the source as they are needed, that many at a
+    /// time (or as many as the node has so far, should it be longer).
+    ///
+    /// ```sable
+    /// var source = MemoryStream([0x3C, 0x61, 0x3E, 0x68, 0x69, 0x3C, 0x2F, 0x61, 0x3E])
+    /// let reader = XmlReader.streaming()
+    /// var kinds: XmlNodeKind[>..] = []
+    /// while let kind = try! reader.next(from: &source, upTo: 2) {
+    ///     kinds.append(kind)
+    /// }
+    /// assert(kinds == [.StartElement, .Text, .EndElement] && reader.value == "")
+    /// ```
+    public fn next<R: Reader>(from source: inout R, upTo count: Int = 65536) throws(XmlStreamError) -> XmlNodeKind? {
+        while true {
+            let kind = try nextOrMore()
+            if !wantsMore {
+                return kind
+            }
+            try fill(from: &source, count)
+        }
+    }
+
+    /// Goes past the element the reader is at the start of, to its end, as
+    /// `skip()` does, bytes read from the source as they are needed.
+    public fn skip<R: Reader>(from source: inout R, upTo count: Int = 65536) throws(XmlStreamError) {
+        if kind != .StartElement {
+            return
+        }
+        let at = depth
+        while let next = try next(from: &source, upTo: count) {
+            if next == .EndElement && depth == at {
+                return
+            }
+        }
+    }
+
+    /// The kind of the next node, or none at the end of the document; the
+    /// bytes are read from the source as they are needed, the task
+    /// suspended while it waits for them.
+    ///
+    /// ```sable
+    /// fn countItems<R: AsyncReader>(_ body: R) async throws(XmlStreamError) -> Int {
+    ///     let reader = XmlReader.streaming()
+    ///     var items = 0
+    ///     while let kind = try await reader.next(from: body) {
+    ///         if kind == .StartElement && reader.localName == "item" {
+    ///             items += 1
+    ///         }
+    ///     }
+    ///     return items
+    /// }
+    /// ```
+    public fn next<R: AsyncReader>(from source: R, upTo count: Int = 65536) async throws(XmlStreamError) -> XmlNodeKind? {
+        while true {
+            let kind = try nextOrMore()
+            if !wantsMore {
+                return kind
+            }
+            try await fill(from: source, count)
+        }
+    }
+
+    /// Goes past the element the reader is at the start of, to its end, as
+    /// `skip()` does, the task suspended while it waits for bytes.
+    public fn skip<R: AsyncReader>(from source: R, upTo count: Int = 65536) async throws(XmlStreamError) {
+        if kind != .StartElement {
+            return
+        }
+        let at = depth
+        while let next = try await next(from: source, upTo: count) {
+            if next == .EndElement && depth == at {
+                return
+            }
+        }
+    }
+
+    fn nextOrMore() throws(XmlStreamError) -> XmlNodeKind? {
+        do {
+            return try next()
+        } catch {
+            throw XmlStreamError.Syntax(error: error)
+        }
+    }
+
+    // As many bytes as asked for, or as the node not all there has so far.
+    fn wanted(_ count: Int) -> Int {
+        let held = frames.isEmpty ? bytes.count - at : frames[0].bytes.count - frames[0].at
+        return held > count ? held : count
+    }
+
+    fn fill<R: Reader>(from source: inout R, _ count: Int) throws(XmlStreamError) {
+        var chunk: U8[>..] = []
+        do {
+            chunk = try source.read(upTo: wanted(count))
+        } catch {
+            throw XmlStreamError.Read(error: error)
+        }
+        try take(chunk)
+    }
+
+    fn fill<R: AsyncReader>(from source: R, _ count: Int) async throws(XmlStreamError) {
+        var chunk: U8[>..] = []
+        do {
+            chunk = try await source.read(upTo: wanted(count))
+        } catch {
+            throw XmlStreamError.Read(error: error)
+        }
+        try take(chunk)
+    }
+
+    fn take(_ chunk: U8[>..]) throws(XmlStreamError) {
+        do {
+            if chunk.isEmpty {
+                try finish()
+            } else {
+                try append(chunk[0..<chunk.count])
+            }
+        } catch {
+            throw XmlStreamError.Syntax(error: error)
+        }
+    }
+}
+
+/// Why XML could not be read from a stream: the stream, or the XML.
+///
+/// ```sable
+/// var source = MemoryStream([0x3C, 0x61, 0x3E, 0x3C, 0x2F, 0x62, 0x3E])
+/// let reader = XmlReader.streaming()
+/// do {
+///     while try reader.next(from: &source) != none { }
+///     assert(false)
+/// } catch {
+///     assert(error.description() == "line 1, column 4: </b> where </a> is wanted")
+/// }
+/// ```
+public union XmlStreamError: Error {
+    /// The bytes could not be read.
+    Read(error: IoError)
+    /// The bytes are not well-formed XML, or not XML the options take.
+    Syntax(error: XmlError)
+
+    public fn description() -> String {
+        return match self {
+            case .Read(let error)   => error.description()
+            case .Syntax(let error) => error.description()
+        }
+    }
+}

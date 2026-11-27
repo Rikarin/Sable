@@ -4,7 +4,7 @@ module Sable.Serialize.Xml
 // encoding they are in (Appendix F): told by a byte order mark, by the
 // zeros around the first '<', or by the declaration's encoding. UTF-8,
 // UTF-16, US-ASCII and ISO-8859-1 are read; another is an error.
-fn xmlUtf8(_ bytes: U8[>..], _ encoding: inout String) throws(XmlError) -> U8[>..] {
+fn xmlUtf8(_ bytes: U8[>..], _ encoding: inout String, _ origin: inout Int) throws(XmlError) -> U8[>..] {
     let count = bytes.count
     let b0 = count > 0 ? Int(bytes[0]) : 256
     let b1 = count > 1 ? Int(bytes[1]) : 256
@@ -20,7 +20,9 @@ fn xmlUtf8(_ bytes: U8[>..], _ encoding: inout String) throws(XmlError) -> U8[>.
     }
     if b0 == 0xEF && b1 == 0xBB && b2 == 0xBF {
         encoding = "UTF-8"
-        return try xmlCheckedUtf8(bytes[3..<count])
+        try xmlCheckUtf8(bytes[3..<count], 0)
+        origin = 3
+        return bytes
     }
     let declared = xmlLower(xmlDeclaredEncoding(bytes))
     if declared == "iso-8859-1" || declared == "latin1" || declared == "iso_8859-1" {
@@ -47,17 +49,17 @@ fn xmlUtf8(_ bytes: U8[>..], _ encoding: inout String) throws(XmlError) -> U8[>.
         throw XmlError { line: 0, column: 0, reason: "the encoding '\(declared)', which is not read: UTF-8, UTF-16, US-ASCII and ISO-8859-1 are" }
     }
     encoding = "UTF-8"
-    return try xmlCheckedUtf8(bytes[0..<count])
+    try xmlCheckUtf8(bytes[0..<count], 0)
+    return bytes
 }
 
-fn xmlCheckedUtf8(_ bytes: U8[:]) throws(XmlError) -> U8[>..] {
+// An error unless the bytes are well-formed UTF-8; those before them are
+// counted in where it is.
+fn xmlCheckUtf8(_ bytes: U8[:], _ before: Int) throws(XmlError) {
     let bad = Runtime.validateUtf8(bytes: bytes)
     if bad >= 0 {
-        throw XmlError { line: 0, column: 0, reason: "ill-formed UTF-8 at byte \(bad)" }
+        throw XmlError { line: 0, column: 0, reason: "ill-formed UTF-8 at byte \(before + bad)" }
     }
-    var all: U8[>..] = []
-    all.append(contentsOf: bytes)
-    return all
 }
 
 // What `encoding="…"` of the declaration says, or "" (ASCII only).
@@ -131,4 +133,166 @@ fn xmlFromUtf16(_ bytes: U8[>..], bigEndian: Bool, skip: Int) throws(XmlError) -
 
 fn xmlUnit(_ bytes: U8[>..], _ at: Int, _ bigEndian: Bool) -> Int {
     return bigEndian ? Int(bytes[at]) << 8 | Int(bytes[at + 1]) : Int(bytes[at + 1]) << 8 | Int(bytes[at])
+}
+
+// How many of the bytes are whole UTF-8 sequences, those of the last one
+// left out if it is cut short.
+fn xmlUtf8Cut(_ bytes: U8[:]) -> Int {
+    let count = bytes.count
+    var i = count - 1
+    while i >= 0 && i >= count - 3 {
+        let b = bytes[i]
+        if b < 0x80 {
+            return count
+        }
+        if b >= 0xC0 {
+            return i + xmlWidth(b) > count ? i : count
+        }
+        i -= 1
+    }
+    return count
+}
+
+// The bytes of a document as they come, made UTF-8 as xmlUtf8 makes them
+// once there are enough of them to tell their encoding: those not yet made
+// UTF-8 (a character cut short), the encoding, and how many bytes were made
+// UTF-8 before those.
+struct XmlInput {
+    var pending: U8[>..] = []
+    var isDecided: Bool = false
+    // 0 UTF-8, 1 UTF-16BE, 2 UTF-16LE, 3 ISO-8859-1, 4 US-ASCII.
+    var form: Int = 0
+    var encoding: String = "UTF-8"
+    var detected: String = ""
+    var seen: Int = 0
+
+    init() { }
+
+    // The chunk's bytes, as many as are whole characters, appended as UTF-8.
+    mutating fn decode(_ chunk: U8[:], atEnd: Bool, into written: inout U8[>..]) throws(XmlError) {
+        if pending.isEmpty && isDecided && form == 0 {
+            let cut = atEnd ? chunk.count : xmlUtf8Cut(chunk)
+            try xmlCheckUtf8(chunk[0..<cut], seen)
+            written.append(contentsOf: chunk[0..<cut])
+            seen += cut
+            if cut < chunk.count {
+                pending.append(contentsOf: chunk[cut..<chunk.count])
+            }
+            return
+        }
+        pending.append(contentsOf: chunk)
+        if !isDecided && !(try decide(atEnd)) {
+            return
+        }
+        let count = pending.count
+        var used = count
+        if form == 0 {
+            used = atEnd ? count : xmlUtf8Cut(pending[0..<count])
+            try xmlCheckUtf8(pending[0..<used], seen)
+            written.append(contentsOf: pending[0..<used])
+        } else if form <= 2 {
+            let big = form == 1
+            var i = 0
+            while i + 1 < count {
+                var code = xmlUnit(pending, i, big)
+                if code >= 0xD800 && code <= 0xDBFF {
+                    if i + 3 < count {
+                        let low = xmlUnit(pending, i + 2, big)
+                        if low >= 0xDC00 && low <= 0xDFFF {
+                            code = 0x10000 + (code - 0xD800) * 1024 + (low - 0xDC00)
+                            i += 2
+                        }
+                    } else if !atEnd {
+                        break
+                    }
+                }
+                if code >= 0xD800 && code <= 0xDFFF {
+                    throw XmlError { line: 0, column: 0, reason: "ill-formed UTF-16 at byte \(seen + i)" }
+                }
+                xmlAppend(code, to: &written)
+                i += 2
+            }
+            used = i
+            if atEnd && used < count {
+                throw XmlError { line: 0, column: 0, reason: "UTF-16 text of \(seen + count) bytes" }
+            }
+        } else if form == 3 {
+            for byte in pending {
+                xmlAppend(Int(byte), to: &written)
+            }
+        } else {
+            var i = 0
+            while i < count {
+                if pending[i] >= 0x80 {
+                    throw XmlError { line: 0, column: 0, reason: "a byte of \(pending[i]) in US-ASCII text, at \(seen + i)" }
+                }
+                i += 1
+            }
+            written.append(contentsOf: pending[0..<count])
+        }
+        seen += used
+        if used == count {
+            pending.removeAll(keepingCapacity: true)
+        } else {
+            var rest: U8[>..] = []
+            rest.append(contentsOf: pending[used..<count])
+            pending = rest
+        }
+    }
+
+    // Whether there are enough bytes to tell their encoding as xmlUtf8
+    // does (four, and the declaration's end), and it told if there are.
+    mutating fn decide(_ atEnd: Bool) throws(XmlError) -> Bool {
+        let count = pending.count
+        if count < 4 && !atEnd {
+            return false
+        }
+        let b0 = count > 0 ? Int(pending[0]) : 256
+        let b1 = count > 1 ? Int(pending[1]) : 256
+        let b2 = count > 2 ? Int(pending[2]) : 256
+        let b3 = count > 3 ? Int(pending[3]) : 256
+        var skip = 0
+        if b0 == 0xFE && b1 == 0xFF || b0 == 0 && b1 == 0x3C && b2 == 0 && b3 == 0x3F {
+            form = 1
+            encoding = "UTF-16BE"
+            detected = encoding
+            skip = b0 == 0xFE ? 2 : 0
+        } else if b0 == 0xFF && b1 == 0xFE || b0 == 0x3C && b1 == 0 && b2 == 0x3F && b3 == 0 {
+            form = 2
+            encoding = "UTF-16LE"
+            detected = encoding
+            skip = b0 == 0xFF ? 2 : 0
+        } else if b0 == 0xEF && b1 == 0xBB && b2 == 0xBF {
+            detected = "UTF-8"
+            skip = 3
+        } else {
+            if b0 == 0x3C && b1 == 0x3F && !atEnd && count < 512 {
+                var end = 2
+                while end + 1 < count && !(pending[end] == 0x3F && pending[end + 1] == 0x3E) {
+                    end += 1
+                }
+                if end + 1 >= count {
+                    return false
+                }
+            }
+            let declared = xmlLower(xmlDeclaredEncoding(pending))
+            if declared == "iso-8859-1" || declared == "latin1" || declared == "iso_8859-1" {
+                form = 3
+                encoding = "ISO-8859-1"
+            } else if declared == "us-ascii" || declared == "ascii" {
+                form = 4
+                encoding = "US-ASCII"
+            } else if declared != "" && declared != "utf-8" && declared != "utf8" {
+                throw XmlError { line: 0, column: 0, reason: "the encoding '\(declared)', which is not read: UTF-8, UTF-16, US-ASCII and ISO-8859-1 are" }
+            }
+        }
+        isDecided = true
+        if skip > 0 {
+            var rest: U8[>..] = []
+            rest.append(contentsOf: pending[skip..<count])
+            pending = rest
+            seen = skip
+        }
+        return true
+    }
 }

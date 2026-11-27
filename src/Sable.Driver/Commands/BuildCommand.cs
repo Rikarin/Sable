@@ -18,7 +18,8 @@ public class BuildCommand : Command {
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
                sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0|-O1|-O2|-O3|-Os|-Oz] [-g] [--exclusivity=checked|unchecked]
-                                     [--target <triple>] [--sysroot <dir>] [--deny-reflection] [--deny-unsafe] [--vectorize-report]
+                                     [--target <triple>] [--sysroot <dir>] [--runtime minimal|standard|full]
+                                     [--deny-reflection] [--deny-unsafe] [--vectorize-report]
                                      [--profile-generate[=<file>] | --profile-use <file>]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
@@ -46,6 +47,8 @@ public class BuildCommand : Command {
                              x86_64-pc-windows-msvc, wasm32-wasi, ... (default: this one)
           --sysroot <dir>    where the target's C library is (default: $SABLE_HOME/sysroots/<triple>,
                              or for WASI, wasi-sdk's or wasi-libc's where they are installed)
+          --runtime <p>      the runtime profile: minimal, standard or full (the default); what a
+                             smaller one leaves out is an error where the file uses it (S3451)
           --deny-reflection  carry no reflection: Mirror and TypeInfo are errors (S3450), and the
                              runtime's field descriptors have no names
           --deny-unsafe      fail on any 'unsafe' block or 'unsafe fn' in the file (S3472)
@@ -71,6 +74,9 @@ public class BuildCommand : Command {
         /// <summary><c>--deny-unsafe</c> (SYNTAX.md §23).</summary>
         public bool DenyUnsafe { get; init; }
 
+        /// <summary><c>--runtime</c>: the runtime profile (docs/06 §6.1).</summary>
+        public RuntimeProfile Runtime { get; init; } = RuntimeProfile.Full;
+
         /// <summary><c>--profile-generate</c>: the file the program writes its counts to, or "" for the default.</summary>
         public string? ProfileGenerate { get; init; }
 
@@ -78,7 +84,7 @@ public class BuildCommand : Command {
         public string? ProfileUse { get; init; }
 
         /// <summary>What clang is asked for.</summary>
-        public NativeOptions Native => new() { OptLevel = OptLevel, DebugInfo = Debug, Target = Target, Sysroot = Sysroot };
+        public NativeOptions Native => new() { OptLevel = OptLevel, DebugInfo = Debug, Target = Target, Sysroot = Sysroot, Runtime = Runtime };
     }
 
     protected virtual bool TakesProgramArguments => false;
@@ -94,6 +100,7 @@ public class BuildCommand : Command {
         string? sysroot = null;
         var denyReflection = false;
         var denyUnsafe = false;
+        string? runtime = null;
         string? profileGenerate = null;
         string? profileUse = null;
         var arguments = new List<string>();
@@ -109,6 +116,7 @@ public class BuildCommand : Command {
                 case "--emit" when i + 1 < args.Count && !TakesProgramArguments: emit = args[++i]; break;
                 case "--target" when i + 1 < args.Count: triple = args[++i]; break;
                 case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
+                case "--runtime" when i + 1 < args.Count: runtime = args[++i]; break;
                 case "--deny-reflection": denyReflection = true; break;
                 case "--deny-unsafe": denyUnsafe = true; break;
                 case "-O0" or "-O1" or "-O2" or "-O3" or "-Os" or "-Oz": level = args[i][2..]; break;
@@ -141,12 +149,23 @@ public class BuildCommand : Command {
             return null;
         }
 
+        var profile = RuntimeProfile.Full;
+        if (runtime is not null) {
+            if (RuntimeProfiles.Parse(runtime) is not { } parsed) {
+                Console.Error.WriteLine($"sable: --runtime is {RuntimeProfiles.Expected}, not '{runtime}'");
+                return null;
+            }
+
+            profile = parsed;
+        }
+
         // A debug build is unoptimised unless it asks for a level: then the
         // passes run, and the debugger sees what they leave. A vectorisation
         // report is of the optimised build.
         level ??= debug && emit != "vectorize-report" ? "0" : "2";
         return new(input, output, emit, level, debug, exclusivity, arguments) {
             Target = target, Sysroot = sysroot, DenyReflection = denyReflection, DenyUnsafe = denyUnsafe, ProfileGenerate = profileGenerate, ProfileUse = profileUse,
+            Runtime = profile,
         };
     }
 
@@ -191,6 +210,16 @@ public class BuildCommand : Command {
         var tree = SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target));
         if (options.DenyUnsafe && Pipeline.UnsafeDenied([tree]) is { Count: > 0 } denied) {
             Report(denied);
+            return 1;
+        }
+
+        if (Pipeline.RuntimeProfileDenied([tree], options.Runtime) is { Count: > 0 } excluded) {
+            Report(excluded);
+            return 1;
+        }
+
+        if (options.ProfileGenerate is not null && options.Runtime != RuntimeProfile.Full) {
+            Console.Error.WriteLine($"sable: --profile-generate counts calls in the full runtime's call profiles, which the {options.Runtime.Name()} runtime profile leaves out");
             return 1;
         }
 

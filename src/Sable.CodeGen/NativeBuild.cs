@@ -69,8 +69,14 @@ public sealed record NativeOptions {
     /// </summary>
     public string LinkInputs { get; init; } = "";
 
+    /// <summary>
+    ///     The runtime profile (docs/06 §6.1): which parts of the runtime
+    ///     the program links. The full runtime unless asked.
+    /// </summary>
+    public RuntimeProfile Runtime { get; init; } = RuntimeProfile.Full;
+
     /// <summary>The settings as text, every one of them: what a cache of builds made with them is keyed by.</summary>
-    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{NativeBuild.SysrootFor(this)}|{string.Join(' ', LinkArguments)}|{LinkInputs}|{PositionIndependent}";
+    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{NativeBuild.SysrootFor(this)}|{string.Join(' ', LinkArguments)}|{LinkInputs}|{PositionIndependent}{(Runtime == RuntimeProfile.Full ? "" : "|runtime=" + Runtime.Name())}";
 
     /// <summary>
     ///     Compile the program and the runtime as position-independent code,
@@ -348,7 +354,7 @@ public static class NativeBuild {
 
             // The runtime's object, not its archive: an archive in an
             // archive is no member a linker reads.
-            return Archive([program, runtime.Object], outputPath, target);
+            return Archive([program, ..runtime.Objects], outputPath, target);
         } finally {
             directory.Delete(true);
         }
@@ -629,21 +635,61 @@ public static class NativeBuild {
             "flags=" + string.Join(' ', flags),
             "cc=" + CacheKey.Checksum(NativeObjects.CompilerIdentity),
         ]);
-        var objectName = "sable_runtime" + (target.Platform == NativePlatform.Windows ? ".obj" : ".o");
+        var objectSuffix = target.Platform == NativePlatform.Windows ? ".obj" : ".o";
+        var objectName = "sable_runtime" + objectSuffix;
+        // What a smaller profile leaves out, as stubs that trap.
+        var absentName = options.Runtime == RuntimeProfile.Full ? null : "sable_runtime_absent" + objectSuffix;
         var archiveName = LibraryFileName("sable_runtime", LibraryKind.Static, target);
         var (directory, built) = cache.GetOrCreate(key, profile, temporary => {
             var sources = Path.Combine(temporary, "src");
             var objectPath = Path.Combine(temporary, objectName);
-            var (exitCode, output) = Run(CompilerPath, [..flags, WriteRuntime(sources), "-o", objectPath]);
+            var main = WriteRuntime(sources);
+            var (exitCode, output) = Run(CompilerPath, [..flags, main, "-o", objectPath]);
+            if (exitCode == 0 && absentName is not null) {
+                (exitCode, output) = CompileAbsent(options, lto, main, Path.Combine(temporary, absentName));
+            }
+
             Directory.Delete(sources, true);
             if (exitCode != 0) {
                 return new(false, output);
             }
 
-            var archived = Archive([objectPath], Path.Combine(temporary, archiveName), target);
+            var archived = Archive([objectPath, ..absentName is null ? [] : new[] { Path.Combine(temporary, absentName) }], Path.Combine(temporary, archiveName), target);
             return archived.Succeeded ? new(true, output) : archived;
         });
-        return new(Path.Combine(directory, objectName), Path.Combine(directory, archiveName), built);
+        return new([Path.Combine(directory, objectName), ..absentName is null ? [] : new[] { Path.Combine(directory, absentName) }], Path.Combine(directory, archiveName), built);
+    }
+
+    /// <summary>
+    ///     The stubs of what <paramref name="options" />' runtime profile
+    ///     leaves out (<see cref="RuntimeProfiles.AbsentStubs" />), compiled
+    ///     to <paramref name="objectPath" /> as the runtime is. What is left
+    ///     out is what the full runtime compiled for the target defines and
+    ///     the profile's does not: both are compiled to IR, unoptimised, to
+    ///     list them.
+    /// </summary>
+    static (int ExitCode, string Output) CompileAbsent(NativeOptions options, IReadOnlyList<string> lto, string main, string objectPath) {
+        var target = options.TargetOrHost;
+        var directory = Path.GetDirectoryName(objectPath)!;
+        List<string> listing = [..target.ClangFlags, ..SysrootFlags(options), ..PositionIndependentFlags(options), "-S", "-emit-llvm", "-O0"];
+        var fullPath = Path.Combine(directory, "full.ll");
+        var profilePath = Path.Combine(directory, "profile.ll");
+        foreach (var (path, defines) in new[] { (fullPath, Array.Empty<string>()), (profilePath, options.Runtime.Flags()) }) {
+            var listed = Run(CompilerPath, [..listing, ..defines, main, "-o", path]);
+            if (listed.ExitCode != 0) {
+                return listed;
+            }
+        }
+
+        var stubsPath = Path.Combine(directory, "absent.ll");
+        File.WriteAllText(stubsPath, RuntimeProfiles.AbsentStubs(File.ReadAllText(fullPath), File.ReadAllText(profilePath)));
+        File.Delete(fullPath);
+        File.Delete(profilePath);
+        try {
+            return Run(CompilerPath, [..RuntimeFlags(options with { Runtime = RuntimeProfile.Full }, lto), ..target.IrFlags, stubsPath, "-o", objectPath]);
+        } finally {
+            File.Delete(stubsPath);
+        }
     }
 
     /// <summary>
@@ -656,7 +702,7 @@ public static class NativeBuild {
         var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
         return [
             ..options.TargetOrHost.ClangFlags, ..SysrootFlags(options), "-c", level, ..SectionFlags(options.TargetOrHost), ..PositionIndependentFlags(options),
-            ..lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal)),
+            ..lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal)), ..options.Runtime.Flags(),
         ];
     }
 

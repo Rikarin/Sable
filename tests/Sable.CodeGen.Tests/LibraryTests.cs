@@ -1048,6 +1048,48 @@ fn main() {
     }
 
     /// <summary>
+    ///     A subclass of another module's open class may declare a field of
+    ///     the name of one of its superclass's it cannot see: Logger's
+    ///     internal 'kept'. Each is its own class's, in its own place.
+    /// </summary>
+    [Fact]
+    public void ASubclassesFieldIsNotItsSuperclassesHiddenOneOfTheName() {
+        var run = AssertAgree("""
+                module P
+                import Sable.Diagnostics
+
+                final class Box {
+                    var n: Int[>..] = []
+                }
+
+                final class Counting: Logger {
+                    let kept: Box
+
+                    init() {
+                        kept = Box()
+                        super.init("counting")
+                    }
+
+                    override fn log(_ level: Level, _ message: String, _ fields: Field[>..]) {
+                        kept.n.append(message.count)
+                        super.log(level, message, fields)
+                    }
+                }
+
+                @main
+                fn main() {
+                    let log = Counting()
+                    log.keepLines()
+                    log.info("four")
+                    log.warning("three")
+                    print(log.kept.n)
+                    print(log.lines())
+                }
+                """);
+        Assert.Equal("[4, 5]\n[\"INFO counting: four\", \"WARN counting: three\"]\n", run.Stdout);
+    }
+
+    /// <summary>
     ///     Sable.Concurrency over the core's tasks: a channel between a producer
     ///     and a consumer, a task group, and a sleep other tasks run through.
     /// </summary>

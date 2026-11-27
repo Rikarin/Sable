@@ -1479,10 +1479,22 @@ internal sealed class TypeBinder(Compilation compilation) {
         return Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
 
+    /// <summary>
+    ///     A dotted name of a type, as <see cref="BindType" /> binds it, except
+    ///     that a generic type named without its arguments is the generic type
+    ///     itself: the 'Outer.Inner' of 'Outer.Inner.self' and of
+    ///     'extension Outer.Inner', as a bare 'Inner' is.
+    /// </summary>
+    internal TypeSymbol BindDefinition(QualifiedNameSyntax syntax, Symbol context, FileScope? scope) {
+        using var _ = _diagnostics.AnchoredAt(syntax);
+        return BindQualifiedName(syntax, context, scope, bare: true);
+    }
+
     TypeSymbol BindQualifiedName(
         QualifiedNameSyntax syntax,
         Symbol context,
-        FileScope? scope
+        FileScope? scope,
+        bool bare = false
     ) {
         // A dotted name may be a module path, so try the longest module first.
         // An alias the file imported stands for the module it names:
@@ -1516,7 +1528,9 @@ internal sealed class TypeBinder(Compilation compilation) {
 
             compilation.ReportUse(_diagnostics, member, syntax.Right.Span, context, scope);
 
-            return Resolved(syntax.Right, member, ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
+            return bare && IsBare(member, syntax.Right)
+                ? Resolved(syntax.Right, member, (NamedTypeSymbol)member)
+                : Resolved(syntax.Right, member, ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
         }
 
         // Otherwise the left side names a type, and the right a nested one.
@@ -1586,8 +1600,14 @@ internal sealed class TypeBinder(Compilation compilation) {
             );
         }
 
-        return Resolved(syntax.Right, nested, ApplyTypeArguments(nested, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
+        return bare && IsBare(nested, syntax.Right)
+            ? Resolved(syntax.Right, nested, (NamedTypeSymbol)nested)
+            : Resolved(syntax.Right, nested, ApplyTypeArguments(nested, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
     }
+
+    /// <summary>A generic type, named without its arguments.</summary>
+    static bool IsBare(Symbol member, SimpleNameTypeSyntax name) =>
+        name.TypeArgumentList is null && member is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false };
 
     /// <summary>
     ///     A generic name written in an expression, <c>Outcome&lt;Int, E&gt;</c>,
@@ -1727,7 +1747,6 @@ internal sealed class TypeBinder(Compilation compilation) {
                     if (expected == 0) {
                         return named;
                     }
-
                     return Error(
                         ErrorCode.ERR_MissingTypeArguments,
                         span,

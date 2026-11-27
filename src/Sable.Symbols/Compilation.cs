@@ -1945,7 +1945,7 @@ public sealed partial class Compilation {
             SimpleNameTypeSyntax simple =>
                 TypeBinder.Lookup(simple.Identifier.Text, container, scope, simple.Span),
             QualifiedNameSyntax qualified =>
-                (Symbol)TypeBinder.BindType(qualified, container, scope),
+                (Symbol)TypeBinder.BindDefinition(qualified, container, scope),
             _ => null,
         };
 

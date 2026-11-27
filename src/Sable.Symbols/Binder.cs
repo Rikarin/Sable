@@ -2843,11 +2843,14 @@ public sealed partial class Binder {
 
             // A compound type written where an expression goes, which only
             // '.self' follows: the member access turns it into the metatype.
+            // 'Outer.Inner.self' of a generic Inner is the generic type itself.
             TypeExpressionSyntax written => Record(
                 written,
                 new BoundTypeExpression(
                     written,
-                    Sub(_compilation.TypeBinder.BindType(written.Type, _containingSymbol, _scope))
+                    Sub(written is { Type: QualifiedNameSyntax qualified, Parent: MemberAccessExpressionSyntax { Name: IdentifierNameSyntax { Identifier.Text: "self" } } }
+                        ? _compilation.TypeBinder.BindDefinition(qualified, _containingSymbol, _scope)
+                        : _compilation.TypeBinder.BindType(written.Type, _containingSymbol, _scope))
                 )
             ),
 
@@ -3747,6 +3750,12 @@ public sealed partial class Binder {
                 return new BoundFieldAccess(syntax, receiver, field, substitution.Apply(field.Type)) {
                     Substitution = receiver is null && field.IsStatic ? substitution : TypeSubstitution.Empty,
                 };
+
+            // 'Outer.Inner<Int>': a nested generic type, with its arguments.
+            case NamedTypeSymbol type when syntax is MemberAccessExpressionSyntax { Name: GenericNameSyntax generic }: {
+                var named = Sub(_compilation.TypeBinder.BindGenericName(type, generic, _containingSymbol, _scope));
+                return named.IsError ? new BoundError(syntax) : new BoundTypeExpression(syntax, named);
+            }
 
             case NamedTypeSymbol type:
                 return new BoundTypeExpression(syntax, type);

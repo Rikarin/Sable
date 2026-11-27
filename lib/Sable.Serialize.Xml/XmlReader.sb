@@ -839,7 +839,7 @@ public final class XmlReader {
             declared += 1
         }
         scopeCounts.append(declared)
-        if !xmlIsQName(qualified) {
+        if xmlColon(qualified) >= 0 && !xmlIsQName(qualified) {
             throw fail("the name \(qualified), which is not a name with at most one colon", at: nodeStart)
         }
         self.prefix = xmlPrefix(qualified)
@@ -850,7 +850,7 @@ public final class XmlReader {
         namespace = uri
         for i in 0..<names.count {
             let name = names[i]
-            if !xmlIsQName(name) {
+            if xmlColon(name) >= 0 && !xmlIsQName(name) {
                 throw fail("the attribute name \(name), which is not a name with at most one colon")
             }
             let attributePrefix = xmlPrefix(name)

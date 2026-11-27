@@ -1,0 +1,53 @@
+module XmlReadBench
+
+import Sable.Serialize.Xml
+import Sable.Testing
+
+// XML's nodes, with no tree: a document of some megabytes, and the same
+// indented, read a node at a time, the attributes' values taken and the
+// text looked at.
+
+fn read(_ bytes: U8[>..]) throws(XmlError) -> (Int, Int, F64) {
+    let reader = try XmlReader(bytes: bytes)
+    var nodes = 0
+    var sum = 0
+    var price = 0.0
+    while let kind = try reader.next() {
+        nodes += 1
+        if kind == .StartElement && reader.localName == "item" {
+            sum += try! Int.parse(reader.attribute("id")!)
+            price += try! F64.parse(reader.attribute("price")!)
+        } else if kind == .Text {
+            sum += reader.value.utf8Count
+        }
+    }
+    return (nodes, sum, price)
+}
+
+fn document(_ inner: String) -> U8[>..] {
+    var parts: String[>..] = []
+    for i in 0..<20000 {
+        parts.append("\(inner)<item id=\"\(i)\" price=\"\(i % 1000).25\">\(inner)<name>item number \(i)</name>"
+            + "\(inner)<tags><tag>a</tag><tag>b &amp; c</tag></tags>\(inner)<note>a longer text, as a description is</note>\(inner)</item>")
+    }
+    var bytes: U8[>..] = []
+    bytes.append(utf8: "<items>" + parts.joined() + "</items>")
+    return bytes
+}
+
+fn run(_ compact: U8[>..], _ pretty: U8[>..]) throws(XmlError) -> String {
+    var lines: String[>..] = []
+    for _ in 0..<3 {
+        let (nodes, sum, price) = try read(compact)
+        let (others, sums, prices) = try read(pretty)
+        lines.append("\(nodes + others) \(sum + sums) \(price + prices:.2f)")
+    }
+    return lines.joined(separator: "\n")
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let compact = document("")
+    let pretty = document("\n        ")
+    b.check(b.iterate { try! run(compact, pretty) })
+}

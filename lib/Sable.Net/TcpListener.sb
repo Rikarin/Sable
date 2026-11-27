@@ -40,7 +40,10 @@ public final class TcpListener {
     /// An IPv6 listener takes IPv6 connections only, on every system, but
     /// with `dualStack` IPv4 ones too, from mapped addresses. `backlog` is
     /// how many connections wait to be accepted, as far as the system's own
-    /// limit. With `sharePort` several listeners, each saying so, listen on
+    /// limit. On macOS more handshakes at once than `kern.ipc.somaxconn`
+    /// (128 unless raised, as root, with `sysctl`) may have the rest reset
+    /// before any code of the program's could accept them, whatever the
+    /// backlog. With `sharePort` several listeners, each saying so, listen on
     /// one port, and the system divides connections among them (Unsupported
     /// on Windows). A port another listens on is in use, also on Windows;
     /// one that only connections of an earlier listener still close on is

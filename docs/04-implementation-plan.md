@@ -1789,11 +1789,15 @@ object dropped by its spawner while the task ran looked like a race.
   another thread (`Task.blocking`'s), may not touch an actor's state at all
   (S3238).
 - *Calls that would not wait* are rejected, as Swift rejects them (S3237):
-  an actor's isolated member cannot meet a protocol's requirement — code
-  reaching it through a generic or an existential would call straight in —
-  and an isolated method cannot be taken as a value from outside its actor.
-  A `nonisolated` member can do both. (Swift lets an isolated method meet
-  an *async* requirement through a thunk that hops; that is not built.)
+  an actor's isolated member cannot meet a protocol's synchronous
+  requirement — code reaching it through a generic or an existential would
+  call straight in — and an isolated method cannot be taken as a value from
+  outside its actor. A `nonisolated` member can do both. An isolated
+  method does meet an *async* requirement, as in Swift: its caller awaits,
+  and the call hops into the actor where it reaches the method — in the
+  witness of the actor's table, which is outside the actor, and in a
+  generic function specialised for the actor, as any call from outside
+  does (`Crossing`).
 
 **Debugging** — the fourth stage. An async function's resume function
 declares its frame's fields to the debugger as its variables — its
@@ -1825,14 +1829,40 @@ closure. That is the stage-1 extrapolation, measured.
 | a million tasks sleeping 1 s | 1.46 s, 1.07 GB | 1.52 s | 1.93 s, 1.07 GB | 2.41 s, 0.55 GB | 2.27 s, 2.13 GB |
 | fan-out over loopback (50 clients at once, 2000 requests) | 199 µs | 489 µs | 256 µs | 135–747 µs | — |
 
+Spawn+await on ten workers, 1262 ns there against stage 3's 910 ns, was
+measured again on 2026-11-27 beside a build of that commit (22e51965),
+the two runs interleaved, five each, on the same loaded machine (load
+27–32): from main 735–1214 ns then (median 1085), 520–993 ns now (605);
+in a task 566–699 ns then (676), 362–403 ns now (391); and the whole
+process, two million tasks, 7.5 billion instructions then and 4.85 now
+(on one worker 6.0 and 4.0). The executor's work of 2026-11-25 — tasks
+spawned and finished without the tree's lock, fewer wakes, no shared
+counts changed by a worker running tasks — took it; ten workers now cost
+about what one does (588 ns from main), and `sable bench --counters`
+gives 2419 instructions an operation on ten workers to 2031 on one.
+
 The fan-out (`fan-out-http.sb`) is a server task serving each connection
 in a child task — a request read, 512 bytes written — and fifty client
 tasks connecting, asking and reading to the end at once, forty times;
 every wait is on the reactor. Its time per request on loopback swings
 between runs by four or five times, .NET's alike, with the host's load.
-(Fifty: past the listen backlog, 128 on macOS, connections are refused.)
+(Fifty: on macOS, a burst of more handshakes at once than
+`kern.ipc.somaxconn`, 128 unless raised as root, has the rest reset by the
+system, whatever the listener's backlog — measured on macOS 27.2, five
+hundred clients at once with the server's task accepting: 128 connected
+with no pool, 182–500 with one worker and 448–500 with ten, every other
+reset. Connections made one after another, nothing accepting, went past
+it — 900 waited for a backlog of 1024 in a program alone — but not
+reliably: the same three hundred, run beside the other tests of
+Sable.Net, had one reset. Nothing in the process runs early enough to take
+them sooner — with no pool nothing runs during the burst at all — and
+accepting them eagerly in the reactor was written and left out: it took
+descriptors the program had not asked for, to gain no more than a task
+already accepting does. Go's listeners read the same limit.)
 
-Not yet: task-local values. A drop runs no defers of the async functions
+Task-local values are `Sable.Concurrency.TaskLocal` (#57): bound by
+`withValue` on the task's own list, which its children take a reference
+to as they are spawned. A drop runs no defers of the async functions
 dropped, only those of a generator whose object goes with them.
 
 ### Generators, as implemented

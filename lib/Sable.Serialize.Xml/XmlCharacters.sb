@@ -58,6 +58,42 @@ fn xmlIsNameChar(_ c: Int) -> Bool {
     return c == 0xB7 || c >= 0x300 && c <= 0x36F || c == 0x203F || c == 0x2040 || xmlIsNameStart(c)
 }
 
+// NameStartChar and NameChar of an ASCII byte.
+@inline(always)
+fn xmlIsAsciiNameStart(_ b: U8) -> Bool {
+    let letter = b | 0x20
+    return letter >= 0x61 && letter <= 0x7A || b == 0x5F || b == 0x3A
+}
+
+@inline(always)
+fn xmlIsAsciiNameChar(_ b: U8) -> Bool {
+    let letter = b | 0x20
+    return letter >= 0x61 && letter <= 0x7A || b >= 0x30 && b <= 0x3A || b == 0x5F || b == 0x2D || b == 0x2E
+}
+
+// The name table's hash of bytes (djb2's): xmlHash of each in turn, from
+// the seed.
+let xmlHashSeed = 5381
+
+@inline(always)
+fn xmlHash(_ hash: Int, _ b: U8) -> Int {
+    return (hash &* 33) ^ Int(b)
+}
+
+// Whether the count bytes from each place are the same.
+@inline(always)
+fn xmlSame(_ a: U8[>..], _ from: Int, _ b: U8[>..], _ start: Int, _ count: Int) -> Bool {
+    var j = 0
+    while j < count {
+        if a[from + j] != b[start + j] {
+            return false
+        }
+        j += 1
+    }
+    return true
+}
+
+@inline(always)
 fn xmlIsSpace(_ b: U8) -> Bool {
     return b == 0x20 || b == 0x0A || b == 0x09 || b == 0x0D
 }

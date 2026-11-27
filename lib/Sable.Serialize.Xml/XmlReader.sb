@@ -105,6 +105,8 @@ public final class XmlReader {
     var nameSlots: Int[>..] = Int[>..](repeating: -1, count: 64)
     // The open elements' names, by number.
     var openNames: Int[>..] = []
+    // Their namespaces, as each start tag's were resolved.
+    var openNamespaces: String[>..] = []
     var scopePrefixes: String[>..] = []
     var scopeUris: String[>..] = []
     var scopeCounts: Int[>..] = []
@@ -300,12 +302,17 @@ public final class XmlReader {
 
     // The number of the name of those bytes, made one if it is new.
     fn intern(_ source: U8[>..], _ start: Int, _ end: Int) -> Int {
-        var hash = 5381
+        var hash = xmlHashSeed
         var i = start
         while i < end {
-            hash = (hash &* 33) ^ Int(source[i])
+            hash = xmlHash(hash, source[i])
             i += 1
         }
+        return intern(source, start, end, hash: hash)
+    }
+
+    // The same, given the bytes' hash (xmlHash's, from xmlHashSeed).
+    fn intern(_ source: U8[>..], _ start: Int, _ end: Int, hash: Int) -> Int {
         let count = end - start
         var mask = nameSlots.count - 1
         var slot = hash & mask
@@ -316,19 +323,8 @@ public final class XmlReader {
             }
             if nameHash[id] == hash {
                 let from = nameStart[id]
-                if nameStart[id + 1] - from == count {
-                    var same = true
-                    var j = 0
-                    while j < count {
-                        if namePool[from + j] != source[start + j] {
-                            same = false
-                            break
-                        }
-                        j += 1
-                    }
-                    if same {
-                        return id
-                    }
+                if nameStart[id + 1] - from == count && xmlSame(namePool, from, source, start, count) {
+                    return id
                 }
             }
             slot = (slot + 1) & mask
@@ -574,10 +570,75 @@ public final class XmlReader {
 
     fn space() -> Bool {
         let start = at
-        while at < bytes.count && xmlIsSpace(bytes[at]) {
-            at += 1
-        }
+        at = spaceEnd(start)
         return at > start
+    }
+
+    // Where the runs the reader scans for end: each reads the bytes where
+    // they are, with an index of its own, not the reader's. The white
+    // space from there:
+    fn spaceEnd(_ from: Int) -> Int {
+        var i = from
+        while i < bytes.count && xmlIsSpace(bytes[i]) {
+            i += 1
+        }
+        return i
+    }
+
+    // Plain text, tabs and newlines among it: up to markup, a reference,
+    // ']', another control character or 0xEF (which may start a
+    // noncharacter).
+    fn textEnd(_ from: Int) -> Int {
+        var i = from
+        while i < bytes.count {
+            let c = bytes[i]
+            if c < 0x20 ? c != 0x0A && c != 0x09 : c == 0x3C || c == 0x26 || c == 0x5D || c == 0xEF {
+                break
+            }
+            i += 1
+        }
+        return i
+    }
+
+    // Plain ASCII of an attribute's value: up to its quote, a reference,
+    // '<', white space or a control character.
+    fn valueEnd(_ from: Int, _ quote: Int) -> Int {
+        var i = from
+        while i < bytes.count {
+            let c = bytes[i]
+            if c < 0x21 || c >= 0x80 || Int(c) == quote || c == 0x26 || c == 0x3C {
+                break
+            }
+            i += 1
+        }
+        return i
+    }
+
+    // A Name (§2.3), and its hash, hashed as it is read.
+    fn nameEnd(_ start: Int) -> (Int, Int) {
+        var i = start
+        var hash = xmlHashSeed
+        while i < bytes.count {
+            let b = bytes[i]
+            if b < 0x80 {
+                if !xmlIsAsciiNameChar(b) || i == start && !xmlIsAsciiNameStart(b) {
+                    break
+                }
+                hash = xmlHash(hash, b)
+                i += 1
+            } else {
+                let c = xmlCode(bytes, i)
+                if !xmlIsNameChar(c) || i == start && !xmlIsNameStart(c) {
+                    break
+                }
+                let end = i + xmlWidth(b)
+                while i < end {
+                    hash = xmlHash(hash, bytes[i])
+                    i += 1
+                }
+            }
+        }
+        return (i, hash)
     }
 
     fn requireSpace(_ what: String) throws(XmlError) {
@@ -589,25 +650,29 @@ public final class XmlReader {
     // A Name (§2.3), by its number in the name table.
     fn readName() throws(XmlError) -> Int {
         let start = at
-        while at < bytes.count {
-            let b = bytes[at]
-            if b < 0x80 {
-                if !xmlIsNameChar(Int(b)) || at == start && !xmlIsNameStart(Int(b)) {
-                    break
-                }
-                at += 1
-            } else {
-                let c = xmlCode(bytes, at)
-                if !xmlIsNameChar(c) || at == start && !xmlIsNameStart(c) {
-                    break
-                }
-                at += xmlWidth(b)
-            }
-        }
-        if at == start {
+        let (end, hash) = nameEnd(start)
+        at = end
+        if end == start {
             throw fail(peek(0) < 0 ? "the text ends where a name is wanted" : "a name is wanted here")
         }
-        return intern(bytes, start, at)
+        return intern(bytes, start, end, hash: hash)
+    }
+
+    // Whether the bytes there are the name's, and no more of a name
+    // follows: an end tag's name is the open element's, most of the time,
+    // and is then neither hashed nor looked up.
+    fn startsWithName(_ id: Int) -> Bool {
+        let from = nameStart[id]
+        let count = nameStart[id + 1] - from
+        let end = at + count
+        if end >= bytes.count {
+            return false
+        }
+        let next = bytes[end]
+        if next >= 0x80 || xmlIsAsciiNameChar(next) {
+            return false
+        }
+        return xmlSame(namePool, from, bytes, at, count)
     }
 
     fn readNameText() throws(XmlError) -> String {
@@ -804,25 +869,19 @@ public final class XmlReader {
             if b == 0x5D && peek(1) == 0x5D && peek(2) == 0x3E {
                 throw fail("']]>' in text")
             }
-            if white && !xmlIsSpace(b) {
-                white = false
-            }
-            if b >= 0x20 && b != 0xEF {
-                // A run of plain bytes at once.
+            if b >= 0x20 && b != 0xEF || b == 0x0A || b == 0x09 {
+                // A run of plain bytes at once, tabs and newlines among
+                // them.
                 let run = at
-                at += 1
-                while at < bytes.count {
-                    let c = bytes[at]
-                    if c < 0x20 || c == 0x3C || c == 0x26 || c == 0x5D || c == 0xEF {
-                        break
-                    }
-                    if white && c != 0x20 {
-                        white = false
-                    }
-                    at += 1
+                at = textEnd(run + 1)
+                if white {
+                    white = spaceEnd(run) >= at
                 }
                 buffer.append(contentsOf: bytes[run..<at])
                 continue
+            }
+            if white && !xmlIsSpace(b) {
+                white = false
             }
             try character(&buffer)
         }
@@ -1092,7 +1151,9 @@ public final class XmlReader {
         isBuffered = false
         state = 1
         openNames.append(qualified)
+        openNamespaces.append("")
         try resolve(qualified, count)
+        openNamespaces[openNamespaces.count - 1] = namespace
         isEmptyElement = empty
         pendingEnd = empty
     }
@@ -1164,6 +1225,17 @@ public final class XmlReader {
     }
 
     fn lookup(_ p: String) -> String? {
+        if p.isEmpty {
+            // No prefix, most of the time: the default namespace.
+            var i = scopePrefixes.count - 1
+            while i >= 0 {
+                if scopePrefixes[i].isEmpty {
+                    return scopeUris[i]
+                }
+                i -= 1
+            }
+            return ""
+        }
         if p == "xml" {
             return xmlNamespaceXml
         }
@@ -1310,14 +1382,7 @@ public final class XmlReader {
             if b >= 0x20 && b < 0x80 && Int(b) != quote && b != 0x26 {
                 // A run of plain ASCII at once.
                 let run = at
-                at += 1
-                while at < bytes.count {
-                    let c = bytes[at]
-                    if c < 0x21 || c >= 0x80 || Int(c) == quote || c == 0x26 || c == 0x3C {
-                        break
-                    }
-                    at += 1
-                }
+                at = valueEnd(run + 1, quote)
                 into.append(contentsOf: bytes[run..<at])
                 continue
             }
@@ -1327,7 +1392,13 @@ public final class XmlReader {
 
     fn endTag() throws(XmlError) {
         at += 2
-        let name = try readName()
+        var name = -1
+        if !openNames.isEmpty && startsWithName(openNames[openNames.count - 1]) {
+            name = openNames[openNames.count - 1]
+            at += nameStart[name + 1] - nameStart[name]
+        } else {
+            name = try readName()
+        }
         _ = space()
         try expect(0x3E, "'>' to end the end tag")
         if openNames.isEmpty {
@@ -1345,12 +1416,13 @@ public final class XmlReader {
 
     fn endElement() {
         let qualified = openNames.removeLast()
+        let uri = openNamespaces.removeLast()
         mark(.EndElement, value: "")
         name = nameText[qualified]
         if options.namespaces {
             self.prefix = namePrefix[qualified]
             localName = nameLocal[qualified]
-            namespace = lookup(self.prefix) ?? ""
+            namespace = uri
         } else {
             localName = name
         }

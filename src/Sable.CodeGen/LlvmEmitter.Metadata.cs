@@ -278,37 +278,40 @@ public sealed partial class LlvmEmitter {
             _ => throw new NotSupportedException($"no shape for {type}"),
         };
         var names = $"@\"sable.shape.parts.{Mangled(type)}\"";
-        var listed = string.Join(", ", parts.Select(p => $"ptr {TrapMessage(p)}").ToList());
         var written = TrapMessage(DeclaredName(type));
-        _globals.Append($"{names} = {SharedLinkage} constant [{parts.Count} x ptr] [{listed}]{Comdat(names, SharedLinkage)}\n");
+        var (namesType, listed) = RefArray(names, parts.Select(TrapMessage).ToList());
+        _globals.Append($"{names} = {SharedLinkage} constant {namesType} {listed}{Comdat(names, SharedLinkage)}\n");
 
         // The labels of a union's cases' payloads, for a debugger to show.
         var labels = "null";
         if (type is EnumType { PayloadLabels.Count: > 0 } labelled) {
             labels = $"@\"sable.shape.labels.{Mangled(type)}\"";
-            var each = labelled.Cases.Select(c => labelled.PayloadLabels.TryGetValue(c.Name, out var of) ? $"ptr {TrapMessage(string.Join(", ", of))}" : "ptr null").ToList();
-            _globals.Append($"{labels} = {SharedLinkage} constant [{each.Count} x ptr] [{string.Join(", ", each)}]{Comdat(labels, SharedLinkage)}\n");
+            var (labelsType, each) = RefArray(labels, labelled.Cases.Select(c => labelled.PayloadLabels.TryGetValue(c.Name, out var of) ? TrapMessage(string.Join(", ", of)) : "null").ToList());
+            _globals.Append($"{labels} = {SharedLinkage} constant {labelsType} {each}{Comdat(labels, SharedLinkage)}\n");
         }
 
         // Those that always hold, then the conditional ones.
         var conditional = type.ConditionalConformances;
         var always = type.Conformances.Where(p => !conditional.Exists(c => c.Protocol == p)).Select(p => (Protocol: p, Requirements: ImmutableArray<(int Argument, string Protocol)>.Empty));
+        var held = always.Concat(conditional).ToList();
+        var conformances = held.Count == 0 ? "null" : $"@\"sable.shape.conformances.{Mangled(type)}\"";
+        var conformanceType = $"{{ {RefType}, i64, {RefType} }}";
+        var requirementType = $"{{ i64, {RefType} }}";
         var records = new List<string>();
-        foreach (var (protocol, requirements) in always.Concat(conditional)) {
+        foreach (var (protocol, requirements) in held) {
             var required = "null";
             if (requirements.Length > 0) {
                 required = $"@\"sable.shape.requires.{Mangled(type)}.{records.Count}\"";
-                var each = string.Join(", ", requirements.Select(r => $"{{ i64, ptr }} {{ i64 {r.Argument}, ptr {ProtocolDescriptor(r.Protocol)} }}"));
-                _globals.Append($"{required} = {SharedLinkage} constant [{requirements.Length} x {{ i64, ptr }}] [{each}]{Comdat(required, SharedLinkage)}\n");
+                var each = string.Join(", ", requirements.Select((r, i) => $"{requirementType} {{ i64 {r.Argument}, {Ref(ProtocolDescriptor(r.Protocol), ElementOf(requirementType, requirements.Length, required, i, 1))} }}"));
+                _globals.Append($"{required} = {SharedLinkage} constant [{requirements.Length} x {requirementType}] [{each}]{Comdat(required, SharedLinkage)}\n");
             }
 
-            records.Add($"{{ ptr, i64, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, i64 {requirements.Length}, ptr {required} }}");
+            var at = records.Count;
+            records.Add($"{conformanceType} {{ {Ref(ProtocolDescriptor(protocol), ElementOf(conformanceType, held.Count, conformances, at, 0))}, i64 {requirements.Length}, {Ref(required, ElementOf(conformanceType, held.Count, conformances, at, 2))} }}");
         }
 
-        var conformances = "null";
         if (records.Count > 0) {
-            conformances = $"@\"sable.shape.conformances.{Mangled(type)}\"";
-            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
+            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {conformanceType}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
         // A class's, in a hierarchy: its vtable, and what gives its superclass's metadata from its own.
@@ -328,8 +331,10 @@ public sealed partial class LlvmEmitter {
             }
         }
 
-        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr, ptr, i64, ptr, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
-            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances}, ptr {labels}, i64 {slots}, ptr {vtable}, ptr {superclass} }}{Comdat(name, SharedLinkage)}\n");
+        var shapeType = $"{{ i64, i64, {RefType}, {RefType}, i64, i64, {RefType}, {RefType}, i64, {RefType}, ptr }}";
+        _globals.Append($"{name} = {SharedLinkage} constant {shapeType} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, {Ref(names, FieldOf(shapeType, name, 2))}, ")
+            .Append($"{Ref(written, FieldOf(shapeType, name, 3))}, i64 {type.TypeArguments.Length}, i64 {records.Count}, {Ref(conformances, FieldOf(shapeType, name, 6))}, {Ref(labels, FieldOf(shapeType, name, 7))}, ")
+            .Append($"i64 {slots}, {Ref(vtable, FieldOf(shapeType, name, 9))}, ptr {superclass} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -520,19 +525,23 @@ public sealed partial class LlvmEmitter {
             return null;
         }
 
+        const string list = "@\"sable.structural\"";
+        var recordType = $"{{ {RefType}, {RefType}, i64, i64, {RefType} }}";
+        var count = module.StructuralConformances.Count;
         var records = new List<string>();
         foreach (var (kind, protocol, requirements) in module.StructuralConformances) {
             var required = "null";
             if (!requirements.IsEmpty) {
                 required = $"@\"sable.structural.{records.Count}\"";
-                var each = string.Join(", ", requirements.Select(r => $"ptr {ProtocolDescriptor(r)}"));
-                _globals.Append($"{required} = internal constant [{requirements.Length} x ptr] [{each}]\n");
+                var (requiredType, each) = RefArray(required, requirements.Select(ProtocolDescriptor).ToList());
+                _globals.Append($"{required} = internal constant {requiredType} {each}\n");
             }
 
-            records.Add($"{{ {RefType}, {RefType}, i64, i64, ptr }} {{ {Ref(ProtocolDescriptor(protocol), ElementOf($"{{ {RefType}, {RefType}, i64, i64, ptr }}", module.StructuralConformances.Count, "@\"sable.structural\"", records.Count, 0))}, {NullRef}, i64 {(int)kind}, i64 {requirements.Length}, ptr {required} }}");
+            var at = records.Count;
+            records.Add($"{recordType} {{ {Ref(ProtocolDescriptor(protocol), ElementOf(recordType, count, list, at, 0))}, {NullRef}, i64 {(int)kind}, i64 {requirements.Length}, {Ref(required, ElementOf(recordType, count, list, at, 4))} }}");
         }
 
-        _globals.Append($"@\"sable.structural\" = internal constant [{records.Count} x {{ {RefType}, {RefType}, i64, i64, ptr }}] [{string.Join(", ", records)}]\n");
+        _globals.Append($"{list} = internal constant [{records.Count} x {recordType}] [{string.Join(", ", records)}]\n");
         _helpers.Append($"define internal void @\"sable.structural.register\"() {{\nentry:\n  call void @sable_register_structural(ptr @\"sable.structural\", i64 {records.Count})\n  ret void\n}}\n\n");
         return "@\"sable.structural.register\"";
     }

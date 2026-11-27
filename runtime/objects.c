@@ -458,7 +458,7 @@ typedef struct SableStructuralConformance {
     SableConformance record; // its witnesses null: a table registered, or a template's
     int64_t kind;
     int64_t requirement_count; // of each type argument
-    const SableProtocol *const *requirements;
+    SableRef requirements;     // SableRef[]: each const SableProtocol *
 } SableStructuralConformance;
 
 static struct {
@@ -496,7 +496,7 @@ static const SableConformance *structural_conformance(const SableTypeMetadata *t
             bool holds = true;
             for (int64_t k = 0; k < each->requirement_count && holds; k++) {
                 for (int64_t m = 0; m < (is_union ? type->argument_count : 1) && holds; m++) {
-                    holds = sable_type_conformance(type_argument(type, m), each->requirements[k]) != NULL;
+                    holds = sable_type_conformance(type_argument(type, m), sable_ref((const SableRef *)SABLE_REF(each->requirements) + k)) != NULL;
                 }
             }
 

@@ -909,30 +909,47 @@ const SableWitnessTable *sable_witness_table_cached(SableWitnessCacheEntry **cac
 // hold: 'extension Box: P where T: P' requires argument 0 conform to P.
 typedef struct SableShapeRequirement {
     int64_t argument;
-    const SableProtocol *protocol;
+    SableRef protocol; // const SableProtocol *
 } SableShapeRequirement;
 
 // A conformance a generic type's declaration has: one that always holds
 // (no requirements), or one that holds where its arguments meet them.
 typedef struct SableShapeConformance {
-    const SableProtocol *protocol;
+    SableRef protocol; // const SableProtocol *
     int64_t requirement_count;
-    const SableShapeRequirement *requirements;
+    SableRef requirements; // const SableShapeRequirement *
 } SableShapeConformance;
 
+// Its pointers to data are SableRefs, as the metadata's are; what it points
+// to code with — its vtable's slots, its superclass's accessor — is absolute.
 typedef struct SableAggregateShape {
-    int64_t kind;                  // SABLE_KIND_OPTIONAL, _ENUM, _UNION or _STRUCT
-    int64_t part_count;            // its cases or fields
-    const char *const *part_names; // each case's or field's name
-    const char *name;              // a generic type's, without its arguments: 'Sable.Core.Outcome'
-    int64_t argument_count;        // its type arguments, whose metadata follows the parts'
-    int64_t conformance_count;     // what its declaration conforms it to
-    const SableShapeConformance *conformances;
-    const char *const *part_labels; // each case's payload's labels, 'width, height', or null; null for a type with none
-    int64_t vtable_count;           // a class's, in a hierarchy: its methods, in the convention of their slots
-    void *const *vtable;
+    int64_t kind;              // SABLE_KIND_OPTIONAL, _ENUM, _UNION or _STRUCT
+    int64_t part_count;        // its cases or fields
+    SableRef part_names;       // SableRef[]: each case's or field's name, a const char *
+    SableRef name;             // const char *: a generic type's, without its arguments: 'Sable.Core.Outcome'
+    int64_t argument_count;    // its type arguments, whose metadata follows the parts'
+    int64_t conformance_count; // what its declaration conforms it to
+    SableRef conformances;     // const SableShapeConformance *
+    SableRef part_labels;      // SableRef[]: each case's payload's labels, 'width, height', or null; null for a type with none
+    int64_t vtable_count;      // a class's, in a hierarchy: its methods, in the convention of their slots
+    SableRef vtable;           // void *const *
     const SableTypeMetadata *(*superclass)(const SableTypeMetadata *self); // and its superclass's metadata from its own; null for none
 } SableAggregateShape;
+
+// The shape's pointers, read (SableRef).
+static inline const char *shape_name(const SableAggregateShape *shape) {
+    return SABLE_REF(shape->name);
+}
+
+static inline const char *shape_part_name(const SableAggregateShape *shape, int64_t index) {
+    return sable_ref((const SableRef *)SABLE_REF(shape->part_names) + index);
+}
+
+// Case 'index''s payload's labels, or null.
+static inline const char *shape_part_labels(const SableAggregateShape *shape, int64_t index) {
+    const SableRef *labels = SABLE_REF(shape->part_labels);
+    return labels == NULL ? NULL : sable_ref(labels + index);
+}
 
 // The conformance records of an instance of a generic type made at run time
 // (#297): each its declaration has that holds for these arguments — a
@@ -951,16 +968,16 @@ static void instance_conformances(SableTypeMetadata *type, const SableAggregateS
 
     int64_t count = 0;
     for (int64_t i = 0; i < shape->conformance_count; i++) {
-        const SableShapeConformance *conformance = &shape->conformances[i];
+        const SableShapeConformance *conformance = (const SableShapeConformance *)SABLE_REF(shape->conformances) + i;
         bool holds = true;
         for (int64_t j = 0; j < conformance->requirement_count && holds; j++) {
-            const SableShapeRequirement *requirement = &conformance->requirements[j];
+            const SableShapeRequirement *requirement = (const SableShapeRequirement *)SABLE_REF(conformance->requirements) + j;
             holds = requirement->argument < type->argument_count
-                    && sable_type_conformance(type_argument(type, requirement->argument), requirement->protocol) != NULL;
+                    && sable_type_conformance(type_argument(type, requirement->argument), SABLE_REF(requirement->protocol)) != NULL;
         }
 
         if (holds) {
-            sable_set_ref(&records[count].protocol, conformance->protocol);
+            sable_set_ref(&records[count].protocol, SABLE_REF(conformance->protocol));
             count++;
         }
     }
@@ -1224,16 +1241,16 @@ static char *aggregate_name(const SableAggregateInstance *made) {
     }
 
     if (shape->argument_count == 0) {
-        return joined_name(shape->name, 0, made->parts, "");
+        return joined_name(shape_name(shape), 0, made->parts, "");
     }
 
-    size_t base = strlen(shape->name);
+    size_t base = strlen(shape_name(shape));
     char *before = malloc(base + 2);
     if (before == NULL) {
         sable_trap("out of memory");
     }
 
-    memcpy(before, shape->name, base);
+    memcpy(before, shape_name(shape), base);
     before[base] = '<';
     before[base + 1] = 0;
     char *name = joined_name(before, shape->argument_count, made->parts + made->part_count, ">");
@@ -1379,8 +1396,9 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
         fields[i].kind = parts[i] == NULL || (parts[i]->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA : SABLE_FIELD_AGGREGATE;
         if (enumeration) {
             fields[i].offset = made->payload_offset;
-            if (shape != NULL && shape->part_labels != NULL && shape->part_labels[i] != NULL && parts[i] != NULL) {
-                const char *labelled = labelled_name(shape->part_labels[i], parts[i]);
+            const char *labels = shape == NULL ? NULL : shape_part_labels(shape, i);
+            if (labels != NULL && parts[i] != NULL) {
+                const char *labelled = labelled_name(labels, parts[i]);
                 if (labelled != NULL) {
                     sable_set_ref(&fields[i].type_name, labelled);
                 }
@@ -1388,7 +1406,7 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
         }
 
         if (shape != NULL) {
-            sable_set_ref(&fields[i].name, shape->part_names[i]);
+            sable_set_ref(&fields[i].name, shape_part_name(shape, i));
             continue;
         }
 
@@ -1474,8 +1492,9 @@ static const SableTypeMetadata *structural_union_made(const SableTypeMetadata *c
 
     shape->kind = SABLE_KIND_UNION;
     shape->part_count = count;
-    shape->part_names = names;
-    shape->name = name;
+    sable_set_ref(&shape->part_names, sable_ref_array((const void *const *)names, count));
+    free(names);
+    sable_set_ref(&shape->name, name);
     SableAggregateInstance *instance = aggregate_make(shape, count, kept);
     instance->type.flags |= SABLE_TYPE_STRUCTURAL;
     instance->type.argument_count = count;
@@ -1568,7 +1587,7 @@ void sable_register_generic_class(const SableAggregateShape *shape, const SableT
 }
 
 static bool same_shape(const SableAggregateShape *a, const SableAggregateShape *b) {
-    return a == b || (a->name != NULL && b->name != NULL && strcmp(a->name, b->name) == 0 && a->argument_count == b->argument_count);
+    return a == b || (shape_name(a) != NULL && shape_name(b) != NULL && strcmp(shape_name(a), shape_name(b)) == 0 && a->argument_count == b->argument_count);
 }
 
 // Whether the class's metadata has these type arguments: the same records,
@@ -1627,11 +1646,11 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     made->parts = kept;
     made->fields = fields;
     if (shape->vtable_count > 0) {
-        memcpy(&made->object + 1, shape->vtable, (size_t)shape->vtable_count * sizeof(void *));
+        memcpy(&made->object + 1, SABLE_REF(shape->vtable), (size_t)shape->vtable_count * sizeof(void *));
     }
 
     for (int64_t i = 0; i < generic_deinit_count && made->deinit == NULL; i++) {
-        if (strcmp(generic_deinits[i].name, shape->name) == 0) {
+        if (strcmp(generic_deinits[i].name, shape_name(shape)) == 0) {
             made->deinit = generic_deinits[i].deinit;
         }
     }
@@ -1642,7 +1661,7 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
         const SableTypeMetadata *part = kept[i];
         int64_t part_align = part->alignment < 1 ? 1 : part->alignment;
         int64_t at = round_up(end, part_align);
-        sable_set_ref(&fields[i].name, shape->part_names[i]);
+        sable_set_ref(&fields[i].name, shape_part_name(shape, i));
         sable_set_ref(&fields[i].type_name, name_of(part));
         fields[i].offset = at;
         fields[i].kind = (part->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA
@@ -1665,16 +1684,16 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     sable_set_ref(&type->object, &made->object);
     instance_conformances(type, shape);
 
-    size_t base = strlen(shape->name);
+    size_t base = strlen(shape_name(shape));
     char *before = malloc(base + 2);
     if (before == NULL) {
         sable_trap("out of memory");
     }
 
-    memcpy(before, shape->name, base);
+    memcpy(before, shape_name(shape), base);
     before[base] = '<';
     before[base + 1] = 0;
-    sable_set_ref(&type->name, shape->argument_count == 0 ? shape->name : joined_name(before, shape->argument_count, kept + field_count, ">"));
+    sable_set_ref(&type->name, shape->argument_count == 0 ? shape_name(shape) : joined_name(before, shape->argument_count, kept + field_count, ">"));
     free(before);
 
     SableMetadata *object = &made->object;
@@ -1762,8 +1781,26 @@ const SableTypeMetadata *sable_object_ancestor(const void *object, const char *n
 // out as a compiled box is, its one field the value and its one type argument
 // the type, so that what it holds is found as any box's is.
 static void *box_made(void *value, const SableTypeMetadata *type) {
-    static const char *const names[] = {"value"};
-    static const SableAggregateShape shape = {SABLE_KIND_CLASS, 1, names, "any$box$of", 1, 0, NULL, NULL};
+    // Its shape's pointers are SableRefs, which C cannot write as constants: made once, here.
+    static SableAggregateShape shape;
+    static SableRef names[1];
+    static SpinLock shape_lock;
+    static bool shape_made;
+    if (!__atomic_load_n(&shape_made, __ATOMIC_ACQUIRE)) {
+        spin_lock(&shape_lock);
+        if (!shape_made) {
+            sable_set_ref(&names[0], "value");
+            shape.kind = SABLE_KIND_CLASS;
+            shape.part_count = 1;
+            sable_set_ref(&shape.part_names, names);
+            sable_set_ref(&shape.name, "any$box$of");
+            shape.argument_count = 1;
+            __atomic_store_n(&shape_made, true, __ATOMIC_RELEASE);
+        }
+
+        spin_unlock(&shape_lock);
+    }
+
     void *cache = NULL;
     const SableTypeMetadata *parts[] = {type, type};
     const SableTypeMetadata *made = sable_class_type(&cache, &shape, parts);

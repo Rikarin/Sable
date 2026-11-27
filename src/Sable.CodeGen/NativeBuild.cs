@@ -501,13 +501,15 @@ public static class NativeBuild {
     /// <param name="namesFrames">
     ///     An unoptimised build, whose trap's backtrace names every frame.
     ///     A whole program's functions are internal, which the symbol table
-    ///     a backtrace reads on Linux (the dynamic one) and Windows (a PDB's
-    ///     public symbols) leaves out: there they are kept external. Nothing
-    ///     else links with the program, so no name can clash.
+    ///     a backtrace reads on Windows (a PDB's public symbols) leaves out:
+    ///     there they are kept external. Nothing else links with the program,
+    ///     so no name can clash. On Linux a backtrace reads the .symtab, local
+    ///     symbols and all, so they stay internal — and a profile's
+    ///     <c>strip = "local"</c> discards them (#300), as on macOS.
     /// </param>
     /// <param name="extraAttributes">More attributes for every function.</param>
     public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false, string? extraAttributes = null) {
-        if (namesFrames && target.Platform is NativePlatform.Linux or NativePlatform.Windows) {
+        if (namesFrames && target.Platform is NativePlatform.Windows) {
             llvmIr = llvmIr.Replace("\ndefine internal ", "\ndefine ", StringComparison.Ordinal);
         }
 

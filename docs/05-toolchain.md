@@ -1407,10 +1407,25 @@ Each step on its own, unspecialised: hidden symbols took `__LINKEDIT` from
 export trie and the chained fixups' import table all but go); the
 substitutions took the string table from 559,496 to 390,528 bytes (30%;
 19% specialised, whose names are mostly the program's); relative pointers
-took the rebases from 9,808 to 5,429 (44%; specialised 862 to 571), of
-which what is left is pointers to code — witnesses, vtables, value
-witnesses — and the records the compiler gives only the runtime to build
-from (shapes, the structural list).
+took the rebases from 9,808 to 5,429 (44%; specialised 862 to 571).
+
+Shapes and the structural list relative too (the records the compiler
+gives only the runtime to build from), measured later on the same file,
+whose program had grown meanwhile:
+
+| | Before, specialised | After, specialised | Before, unspecialised | After, unspecialised |
+|---|---:|---:|---:|---:|
+| fixups | 776 | 691 | 6,057 | 4,851 |
+| of which binds | 116 | 116 | 135 | 135 |
+| `__LINKEDIT` | 109,024 B | 109,024 B | 660,528 B | 660,704 B |
+| chained fixups (`LC_DYLD_CHAINED_FIXUPS`) | 1,816 B | 1,816 B | 2,144 B | 2,136 B |
+| `__DATA_CONST` | 114,688 B | 114,688 B | 442,368 B | 409,600 B |
+
+The fixups go (20% unspecialised, 11% specialised), and with them a
+shape's records from `__DATA_CONST` to read-only text; `__LINKEDIT` all
+but stays, since a chained fixup is kept in the pointer it fixes, not
+there. What is left is pointers
+to code — witnesses, vtables, value witnesses, accessors.
 
 `strip = "local"`, measured on `examples/ssg` as a package's dev build,
 whose debug map — the entries by which the debugger finds the objects'

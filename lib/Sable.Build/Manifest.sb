@@ -65,6 +65,13 @@ public fn renderManifest(_ p: Package) -> String {
     for settings in p.targetSettings {
         w.table("targets." + quoteKey(settings.triple))
         w.raw("reflection", settings.reflection ? "true" : "false")
+        if let runtime = settings.runtime {
+            match runtime {
+                case .minimal  => w.string("runtime", "minimal")
+                case .standard => w.string("runtime", "standard")
+                case .full     => w.string("runtime", "full")
+            }
+        }
     }
 
     if !p.generatorInputs.isEmpty {

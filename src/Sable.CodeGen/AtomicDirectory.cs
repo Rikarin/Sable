@@ -1,7 +1,11 @@
 namespace Sable.CodeGen;
 
-/// <summary>The runtime compiled for one set of options: its object, the archive of it, and how compiling them went.</summary>
-public sealed record RuntimeBuild(string Object, string Archive, NativeBuildResult Result);
+/// <summary>
+///     The runtime compiled for one set of options: its objects (the
+///     runtime's, and the stubs of what a smaller profile leaves out), the
+///     archive of them, and how compiling them went.
+/// </summary>
+public sealed record RuntimeBuild(IReadOnlyList<string> Objects, string Archive, NativeBuildResult Result);
 
 /// <summary>
 ///     A directory of build products that is there whole or not at all, so

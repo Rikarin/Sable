@@ -2221,10 +2221,10 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 Deferred: workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about). Removed
-from the format, as errors: `[reflect]` (what is reflected on is said in
-code, `@reflectable` or `extension T: Reflectable {}`) and `[targets]`'s
-`runtime` (there are no runtime profiles; its `reflection = false` is
-built). Profiles of a package's own (`[profile.<name>]` with `inherits`,
+from the format, as an error: `[reflect]` (what is reflected on is said in
+code, `@reflectable` or `extension T: Reflectable {}`). `[targets]`'s
+`reflection = false` and `runtime` (the runtime profile, docs/06 §6.1) are
+built. Profiles of a package's own (`[profile.<name>]` with `inherits`,
 `--profile <name>`, output in `target/<name>/`) are built, as are
 `package.readme`, `keywords` (in the index, searched), `include`/`exclude`
 (globs of what is published) and `publish = false`; `categories`,

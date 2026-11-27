@@ -262,6 +262,7 @@ public enum ErrorCode {
 
     // ---- Reflection and the runtime's profiles (S3450-S3459) ---------------
     ERR_ReflectionDenied = 3450,
+    ERR_RuntimeProfileExcludes = 3451,
 
     // ---- Memory (S3460-S3469): what ARC cannot free.
     WRN_StrongReferenceCycle = 3460,

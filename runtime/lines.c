@@ -88,15 +88,6 @@ static void line_skip(LineCursor *cursor, uint64_t size) {
     }
 }
 
-// A NUL-terminated string in a section, or NULL past its end.
-static const char *line_string_at(const uint8_t *section, size_t size, uint64_t offset) {
-    if (section == NULL || offset >= size || memchr(section + offset, 0, size - offset) == NULL) {
-        return NULL;
-    }
-
-    return (const char *)section + offset;
-}
-
 // DWARF's names for what a header's entries hold, and how.
 enum {
     LNCT_PATH = 1,

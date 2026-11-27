@@ -629,15 +629,15 @@ values.
 
 - Workspace inheritance in `package.sb` and `workspace.sb`: `shared` and
   `.workspace` (§5.2.3); `sable.toml` has it.
-- Runtime profiles (docs/06 §6.1): every build links the whole runtime,
-  and there is no setting for it — `[targets.<triple>] runtime` is an
-  error, as a smaller runtime asked for and not given would be. The
-  per-target setting there is is built: `reflection = false`
-  (`targetSettings: [.target("wasm32-wasi", reflection: false)]` in
-  package.sb) builds for that target as `--deny-reflection` does, the
-  triple matched by its operating system and architecture. `when:` covers
-  `os()` and `arch()` only. `sable build --target <triple>` builds for
-  another machine, and `when:` is tested against that target.
+- `when:` covers `os()` and `arch()` only. `sable build --target <triple>`
+  builds for another machine, and `when:` is tested against that target.
+  The per-target settings are built: `reflection = false` builds for that
+  target as `--deny-reflection` does, and `runtime = "minimal"` (or
+  `"standard"`, `"full"`) links that runtime profile (docs/06 §6.1), as
+  `--runtime` asks — `targetSettings: [.target("wasm32-wasi", reflection:
+  false, runtime: .minimal)]` in package.sb — the triple matched by its
+  operating system and architecture. `--runtime` on the command line wins
+  over the manifest; without either, the full runtime.
 - The language server showing a manifest's evaluation errors (the effect
   rules, a trap) in the editor; it type-checks manifests, and logs the rest.
 - A manifest's `const`s and `comptime` blocks follow the manifest's rules

@@ -194,7 +194,8 @@ public sealed record WorkspaceInheritance(string Directory, string File, Workspa
 ///     its operating system and architecture, as <c>--target</c> parses it.
 /// </summary>
 /// <param name="Reflection"><c>reflection</c>: false builds without reflection, as <c>--deny-reflection</c> does.</param>
-public sealed record TargetSettings(NativeTarget Target, bool Reflection);
+/// <param name="Runtime"><c>runtime</c>: the runtime profile (docs/06 §6.1), as <c>--runtime</c> names it; null for the full runtime unless asked.</param>
+public sealed record TargetSettings(NativeTarget Target, bool Reflection, RuntimeProfile? Runtime = null);
 
 /// <summary><c>[build]</c>: a build script and what it may touch (docs/05 §5.6), run by <see cref="BuildScripts" />.</summary>
 public sealed record BuildSpec(string Script, bool AllowNet, IReadOnlyList<string> AllowExec, IReadOnlyList<string> AllowRead, IReadOnlyList<string> AllowWrite);
@@ -424,6 +425,7 @@ public sealed partial class Manifest {
                     }
 
                     var reflection = true;
+                    RuntimeProfile? runtime = null;
                     foreach (var key in settings.Keys) {
                         switch (key) {
                             case "reflection" when settings[key] is TomlBoolean { Value: var allowed }:
@@ -432,10 +434,11 @@ public sealed partial class Manifest {
                             case "reflection":
                                 Error(settings, key, $"targets.{triple}.reflection", "must be true or false");
                                 break;
+                            case "runtime" when settings[key] is TomlString { Value: var name } && RuntimeProfiles.Parse(name) is { } profile:
+                                runtime = profile;
+                                break;
                             case "runtime":
-                                // A smaller runtime asked for and not given would
-                                // be a binary larger than the target allows.
-                                Error(settings, key, $"targets.{triple}.runtime", "there are no runtime profiles: every build links the whole runtime (docs/06 §6.1)");
+                                Error(settings, key, $"targets.{triple}.runtime", $"must be {RuntimeProfiles.Expected} (docs/06 §6.1)");
                                 break;
                             default:
                                 Warn(settings, key, $"targets.{triple}.{key}", "unknown key, ignored");
@@ -443,7 +446,7 @@ public sealed partial class Manifest {
                         }
                     }
 
-                    targets.Add(new(parsed, reflection));
+                    targets.Add(new(parsed, reflection, runtime));
                 }
             }
 

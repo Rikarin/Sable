@@ -117,6 +117,48 @@ public static class Library {
         return needed;
     }
 
+    /// <summary>
+    ///     The modules that need a part of the runtime the minimal profile
+    ///     leaves out (docs/06 §6.1), and the part: a module that imports one
+    ///     needs it too. Nothing in the library needs the tools only the full
+    ///     runtime has, so the standard profile takes every module.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> BeyondMinimal = new Dictionary<string, string>(StringComparer.Ordinal) {
+        ["Sable.Concurrency"] = "threads and locks",
+        ["Sable.Crypto.X509"] = "system trust store",
+        ["Sable.Interop"] = "foreign threads and libraries",
+        ["Sable.IO"] = "files",
+        ["Sable.IO.Ipc"] = "pipes and local sockets",
+        ["Sable.IO.Ports"] = "serial ports",
+        ["Sable.Net"] = "sockets",
+        ["Sable.Process"] = "processes",
+    };
+
+    /// <summary>
+    ///     The module <paramref name="module" /> is or imports, transitively,
+    ///     that needs a part of the runtime the minimal profile leaves out,
+    ///     and that part; null when it needs none.
+    /// </summary>
+    public static (string Module, string Part)? BeyondMinimalOf(string module, ParseOptions options) {
+        var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
+        var pending = new Queue<string>([module]);
+        while (pending.TryDequeue(out var next)) {
+            if (!seen.Add(next)) {
+                continue;
+            }
+
+            if (BeyondMinimal.TryGetValue(next, out var part)) {
+                return (next, part);
+            }
+
+            foreach (var imported in ModuleFor(next, options).SelectMany(ImportsOf)) {
+                pending.Enqueue(imported);
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The library files the program brings its own of (<see cref="CoreLibrary.Brought" />), against the embedded modules.</summary>
     public static HashSet<(string Module, string File)> Brought(IReadOnlyList<SyntaxTree> program) {
         var options = program.Count > 0 ? program[0].Options : ParseOptions.Default;

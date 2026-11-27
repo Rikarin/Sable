@@ -140,6 +140,18 @@ public abstract class PackageCommand : Command {
 
                     request = request with { Sysroot = sysroot };
                     break;
+                case "--runtime":
+                    if (Value() is not { } runtime) {
+                        return null;
+                    }
+
+                    if (RuntimeProfiles.Parse(runtime) is not { } runtimeProfile) {
+                        Console.Error.WriteLine($"sable: --runtime is {RuntimeProfiles.Expected}, not '{runtime}'");
+                        return null;
+                    }
+
+                    request = request with { Runtime = runtimeProfile };
+                    break;
                 case "--deny-reflection":
                     request = request with { DenyReflection = true };
                     break;
@@ -201,6 +213,9 @@ public abstract class PackageCommand : Command {
                                    ...); output in target/<triple>/<profile>/
           --sysroot <dir>          where the target's C library is (default: $SABLE_HOME/sysroots/<triple>,
                                    or for WASI, wasi-sdk's or wasi-libc's where they are installed)
+          --runtime <profile>      the runtime profile: minimal, standard or full (the default; also
+                                   [targets.<triple>] runtime); what a smaller one leaves out is an
+                                   error where the workspace's own packages use it (S3451)
           --deny-reflection        carry no reflection (also [targets.<triple>] reflection = false)
           --deny-unsafe            fail on any 'unsafe' block or 'unsafe fn' in the workspace's own
                                    packages (S3472); dependencies may use 'unsafe'

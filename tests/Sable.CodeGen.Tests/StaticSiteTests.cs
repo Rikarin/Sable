@@ -37,7 +37,7 @@ public sealed class StaticSiteTests {
             Assert.Equal(
                 """
                   building.html              1.5 KB   106 words, 5 heading(s), 1 code block(s)
-                  memory.html                1.5 KB   126 words, 2 heading(s), 0 code block(s)
+                  memory.html                1.6 KB   126 words, 2 heading(s), 0 code block(s)
                   hello.html                 1.2 KB    72 words, 1 heading(s), 1 code block(s)
                   about.html                  628 B    26 words, 0 heading(s), 0 code block(s)
                   index.html                  966 B
@@ -68,7 +68,7 @@ public sealed class StaticSiteTests {
             Assert.Contains("<title>Three tiers of memory · Sable Notes</title>", memory, StringComparison.Ordinal);
             Assert.Contains("<li><strong>Values</strong> live inline, copied on assignment.</li>", memory, StringComparison.Ordinal);
             Assert.Contains("<li>Many short-lived nodes — a parse tree, say:\n<ul>\n<li>allocate them in a region,</li>", memory, StringComparison.Ordinal);
-            Assert.Contains("2 &lt; 3 &amp;&amp; &quot;quotes&quot; are &#39;fine&#39;, and *this* is not", memory, StringComparison.Ordinal);
+            Assert.Contains("2 &lt; 3 &amp;&amp; &quot;quotes&quot; are &#x27;fine&#x27;, and *this* is not", memory, StringComparison.Ordinal);
             Assert.Contains("<a rel=\"prev\" href=\"building.html\">&larr; Building this site</a>", memory, StringComparison.Ordinal);
 
             var hello = interpreted["hello.html"];

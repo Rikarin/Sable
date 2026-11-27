@@ -1,0 +1,239 @@
+module Sable.Text
+
+/// HTML's escaping and its character references read back. `escape` makes
+/// text safe as an element's content or a quoted attribute's value,
+/// `escapeAttribute` as an unquoted one too (the OWASP cheat sheet's rules
+/// one and two), and `unescape` reads every reference the WHATWG HTML
+/// standard names, and numeric ones, as its tokenizer does. A
+/// `TextEncoder(.Html)` escapes by an allow-list as well.
+///
+/// ```sable
+/// assert(Html.escape("<a href='x'>") == "&lt;a href=&#x27;x&#x27;&gt;")
+/// assert(Html.escapeAttribute("a b=c") == "a&#x20;b&#x3D;c")
+/// assert(Html.unescape("&eacute;&#x1F600;&amp;&notit;") == "é😀&¬it;")
+/// ```
+public struct Html {
+    /// The text with '&', '<', '>', '"' and '\'' escaped, all else as it
+    /// is: safe in an element's text and in an attribute's value in quotes.
+    /// The text itself, with nothing allocated, when none of them is in it.
+    public static fn escape(_ text: String) -> String {
+        return Html.textEncoder.encode(text)
+    }
+
+    /// The same added at the builder's end.
+    ///
+    /// ```sable
+    /// let page = TextBuilder("<p>")
+    /// Html.escape("Tom & Jerry", into: page)
+    /// assert(page.build() == "<p>Tom &amp; Jerry")
+    /// ```
+    public static fn escape(_ text: String, into builder: TextBuilder) {
+        Html.textEncoder.encode(text, into: builder)
+    }
+
+    /// The text with every ASCII character but letters, digits, ',', '.',
+    /// '-' and '_' escaped, and every control, format character and
+    /// separator: safe in an attribute's value without quotes too.
+    public static fn escapeAttribute(_ text: String) -> String {
+        return Html.attributeEncoder.encode(text)
+    }
+
+    static var textEncoder: TextEncoder {
+        get {
+            // All but '"', '&', '\'', '<' and '>'.
+            let low: U64 = ~(1 << 0x22 | 1 << 0x26 | 1 << 0x27 | 1 << 0x3C | 1 << 0x3E)
+            return TextEncoder(.Html, low: low, high: ~0, settings: TextEncoderSettings(), everyWide: true, checksCategories: false, shortQuote: false)
+        }
+    }
+
+    static var attributeEncoder: TextEncoder {
+        get {
+            // Digits, ',', '-' and '.'; letters and '_'.
+            let low: U64 = 0x03FF_0000_0000_0000 | 1 << 0x2C | 1 << 0x2D | 1 << 0x2E
+            let high: U64 = 0x07FF_FFFE_07FF_FFFE | 1 << (0x5F - 64)
+            return TextEncoder(.Html, low: low, high: high, settings: TextEncoderSettings(), everyWide: true, checksCategories: true, shortQuote: false)
+        }
+    }
+
+    /// The text with its character references read: named ones by the
+    /// WHATWG table (those of the legacy few without their ';' too),
+    /// `&#NNN;` and `&#xHHH;` (their ';' optional), a number that is no
+    /// scalar as U+FFFD and one of C1 controls as windows-1252 has it. What
+    /// is no reference stays as it is. In an attribute's value, a legacy
+    /// name followed by '=', a letter or a digit is no reference, as there.
+    ///
+    /// ```sable
+    /// assert(Html.unescape("&lt;p&gt; &#60;&#x3c &copy 2&#128;") == "<p> << © 2€")
+    /// assert(Html.unescape("?a=1&copy=2", inAttribute: true) == "?a=1&copy=2")
+    /// ```
+    public static fn unescape(_ text: String, inAttribute: Bool = false) -> String {
+        let bytes = text.utf8
+        let end = text.utf8Count
+        var i = 0
+        while i < end && bytes[i] != 0x26 {
+            i += 1
+        }
+        if i == end {
+            return text
+        }
+        unsafe {
+            var writer = StringWriter.allocate(capacity: end)
+            var run = 0
+            while i < end {
+                if bytes[i] != 0x26 {
+                    i += 1
+                    continue
+                }
+                let (after, first, second) = reference(text, i, inAttribute)
+                if after < 0 {
+                    i += 1
+                    continue
+                }
+                writer.append(utf8: text, from: run, to: i)
+                writer.append(codePoint: first)
+                if second != 0 {
+                    writer.append(codePoint: second)
+                }
+                i = after
+                run = after
+            }
+            writer.append(utf8: text, from: run, to: end)
+            return writer.finish()
+        }
+    }
+
+    // The reference whose '&' is at the offset: where it ends and the one or
+    // two code points it stands for (the second 0 if none); -1 if it is none.
+    static fn reference(_ text: String, _ at: Int, _ inAttribute: Bool) -> (Int, Int, Int) {
+        let bytes = text.utf8
+        let end = text.utf8Count
+        let start = at + 1
+        if start < end && bytes[start] == 0x23 {
+            var k = start + 1
+            let hex = k < end && (bytes[k] | 0x20) == 0x78
+            k += hex ? 1 : 0
+            let digits = k
+            var value = 0
+            while k < end {
+                let digit = digitValue(bytes[k], hex)
+                if digit < 0 {
+                    break
+                }
+                value = value >= 0x110000 ? value : value * (hex ? 16 : 10) + digit
+                k += 1
+            }
+            if k == digits {
+                return (-1, 0, 0)
+            }
+            if k < end && bytes[k] == 0x3B {
+                k += 1
+            }
+            return (k, numericReference(value), 0)
+        }
+        var k = start
+        while k < end && k - start < 31 && isAlphanumeric(bytes[k]) {
+            k += 1
+        }
+        let terminated = k < end && bytes[k] == 0x3B
+        var length = k - start
+        while length > 0 {
+            let record = htmlEntity(text, start, length)
+            if record >= 0 {
+                let at = record * htmlEntityRecordWidth + record / htmlEntityRecordsPerLine
+                if length == k - start && terminated {
+                    return (start + length + 1, entityNumber(at + 6, 5), entityNumber(at + 11, 5))
+                }
+                if entityNumber(at + 5, 1) == 1 {
+                    let next = start + length
+                    if inAttribute && next < end && (bytes[next] == 0x3D || isAlphanumeric(bytes[next])) {
+                        return (-1, 0, 0)
+                    }
+                    return (next, entityNumber(at + 6, 5), entityNumber(at + 11, 5))
+                }
+            }
+            length -= 1
+        }
+        return (-1, 0, 0)
+    }
+}
+
+// What a numeric reference's number stands for.
+fn numericReference(_ value: Int) -> Int {
+    if value == 0 || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF) {
+        return 0xFFFD
+    }
+    if value >= 0x80 && value <= 0x9F {
+        // windows-1252's, where it has one.
+        let mapped = [
+            0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
+            0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+        ]
+        return mapped[value - 0x80]
+    }
+    return value
+}
+
+fn digitValue(_ byte: U8, _ hex: Bool) -> Int {
+    if byte >= 0x30 && byte <= 0x39 {
+        return Int(byte) - 0x30
+    }
+    let letter = byte | 0x20
+    if hex && letter >= 0x61 && letter <= 0x66 {
+        return Int(letter) - 0x61 + 10
+    }
+    return -1
+}
+
+fn isAlphanumeric(_ byte: U8) -> Bool {
+    let letter = byte | 0x20
+    return (byte >= 0x30 && byte <= 0x39) || (letter >= 0x61 && letter <= 0x7A)
+}
+
+// ---- The table (HtmlEntities.sb) -------------------------------------------
+
+fn entityNumber(_ at: Int, _ width: Int) -> Int {
+    let bytes = htmlEntityTable.utf8
+    var value = 0
+    for i in 0..<width {
+        value = value * 32 + Int(bytes[at + i]) - 48
+    }
+    return value
+}
+
+// The record of the name that is the text's so many bytes from the offset,
+// found by bisection; -1 if none is.
+fn htmlEntity(_ text: String, _ start: Int, _ length: Int) -> Int {
+    var low = 0
+    var high = htmlEntityCount
+    while low < high {
+        let middle = (low + high) / 2
+        let order = compareEntity(middle, text, start, length)
+        if order == 0 {
+            return middle
+        }
+        if order < 0 {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    return -1
+}
+
+// How the record's name is ordered against the text's bytes: below zero
+// when before them.
+fn compareEntity(_ record: Int, _ text: String, _ start: Int, _ length: Int) -> Int {
+    let at = record * htmlEntityRecordWidth + record / htmlEntityRecordsPerLine
+    let offset = entityNumber(at, 4)
+    let count = entityNumber(at + 4, 1)
+    let names = htmlEntityNames.utf8
+    let bytes = text.utf8
+    for i in 0..<(count < length ? count : length) {
+        let p = offset + i
+        let difference = Int(names[p + p / htmlEntityNamesPerLine]) - Int(bytes[start + i])
+        if difference != 0 {
+            return difference
+        }
+    }
+    return count - length
+}

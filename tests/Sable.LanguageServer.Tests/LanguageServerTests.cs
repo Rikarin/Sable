@@ -596,7 +596,7 @@ public sealed class LanguageServerTests : IDisposable {
 
                               fn main() {
                                   let a = "  padded  ".trimmed()
-                                  let b = escapedHtml(a)
+                                  let b = Html.escape(a)
                                   print(b)
                               }
                               """;

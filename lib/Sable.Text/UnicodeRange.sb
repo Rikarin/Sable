@@ -1,0 +1,51 @@
+module Sable.Text
+
+/// A run of code points, from the first for so many: what a
+/// `TextEncoderSettings` allows, .NET's `UnicodeRange`. Each block of the
+/// Basic Multilingual Plane has one by name, as .NET's `UnicodeRanges` has
+/// (`UnicodeRange.basicLatin`, `.cyrillic`, `.cjkUnifiedIdeographs`…), and
+/// `all` is every code point.
+///
+/// ```sable
+/// let latin = UnicodeRange.latin1Supplement
+/// assert(latin.first == 0x80 && latin.last == 0xFF)
+/// assert(latin.contains('é') && !latin.contains('a'))
+/// assert(UnicodeRange(from: 'a', through: 'z').length == 26)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct UnicodeRange {
+    /// The first code point.
+    public let first: Int
+    /// How many code points it has.
+    public let length: Int
+
+    /// So many code points from the first, all of them at most U+10FFFF.
+    public init(first: Int, length: Int) {
+        // Each is negative where it is out of bounds: one test for all three.
+        precondition((first | length | 0x110000 - first - length) >= 0, "a range of code points")
+        self.first = first
+        self.length = length
+    }
+
+    /// The characters from one through another.
+    public init(from first: Char, through last: Char) {
+        self.init(first: first.codePoint, length: last.codePoint < first.codePoint ? 0 : last.codePoint - first.codePoint + 1)
+    }
+
+    /// The last code point; one before the first when it is empty.
+    public var last: Int => first + length - 1
+
+    /// Whether it holds the character.
+    public fn contains(_ character: Char) -> Bool {
+        let code = character.codePoint
+        return code >= first && code - first < length
+    }
+
+    /// Every code point, U+0000 to U+10FFFF. (.NET's `All` is the Basic
+    /// Multilingual Plane's alone, which `UnicodeRange(first: 0, length:
+    /// 0x10000)` is.)
+    public static var all: UnicodeRange => UnicodeRange(first: 0, length: 0x110000)
+
+    /// No code point.
+    public static var empty: UnicodeRange => UnicodeRange(first: 0, length: 0)
+}

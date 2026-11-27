@@ -157,11 +157,11 @@ fn renderInline(_ text: String) -> String {
         var span = ""
         var next = i
         if c == '\\' && i + 1 < text.count && isPunctuation(text.at(i + 1)) {
-            span = escapedHtml(String.fromChar(text.at(i + 1)))
+            span = Html.escape(String.fromChar(text.at(i + 1)))
             next = i + 2
         } else if c == '`' {
             if let end = text.slice(from: i + 1, to: text.count).indexOf('`') {
-                span = "<code>" + escapedHtml(text.slice(from: i + 1, to: i + 1 + end)) + "</code>"
+                span = "<code>" + Html.escape(text.slice(from: i + 1, to: i + 1 + end)) + "</code>"
                 next = i + end + 2
             }
         } else if c == '*' && i + 1 < text.count && text.at(i + 1) == '*' {
@@ -184,16 +184,16 @@ fn renderInline(_ text: String) -> String {
                 let end = Runtime.findString(text, ")", middle + 2)
                 if end >= 0 {
                     let label = text.slice(from: opening + 1, to: middle)
-                    let target = escapedHtml(text.slice(from: middle + 2, to: end).trimmed())
+                    let target = Html.escape(text.slice(from: middle + 2, to: end).trimmed())
                     span = image
-                        ? "<img src=\"" + target + "\" alt=\"" + escapedHtml(label) + "\">"
+                        ? "<img src=\"" + target + "\" alt=\"" + Html.escape(label) + "\">"
                         : "<a href=\"" + target + "\">" + renderInline(label) + "</a>"
                     next = end + 1
                 }
             }
         }
         if next > i {
-            html.append(escapedHtml(text.slice(from: plain, to: i)))
+            html.append(Html.escape(text.slice(from: plain, to: i)))
             html.append(span)
             i = next
             plain = i
@@ -201,7 +201,7 @@ fn renderInline(_ text: String) -> String {
             i += 1
         }
     }
-    html.append(escapedHtml(text.slice(from: plain, to: text.count)))
+    html.append(Html.escape(text.slice(from: plain, to: text.count)))
     return html.build()
 }
 
@@ -361,10 +361,10 @@ class Renderer {
     fn renderFence(_ lines: String[>..], _ start: Int) -> Int {
         let language = lines[start].slice(from: 3, to: lines[start].count).trimmed()
         codeBlocks += 1
-        html.append(language.count > 0 ? "<pre><code class=\"language-" + escapedHtml(language) + "\">" : "<pre><code>")
+        html.append(language.count > 0 ? "<pre><code class=\"language-" + Html.escape(language) + "\">" : "<pre><code>")
         var i = start + 1
         while i < lines.count && !lines[i].hasPrefix("```") {
-            html.append(escapedHtml(lines[i]))
+            html.append(Html.escape(lines[i]))
             html.append("\n")
             i += 1
         }
@@ -452,9 +452,9 @@ class Renderer {
 /// The template with its placeholders filled in.
 fn fill(_ template: String, _ site: Site, _ title: String, _ date: String, _ tags: String, _ content: String, _ nav: String) -> String {
     var page = template
-    page = page.replacing("{{site}}", with: escapedHtml(site.name))
-    page = page.replacing("{{title}}", with: escapedHtml(title))
-    page = page.replacing("{{date}}", with: escapedHtml(date))
+    page = page.replacing("{{site}}", with: Html.escape(site.name))
+    page = page.replacing("{{title}}", with: Html.escape(title))
+    page = page.replacing("{{date}}", with: Html.escape(date))
     page = page.replacing("{{tags}}", with: tags)
     page = page.replacing("{{nav}}", with: nav)
     // Content last, so that a page that happens to mention a placeholder
@@ -465,7 +465,7 @@ fn fill(_ template: String, _ site: Site, _ title: String, _ date: String, _ tag
 fn tagLinks(_ tags: String[>..]) -> String {
     var links: String[>..] = []
     for tag in tags {
-        let escaped = escapedHtml(tag)
+        let escaped = Html.escape(tag)
         links.append("<a href=\"tags.html#\(escaped)\">\(escaped)</a>")
     }
     return links.joined(separator: ", ")
@@ -544,11 +544,11 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         let content = renderer.render(page.body)
         var nav: String[>..] = []
         if i > 0 {
-            nav.append("<a rel=\"prev\" href=\"\(ordered[i - 1].slug).html\">&larr; \(escapedHtml(ordered[i - 1].title))</a>")
+            nav.append("<a rel=\"prev\" href=\"\(ordered[i - 1].slug).html\">&larr; \(Html.escape(ordered[i - 1].title))</a>")
         }
         nav.append("<a href=\"index.html\">Index</a>")
         if i + 1 < ordered.count {
-            nav.append("<a rel=\"next\" href=\"\(ordered[i + 1].slug).html\">\(escapedHtml(ordered[i + 1].title)) &rarr;</a>")
+            nav.append("<a rel=\"next\" href=\"\(ordered[i + 1].slug).html\">\(Html.escape(ordered[i + 1].title)) &rarr;</a>")
         }
         let html = fill(template, site, page.title, page.date, tagLinks(page.tags), content, nav.joined(separator: " | "))
         try File.write(Path.join(output, page.slug + ".html"), html)
@@ -562,13 +562,13 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
     // The index: every page, newest first, with its summary.
     let index = TextBuilder()
     if site.tagline.count > 0 {
-        index.appendLine("<p class=\"tagline\">" + escapedHtml(site.tagline) + "</p>")
+        index.appendLine("<p class=\"tagline\">" + Html.escape(site.tagline) + "</p>")
     }
     index.appendLine("<ul class=\"pages\">")
     for page in ordered {
-        index.append("<li><a href=\"\(page.slug).html\">\(escapedHtml(page.title))</a>")
+        index.append("<li><a href=\"\(page.slug).html\">\(Html.escape(page.title))</a>")
         if page.date.count > 0 {
-            index.append(" <time>" + escapedHtml(page.date) + "</time>")
+            index.append(" <time>" + Html.escape(page.date) + "</time>")
         }
         if page.summary.count > 0 {
             index.append("<br>" + renderInline(page.summary))
@@ -586,14 +586,14 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         for tag in page.tags {
             // Taken out, so that the append changes the only copy.
             var titles = byTag.remove(tag) ?? []
-            titles.append("<a href=\"\(page.slug).html\">\(escapedHtml(page.title))</a>")
+            titles.append("<a href=\"\(page.slug).html\">\(Html.escape(page.title))</a>")
             byTag[tag] = titles
         }
     }
     let tagsHtml = TextBuilder()
     for tag in byTag.map({ entry in entry.0 }).sorted() {
         let links = byTag[tag] ?? []
-        let escaped = escapedHtml(tag)
+        let escaped = Html.escape(tag)
         tagsHtml.appendLine("<h2 id=\"\(escaped)\">\(escaped) (\(links.count))</h2>")
         tagsHtml.appendLine("<ul><li>" + links.joined(separator: "</li><li>") + "</li></ul>")
     }

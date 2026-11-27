@@ -1,6 +1,6 @@
 module Sable.Text
 
-// Working with text (docs/06): escaping, and numbers read in a radix —
+// Working with text (docs/06): numbers read in a radix —
 // written in Sable over the core String.
 //
 // Searching, splitting, replacing, padding, trimming and case are String's
@@ -8,30 +8,6 @@ module Sable.Text
 // and String+Case, the first two shared with Substring);
 // writing a value with a width, a radix or a number of decimals is
 // interpolation's, by a format spec: "\(n:#06x)", "\(price:.2)".
-
-/// The text made safe to place in HTML, as content or inside a quoted
-/// attribute: '&', '<', '>', '"' and '\'' become character references.
-public fn escapedHtml(_ text: String) -> String {
-    // Most text has nothing to escape, and is given back as it is.
-    if !text.contains('&') && !text.contains('<') && !text.contains('>') && !text.contains('"') && !text.contains('\'') {
-        return text
-    }
-    let result = TextBuilder()
-    var start = 0
-    var i = 0
-    while i < text.count {
-        let c = text.at(i)
-        let escape = c == '&' ? "&amp;" : c == '<' ? "&lt;" : c == '>' ? "&gt;" : c == '"' ? "&quot;" : c == '\'' ? "&#39;" : ""
-        if escape.count > 0 {
-            result.append(text.slice(from: start, to: i))
-            result.append(escape)
-            start = i + 1
-        }
-        i = i + 1
-    }
-    result.append(text.slice(from: start, to: text.count))
-    return result.build()
-}
 
 /// The integer the text spells in the radix — 2 to 36, others taken as 10 —
 /// with an optional sign and letters of either case; none for anything else,

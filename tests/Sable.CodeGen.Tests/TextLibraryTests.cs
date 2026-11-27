@@ -89,10 +89,10 @@ public sealed class TextLibraryTests {
     [Fact]
     public void HtmlIsEscaped() =>
         Assert.Equal(
-            "&lt;a href=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/a&gt;\nplain text\n",
+            "&lt;a href=&quot;x&quot;&gt;Tom &amp; &#x27;Jerry&#x27;&lt;/a&gt;\nplain text\n",
             Run("""
-                print(escapedHtml("<a href=\"x\">Tom & 'Jerry'</a>"))
-                print(escapedHtml("plain text"))
+                print(Html.escape("<a href=\"x\">Tom & 'Jerry'</a>"))
+                print(Html.escape("plain text"))
             """)
         );
 

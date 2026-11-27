@@ -1,0 +1,314 @@
+module TextEncoderTests
+
+// TextEncoder, TextEncoderSettings and UnicodeRange (Sable.Text): run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Net
+import Sable.Testing
+import Sable.Text
+import UnicodeBlocks
+
+// ---- What each context writes ------------------------------------------------
+
+@test(arguments: [
+    ("<a href='x'>", "&lt;a href=&#x27;x&#x27;&gt;"),
+    ("Tom & \"Jerry\" + 1", "Tom &amp; &quot;Jerry&quot; &#x2B; 1"),
+    ("é😀\u{0}\n", "&#xE9;&#x1F600;&#x0;&#xA;"),
+    ("plain text", "plain text"),
+])
+fn htmlEscapesAsDotNetsDefaultEncoderDoes(_ text: String, _ escaped: String) {
+    expect(TextEncoder(.Html).encode(text) == escaped)
+}
+
+@test(arguments: [
+    ("</script>", "\\u003C/script\\u003E"),
+    ("'\"\\`&+", "\\u0027\\u0022\\\\\\u0060\\u0026\\u002B"),
+    ("\u{8}\t\n\u{C}\r\u{1}", "\\b\\t\\n\\f\\r\\u0001"),
+    ("é😀\u{2028}", "\\u00E9\\uD83D\\uDE00\\u2028"),
+])
+fn javaScriptEscapesAsDotNetsDefaultEncoderDoes(_ text: String, _ escaped: String) {
+    expect(TextEncoder(.JavaScript).encode(text) == escaped)
+}
+
+@test
+fn relaxedJsonEscapesOnlyWhatJsonMust() {
+    let relaxed = TextEncoder.relaxedJson
+    expect(relaxed.encode("<a href='x'>é😀+&") == "<a href='x'>é😀+&")
+    expect(relaxed.encode("\"\\\n\u{7F}") == "\\\"\\\\\\n\\u007F")
+    expect(relaxed.encode("\u{200B}\u{2029}") == "\\u200B\\u2029", "format characters and separators all the same")
+}
+
+@test(arguments: [
+    ("a b&c=d/e?f#g", "a%20b%26c%3Dd%2Fe%3Ff%23g"),
+    ("-._~AZaz09", "-._~AZaz09"),
+    ("é€😀", "%C3%A9%E2%82%AC%F0%9F%98%80"),
+    ("+!*'()", "%2B%21%2A%27%28%29"),
+])
+fn urlEscapesAllButTheUnreserved(_ text: String, _ escaped: String) {
+    expect(TextEncoder(.Url).encode(text) == escaped)
+}
+
+@test(arguments: [
+    ("a;b", "a\\3b b"),
+    ("red}</style>", "red\\7d \\3c \\2f style\\3e "),
+    ("é", "\\e9 "),
+])
+fn cssEscapesAllButLettersAndDigits(_ text: String, _ escaped: String) {
+    expect(TextEncoder(.Css).encode(text) == escaped)
+}
+
+// ---- What is allowed -----------------------------------------------------------
+
+@test
+fn whatTheSettingsAllowIsWrittenAsItIs() {
+    let latin = TextEncoder(.Html, allowing: [UnicodeRange.basicLatin, UnicodeRange.latin1Supplement])
+    expect(latin.encode("café ő") == "café &#x151;")
+    expect(latin.allows('é') && !latin.allows('ő') && !latin.allows('<'))
+    let nothing = TextEncoder(.Html, allowing: TextEncoderSettings())
+    expect(nothing.encode("ab") == "&#x61;&#x62;")
+    let everything = TextEncoder(.JavaScript, allowing: [UnicodeRange.all])
+    expect(everything.encode("😀ő") == "😀ő", "a supplementary range too, unlike .NET")
+}
+
+@test
+fn whatIsUnsafeIsEscapedWhateverIsAllowed() {
+    let everything = TextEncoder(.Html, allowing: [UnicodeRange.all])
+    // A C1 control, a format character, the separators, private use and an
+    // unassigned code point.
+    expect(everything.encode("\u{85}\u{200B}\u{2028}\u{2029}\u{E000}\u{378}") == "&#x85;&#x200B;&#x2028;&#x2029;&#xE000;&#x378;")
+    expect(everything.encode("<'+>") == "&lt;&#x27;&#x2B;&gt;")
+}
+
+@test
+fn settingsAllowAndForbidInTheOrderAsked() {
+    var settings = TextEncoderSettings()
+    settings.allow(UnicodeRange(from: 'a', through: 'z'))
+    settings.allow(UnicodeRange(from: 'A', through: 'Z'))
+    settings.allow('_')
+    settings.allow(charactersIn: "0123456789")
+    settings.forbid(UnicodeRange(from: 'm', through: 'p'))
+    settings.forbid('_')
+    expect(settings.allows('a') && settings.allows('Z') && settings.allows('5'))
+    expect(!settings.allows('n') && !settings.allows('_') && !settings.allows('!'))
+    let ranges = settings.allowedRanges
+    expect(ranges.count == 4)
+    expect(ranges[0] == UnicodeRange(from: '0', through: '9'))
+    expect(ranges[3] == UnicodeRange(from: 'q', through: 'z'))
+    settings.allow(UnicodeRange(from: '0', through: 'z'))
+    expect(settings.allowedRanges == [UnicodeRange(from: '0', through: 'z')], "a range over others joins them")
+    settings.allow(UnicodeRange.empty)
+    settings.forbid(UnicodeRange(from: '0', through: 'z'))
+    expect(settings.allowedRanges.isEmpty)
+}
+
+@test
+fn rangesAreTheirBlocks() {
+    let blocks = everyUnicodeBlock()
+    expect(blocks.count > 150)
+    var next = 0
+    for (name, range) in blocks {
+        expect(range.first >= next && range.length > 0 && range.last <= 0xFFFF, name)
+        expect(range.first % 16 == 0 && (range.last + 1) % 16 == 0, name)
+        next = range.last + 1
+    }
+    expect(UnicodeRange.basicLatin == UnicodeRange(first: 0, length: 0x80))
+    expect(UnicodeRange.cyrillic == UnicodeRange(first: 0x400, length: 0x100))
+    expect(UnicodeRange.cjkUnifiedIdeographs == UnicodeRange(first: 0x4E00, length: 0x5200))
+    expect(UnicodeRange.specials.last == 0xFFFF)
+    expect(UnicodeRange(from: 'z', through: 'a').length == 0)
+    expect(!UnicodeRange.latin1Supplement.contains('a') && !UnicodeRange.latin1Supplement.contains('ā'))
+    expect(UnicodeRange.all.contains('😀') && !UnicodeRange.empty.contains('a'))
+}
+
+// ---- Where it writes -----------------------------------------------------------
+
+@test
+fn textWithNothingToEscapeIsGivenBackAsItIs() {
+    let html = TextEncoder(.Html)
+    expect(html.firstToEncode("nothing here") == none)
+    expect(html.firstToEncode("é first") == 0)
+    expect(html.firstToEncode("ab<") == 2)
+    expect(html.encode("") == "")
+}
+
+@test
+fn aBuilderIsWrittenInto() {
+    let builder = TextBuilder()
+    let html = TextEncoder(.Html)
+    html.encode("<é>", into: builder)
+    html.encode(" plain ", into: builder)
+    html.encode("ü", into: builder)
+    expect(builder.build() == "&lt;&#xE9;&gt; plain &#xFC;")
+    expect(builder.count == 27 && builder.utf8Count == 27)
+    let latin = TextEncoder(.Html, allowing: [UnicodeRange.basicLatin, UnicodeRange.latin1Supplement])
+    let wide = TextBuilder()
+    latin.encode("ü<ü", into: wide)
+    expect(wide.build() == "ü&lt;ü" && wide.count == 6 && wide.utf8Count == 8)
+}
+
+@test
+fn aLongTextIsWrittenIntoABuilder() {
+    let builder = TextBuilder()
+    let text = repeated("a<", 40000)
+    TextEncoder(.Html).encode(text, into: builder)
+    expect(builder.utf8Count == 200000 && builder.count == 200000)
+    expect(builder.build() == repeated("a&lt;", 40000))
+}
+
+@test
+fn utf8IsEncodedAChunkAtATime() {
+    let html = TextEncoder(.Html)
+    let bytes = "a<é😀>".utf8Bytes()
+    for split in 0...bytes.count {
+        var output: U8[>..] = []
+        let (status, read) = html.encode(utf8: bytes[..<split], into: &output, isFinalBlock: false)
+        expect(status == .Done || status == .NeedMoreData)
+        let (last, rest) = html.encode(utf8: bytes[read...], into: &output)
+        expect(last == .Done && rest == bytes.count - read)
+        expect(String.fromUtf8Lossy(output) == "a&lt;&#xE9;&#x1F600;&gt;", "split at \(split)")
+    }
+}
+
+@test
+fn illFormedUtf8IsReplacedNeverPassedOn() {
+    let bytes: U8[>..] = [0x61, 0xFF, 0xC3, 0x28, 0xED, 0xA0, 0x80, 0xF0, 0x9F]
+    var escaped: U8[>..] = []
+    let (status, read) = TextEncoder(.Html).encode(utf8: bytes, into: &escaped)
+    expect(status == .Done && read == bytes.count)
+    expect(String.fromUtf8Lossy(escaped) == "a&#xFFFD;&#xFFFD;(&#xFFFD;&#xFFFD;&#xFFFD;&#xFFFD;")
+    var relaxed: U8[>..] = []
+    _ = TextEncoder.relaxedJson.encode(utf8: [0x61, 0xFF, 0x62, 0xE0, 0x80], into: &relaxed)
+    expect(String.fromUtf8Lossy(relaxed) == "a\u{FFFD}b\u{FFFD}\u{FFFD}", "U+FFFD as it is where it is allowed")
+    var wide: U8[>..] = []
+    _ = TextEncoder(.Url).encode(utf8: "é😀 ".utf8Bytes(), into: &wide)
+    expect(String.fromUtf8Lossy(wide) == "%C3%A9%F0%9F%98%80%20")
+}
+
+// ---- The OWASP cheat sheet's contexts, and back --------------------------------
+
+@test(arguments: [
+    "<script>alert(1)</script>",
+    "\" onmouseover=\"alert(1)",
+    "' onfocus='alert(1)' autofocus x='",
+    "</script><script>alert(1)//",
+    "javascript:alert(1)",
+    "red;} body { background: url(javascript:alert(1)) }</style>",
+    "&lt;already&gt; &amp; twice",
+])
+fn attacksAreInertInEachContext(_ attack: String) {
+    let body = Html.escape(attack)
+    expect(!body.contains("<") && !body.contains(">"), "an element's text")
+    let attribute = Html.escapeAttribute(attack)
+    for c in " \"'=<>`" {
+        expect(!attribute.contains(c), "an unquoted attribute's value")
+    }
+    let script = TextEncoder(.JavaScript).encode(attack)
+    for c in "<>'\"`" {
+        expect(!script.contains(c), "a script's string")
+    }
+    let parameter = TextEncoder(.Url).encode(attack)
+    for c in ":/?#&=;'\"<> " {
+        expect(!parameter.contains(c), "a URL's parameter")
+    }
+    let css = TextEncoder(.Css).encode(attack)
+    for c in ";:{}()<>'\"/" {
+        expect(!css.contains(c), "a CSS value")
+    }
+}
+
+// Text HTML can hold: no NUL, and no C1 control, which a reference cannot
+// stand for.
+fn htmlCanHold(_ text: String) -> Bool {
+    for c in text {
+        if c.codePoint == 0 || (c.codePoint >= 0x80 && c.codePoint <= 0x9F) {
+            return false
+        }
+    }
+    return true
+}
+
+@test
+fn everyEscapingRoundTrips() {
+    forAll { (text: String) in
+        expect(Html.unescape(Html.escape(text)) == text)
+        expect(PercentEncoding.decodeText(TextEncoder(.Url).encode(text)) == text)
+        expect(unescapeJavaScript(TextEncoder(.JavaScript).encode(text)) == text)
+        expect(unescapeJavaScript(TextEncoder.relaxedJson.encode(text)) == text)
+        expect(unescapeCss(TextEncoder(.Css).encode(text)) == text)
+        if htmlCanHold(text) {
+            expect(Html.unescape(TextEncoder(.Html).encode(text)) == text)
+            expect(Html.unescape(Html.escapeAttribute(text), inAttribute: true) == text)
+        }
+    }
+}
+
+// A JavaScript string literal's escapes, read back.
+fn unescapeJavaScript(_ text: String) -> String {
+    let units = text.utf16Units()
+    var decoded: U16[>..] = []
+    var i = 0
+    while i < units.count {
+        if units[i] != 0x5C {
+            decoded.append(units[i])
+            i += 1
+            continue
+        }
+        let letter = units[i + 1]
+        if letter == 0x75 {
+            var value = 0
+            for k in 0..<4 {
+                value = value * 16 + hexValue(units[i + 2 + k])
+            }
+            decoded.append(U16(value))
+            i += 6
+            continue
+        }
+        let short: U16 = match letter {
+            case 0x62 => 0x08
+            case 0x74 => 0x09
+            case 0x6E => 0x0A
+            case 0x66 => 0x0C
+            case 0x72 => 0x0D
+            default   => letter
+        }
+        decoded.append(short)
+        i += 2
+    }
+    return String.fromUtf16Lossy(decoded)
+}
+
+// CSS's '\hh ' escapes, read back.
+fn unescapeCss(_ text: String) -> String {
+    let builder = TextBuilder()
+    let scalars = text.toArray()
+    var i = 0
+    while i < scalars.count {
+        if scalars[i] != '\\' {
+            builder.append(scalars[i])
+            i += 1
+            continue
+        }
+        var value = 0
+        i += 1
+        while scalars[i] != ' ' {
+            value = value * 16 + hexValue(U16(scalars[i].codePoint))
+            i += 1
+        }
+        builder.append(Char.fromCodePoint(value: value)!)
+        i += 1
+    }
+    return builder.build()
+}
+
+fn hexValue(_ unit: U16) -> Int {
+    let code = Int(unit)
+    return code <= 0x39 ? code - 0x30 : (code | 0x20) - 0x61 + 10
+}
+
+fn repeated(_ piece: String, _ count: Int) -> String {
+    let builder = TextBuilder()
+    for _ in 0..<count {
+        builder.append(piece)
+    }
+    return builder.build()
+}

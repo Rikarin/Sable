@@ -56,11 +56,21 @@ public static partial class RootChecker {
     /// <summary>A value with no storage of its own to outlive: a temporary, or a parameter passed by value.</summary>
     sealed record ValueAnchor(SilValue Value, string Description) : Anchor;
 
-    /// <summary>True for a type whose values may hold a reference: a reference itself, or an aggregate with one inside.</summary>
-    static bool HoldsReference(SilType type, HashSet<SilType>? seen = null) {
+    /// <summary>
+    ///     True for a type whose values may hold a reference: a reference
+    ///     itself, an aggregate with one inside, or a closure, whose context
+    ///     may have captured one.
+    /// </summary>
+    /// <param name="bare">Only a reference itself, in an aggregate or not: what a function's result roots are recorded for.</param>
+    /// <param name="closures">Whether a closure counts: not for what a closure called may hand back of its arguments.</param>
+    static bool HoldsReference(SilType type, HashSet<SilType>? seen = null, bool bare = false, bool closures = true) {
         switch (type) {
             case AddressType or InlinePointerType:
                 return true;
+            case ThickFunctionType:
+                return !bare && closures;
+            case ArrayType or SliceType or FixedArrayType:
+                return !bare && HoldsReference(ArrayType.ElementOf(type)!, seen, bare, closures);
             case StructType { IsInline: false } or TupleType or EnumType:
                 seen ??= [];
                 if (!seen.Add(type)) {
@@ -68,9 +78,9 @@ public static partial class RootChecker {
                 }
 
                 return type switch {
-                    StructType structType => structType.Fields.Any(f => HoldsReference(f.Type, seen)),
-                    TupleType tuple => tuple.Elements.Any(e => HoldsReference(e, seen)),
-                    EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && HoldsReference(payload, seen)),
+                    StructType structType => structType.Fields.Any(f => HoldsReference(f.Type, seen, bare, closures)),
+                    TupleType tuple => tuple.Elements.Any(e => HoldsReference(e, seen, bare, closures)),
+                    EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && HoldsReference(payload, seen, bare, closures)),
                     _ => false,
                 };
             default:
@@ -114,8 +124,33 @@ public static partial class RootChecker {
             }
         }
 
+        // The closure parameters each function keeps past its call, to a fixed point.
+        var escaping = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+        var takingClosures = module.Functions.Where(static f => f.Blocks.Count > 0 && f.Entry.Arguments.Any(static a => a.Type is ThickFunctionType)).ToList();
+        for (var round = 0; round < takingClosures.Count + 2; round++) {
+            var changed = false;
+            foreach (var function in takingClosures) {
+                var kept = Escaping(function, Anchors(function, summaries), escaping);
+                if (kept.Count > 0 && (!escaping.TryGetValue(function.Name, out var old) || !old.SetEquals(kept))) {
+                    escaping[function.Name] = kept;
+                    changed = true;
+                }
+            }
+
+            if (!changed) {
+                break;
+            }
+        }
+
+        var localResults = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var function in module.Functions) {
-            if (summaries.TryGetValue(function.Name, out var summary)) {
+            if (function.IsUnspecialised && function.Blocks.Count > 0 && LocalGenericResult(function, Anchors(function, summaries)) is { } root) {
+                localResults[function.Name] = root;
+            }
+        }
+
+        foreach (var function in module.Functions) {
+            if (summaries.TryGetValue(function.Name, out var summary) && HoldsReference(function.Type.Result, bare: true)) {
                 function.ResultRoots = [..summary.Order()];
             }
 
@@ -126,6 +161,8 @@ public static partial class RootChecker {
             var before = diagnostics.Count;
             var anchors = Anchors(function, summaries);
             CheckReturns(function, anchors, source, diagnostics);
+            CheckGenericResults(function, localResults, source, diagnostics);
+            CheckEscapingClosures(function, anchors, escaping, source, diagnostics);
             CheckStores(function, anchors, source, diagnostics);
             CheckLiveness(function, anchors, source, diagnostics);
             CheckExclusive(function, anchors, summaries, source, diagnostics);
@@ -153,9 +190,39 @@ public static partial class RootChecker {
 
         IEnumerable<Anchor> Of(SilValue value) => anchors.GetValueOrDefault(value) ?? [];
 
-        // A reference parameter, and a region the caller lends, are rooted in the caller.
+        var contexts = Contexts(function);
+
+        bool Hold(List<Anchor> held, IEnumerable<AllocStackInst> slots) {
+            var grew = false;
+            foreach (var slot in slots) {
+                if (!stored.TryGetValue(slot, out var set)) {
+                    stored[slot] = set = [];
+                }
+
+                var before = set.Count;
+                set.UnionWith(held);
+                grew |= set.Count != before;
+            }
+
+            return grew;
+        }
+
+        // A variable lent to a call ('inout', '&') may be given any reference the call is given.
+        bool Lent(IEnumerable<SilValue> arguments) {
+            List<SilValue> list = [..arguments];
+            var slots = list.OfType<AllocStackInst>().Where(static s => HoldsReference(s.ElementType)).ToList();
+            return slots.Count > 0 && Hold(
+                [
+                    ..list.Where(static a => a is not AllocStackInst && (HoldsReference(a.Type) || a.Type == SilType.Region)).SelectMany(Of),
+                    ..slots.SelectMany(s => stored.GetValueOrDefault(s) ?? []),
+                ],
+                slots
+            );
+        }
+
+        // A reference parameter, a region the caller lends and a closure it gives are rooted in the caller.
         for (var i = 0; i < function.Entry.Arguments.Count; i++) {
-            if (function.Entry.Arguments[i].Type is AddressType or InlinePointerType || function.Entry.Arguments[i].Type == SilType.Region) {
+            if (function.Entry.Arguments[i].Type is AddressType or InlinePointerType or ThickFunctionType || function.Entry.Arguments[i].Type == SilType.Region) {
                 Add(function.Entry.Arguments[i], [new ParameterAnchor(i)]);
             }
         }
@@ -179,6 +246,26 @@ public static partial class RootChecker {
                             changed |= Add(element, Of(element.Address));
                             break;
 
+                        // A closure's context holds what it captured: rooted where that is.
+                        case RefElementAddrInst { Reference: AllocRefInst context } element when contexts.Contains(context):
+                            changed |= Add(element, Of(context));
+                            break;
+
+                        case StoreInst { Address: RefElementAddrInst { Reference: AllocRefInst context } } captured
+                            when contexts.Contains(context) && HoldsReference(captured.Value.Type):
+                            changed |= Add(context, Of(captured.Value));
+                            break;
+
+                        // A region captured is as a reference into it: it ends with its block.
+                        case StoreInst { Address: RefElementAddrInst { Reference: AllocRefInst context } } captured
+                            when contexts.Contains(context) && captured.Value.Type == SilType.Region:
+                            changed |= Add(context, Of(captured.Value));
+                            break;
+
+                        case PartialApplyInst { Context: { } context } closure:
+                            changed |= Add(closure, Of(context));
+                            break;
+
                         case RefElementAddrInst element:
                             changed |= Add(element, [HeapAnchor.Instance]);
                             break;
@@ -187,6 +274,53 @@ public static partial class RootChecker {
                         case BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } element:
                             changed |= Add(element, Of(element.Operands[0]));
                             break;
+
+                        // A closure kept in a part of a variable: what was put there. A closure
+                        // does not refer to where it is kept, only to what it captured.
+                        case StoreInst { Address: not AllocStackInst } intoPart when ClosuresOnly(intoPart.Value.Type) && RootSlot(intoPart.Address) is { } partSlot:
+                            changed |= Hold([..Of(intoPart.Value)], [partSlot]);
+                            break;
+
+                        case LoadInst { Address: not AllocStackInst } fromPart when ClosuresOnly(fromPart.Type):
+                            changed |= Add(fromPart, RootSlot(fromPart.Address) is { } fromSlot ? stored.GetValueOrDefault(fromSlot) ?? [] : Of(fromPart.Address).Where(a => HoldsOnlyItsOwn(a, function)));
+                            break;
+
+                        case LoadBorrowInst { Address: not AllocStackInst } borrowedPart when ClosuresOnly(borrowedPart.Type):
+                            changed |= Add(borrowedPart, RootSlot(borrowedPart.Address) is { } borrowedSlot ? stored.GetValueOrDefault(borrowedSlot) ?? [] : Of(borrowedPart.Address).Where(a => HoldsOnlyItsOwn(a, function)));
+                            break;
+
+                        // A reference put in a variable's array is kept there, as one put in the variable.
+                        case StoreInst { Address: BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique", Operands: [AllocStackInst arraySlot, ..] } } intoElement
+                            when HoldsReference(intoElement.Value.Type):
+                            changed |= Hold([..Of(intoElement.Value)], [arraySlot]);
+                            break;
+
+                        case LoadInst { Address: BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique", Operands: [AllocStackInst arraySlot, ..] } } fromElement
+                            when HoldsReference(fromElement.Type):
+                            changed |= Add(fromElement, stored.GetValueOrDefault(arraySlot) ?? []);
+                            break;
+
+                        case LoadBorrowInst { Address: BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique", Operands: [AllocStackInst arraySlot, ..] } } borrowedElement
+                            when HoldsReference(borrowedElement.Type):
+                            changed |= Add(borrowedElement, stored.GetValueOrDefault(arraySlot) ?? []);
+                            break;
+
+                        // An array of references holds what is put in it — appended, set,
+                        // inserted — and gives back what it holds.
+                        case BuiltinInst { Name: var arrayName } arrayBuiltin when arrayName.StartsWith("array_", StringComparison.Ordinal)
+                            && arrayBuiltin.Operands.Any(static o => HoldsReference(o.Type) || o is AllocStackInst { ElementType: var e } && HoldsReference(e)): {
+                            // An array reached through an address holds what was put in it there, which is not
+                            // known here: of references, it is taken to be rooted where the array is; of closures, not.
+                            var held = arrayBuiltin.Operands.Where(static o => o is not AllocStackInst && (o.Type is not AddressType || HoldsReference(o.Type, closures: false)))
+                                .Where(static o => HoldsReference(o.Type)).SelectMany(Of)
+                                .Concat(arrayBuiltin.Operands.OfType<AllocStackInst>().SelectMany(o => stored.GetValueOrDefault(o) ?? [])).ToList();
+                            changed |= Hold(held, arrayBuiltin.Operands.OfType<AllocStackInst>().Where(static o => HoldsReference(o.ElementType)));
+                            if (HoldsReference(arrayBuiltin.Type)) {
+                                changed |= Add(arrayBuiltin, held);
+                            }
+
+                            break;
+                        }
 
                         // A reference kept in a variable: whatever was put there.
                         case StoreInst store when HoldsReference(store.Value.Type) && store.Address is AllocStackInst slot: {
@@ -268,8 +402,23 @@ public static partial class RootChecker {
                             changed |= Add(view, Of(viewName == "inline_next" ? view.Operands[1] : view.Operands[0]));
                             break;
 
-                        case ApplyInst apply when HoldsReference(apply.Type):
-                            changed |= Add(apply, CallResult(apply.Callee, [..apply.Arguments], summaries, Of));
+                        case ApplyInst apply:
+                            if (HoldsReference(apply.Type)) {
+                                changed |= Add(apply, CallResult(apply.Callee, [..apply.Arguments], apply.Type, summaries, Of));
+                            }
+
+                            changed |= Lent(apply.Arguments);
+
+                            // Compiled once, a closure gives a generic result through an
+                            // address: it may be a reference into a region it is given.
+                            if (apply.Callee is not FunctionRefInst && IndirectResults(apply.Arguments).Any()) {
+                                changed |= Hold([..apply.Arguments.Where(static a => a.Type == SilType.Region).SelectMany(Of).Concat(Of(apply.Callee))], IndirectResults(apply.Arguments));
+                            }
+
+                            break;
+
+                        case LoadInst { Type: OpaqueType, Address: AllocStackInst opaqueSlot } opaqueLoad:
+                            changed |= Add(opaqueLoad, stored.GetValueOrDefault(opaqueSlot) ?? []);
                             break;
 
                         case BranchInst branch:
@@ -304,7 +453,7 @@ public static partial class RootChecker {
                         }
 
                         case TryApplyInst tryApply when tryApply.Normal.Arguments is [var result] && HoldsReference(result.Type):
-                            changed |= Add(result, CallResult(tryApply.Callee, [..tryApply.Arguments], summaries, Of));
+                            changed |= Add(result, CallResult(tryApply.Callee, [..tryApply.Arguments], result.Type, summaries, Of));
                             break;
                     }
                 }
@@ -331,17 +480,143 @@ public static partial class RootChecker {
             _ => [new ValueAnchor(block, "a temporary value")],
         };
 
+    /// <summary>The variables a call's generic results are given back in: its arguments that are the address of an opaque value.</summary>
+    static IEnumerable<AllocStackInst> IndirectResults(IEnumerable<SilValue> arguments) =>
+        arguments.Select(static a => a is BuiltinInst { Name: "opaque_cast" } cast ? cast.Operands[0] : a).OfType<AllocStackInst>().Where(static s => s.ElementType is OpaqueType);
+
+    /// <summary>A type that holds closures but no reference of its own: where it is kept says nothing of what it captured.</summary>
+    static bool ClosuresOnly(SilType type) => HoldsReference(type) && !HoldsReference(type, closures: false);
+
+    /// <summary>The variable a part's address is in: through fields, tuple elements and payloads.</summary>
+    static AllocStackInst? RootSlot(SilValue address) =>
+        address switch {
+            AllocStackInst slot => slot,
+            StructElementAddrInst element => RootSlot(element.Address),
+            TupleElementAddrInst element => RootSlot(element.Address),
+            EnumPayloadAddrInst element => RootSlot(element.Address),
+            _ => null,
+        };
+
+    /// <summary>
+    ///     Memory whose contents are rooted where it is (rule 4): an object's,
+    ///     a region's. Not a variable's or what a reference parameter points to,
+    ///     which may hold anything.
+    /// </summary>
+    static bool HoldsOnlyItsOwn(Anchor anchor, SilFunction function) =>
+        anchor switch {
+            HeapAnchor => true,
+            LocalAnchor { Slot.ElementType: var element } => element == SilType.Region,
+            ParameterAnchor { Index: var i } => i < function.Entry.Arguments.Count && function.Entry.Arguments[i].Type == SilType.Region,
+            _ => false,
+        };
+
+    /// <summary>A closure the caller gave, which the callee may keep only as the caller says (<see cref="Escaping" />).</summary>
+    static bool IsClosureParameter(Anchor anchor, SilFunction function) =>
+        anchor is ParameterAnchor { Index: var i } && i < function.Entry.Arguments.Count && function.Entry.Arguments[i].Type is ThickFunctionType;
+
+    /// <summary>Whether a store is into a variable's own storage, whose anchors follow what is stored, rather than memory that outlives the function.</summary>
+    static bool IntoVariable(StoreInst store, HashSet<AllocRefInst> contexts) =>
+        store.Address is AllocStackInst
+        || store.Address is RefElementAddrInst { Reference: AllocRefInst context } && contexts.Contains(context)
+        || store.Address is BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique", Operands: [AllocStackInst, ..] }
+        || ClosuresOnly(store.Value.Type) && RootSlot(store.Address) is not null;
+
+    /// <summary>
+    ///     The closure parameters a function keeps past its call: stores into
+    ///     an object, a region or a global, or gives to a function that keeps
+    ///     them. What such a closure captured must outlive any call.
+    /// </summary>
+    static HashSet<int> Escaping(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors, Dictionary<string, HashSet<int>> escaping) {
+        var kept = new HashSet<int>();
+        var contexts = Contexts(function);
+        void Keep(SilValue value) {
+            foreach (var anchor in anchors.GetValueOrDefault(value) ?? []) {
+                if (IsClosureParameter(anchor, function)) {
+                    kept.Add(((ParameterAnchor)anchor).Index);
+                }
+            }
+        }
+
+        foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            if (instruction is StoreInst store && !IntoVariable(store, contexts)) {
+                Keep(store.Value);
+            } else if (CalleeAndArguments(instruction) is ({ Function: var callee }, var arguments) && escaping.TryGetValue(callee, out var keeps)) {
+                foreach (var j in keeps) {
+                    if (j < arguments.Count) {
+                        Keep(arguments[j]);
+                    }
+                }
+            }
+        }
+
+        return kept;
+    }
+
+    static (FunctionRefInst? Callee, List<SilValue> Arguments) CalleeAndArguments(SilInstruction instruction) =>
+        instruction switch {
+            ApplyInst { Callee: FunctionRefInst callee } apply => (callee, [..apply.Arguments]),
+            TryApplyInst { Callee: FunctionRefInst callee } tryApply => (callee, [..tryApply.Arguments]),
+            _ => (null, []),
+        };
+
+    /// <summary>A closure given to a function that keeps it may capture nothing that dies before the heap does.</summary>
+    static void CheckEscapingClosures(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors, Dictionary<string, HashSet<int>> escaping,
+        SourceText source, DiagnosticBag diagnostics) {
+        if (escaping.Count == 0) {
+            return;
+        }
+
+        foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            if (CalleeAndArguments(instruction) is not ({ Function: var callee }, var arguments) || !escaping.TryGetValue(callee, out var keeps)) {
+                continue;
+            }
+
+            foreach (var j in keeps.Order()) {
+                if (j >= arguments.Count) {
+                    continue;
+                }
+
+                var root = (anchors.GetValueOrDefault(arguments[j]) ?? []).Where(a => !IsClosureParameter(a, function)).Select(a => a switch {
+                    LocalAnchor local => Describe(local.Slot, function),
+                    ValueAnchor temporary => temporary.Description,
+                    ParameterAnchor parameter => $"parameter '{(parameter.Index < function.ParameterNames.Count ? function.ParameterNames[parameter.Index] : "?")}'",
+                    _ => null,
+                }).FirstOrDefault(static r => r is not null);
+                if (root is null) {
+                    continue;
+                }
+
+                var name = function.Module?.Find(callee) is { } found ? found.DisplayName ?? found.Name : callee;
+                diagnostics.Error(
+                    ErrorCode.ERR_ReferenceOutlivesRoot,
+                    SpanOf(instruction, source),
+                    $"this closure captured a reference into {root}, and '{name}' keeps it past the call, where it would outlive it. "
+                    + "To fix it: capture a copy of the value instead of the reference (r.toOwned()); or allocate what it refers to on the heap"
+                );
+                break;
+            }
+        }
+    }
+
+    /// <summary>The objects made in a function as a closure's context: what they hold, the closure captured.</summary>
+    static HashSet<AllocRefInst> Contexts(SilFunction function) =>
+        function.Blocks.SelectMany(static b => b.Instructions).OfType<PartialApplyInst>().Select(static p => p.Context).OfType<AllocRefInst>().ToHashSet();
+
     /// <summary>
     ///     What a call's reference result may be rooted in: the anchors of the
-    ///     arguments its callee's summary names; for a callee not known here,
-    ///     every reference passed to it.
+    ///     arguments its callee's summary names; for a callee not known here —
+    ///     a closure — every reference and region passed to it, and whatever
+    ///     the closure itself captured.
     /// </summary>
-    static IEnumerable<Anchor> CallResult(SilValue callee, List<SilValue> arguments, Dictionary<string, HashSet<int>> summaries, Func<SilValue, IEnumerable<Anchor>> of) {
+    static IEnumerable<Anchor> CallResult(SilValue callee, List<SilValue> arguments, SilType result, Dictionary<string, HashSet<int>> summaries, Func<SilValue, IEnumerable<Anchor>> of) {
         if (callee is FunctionRefInst reference && summaries.TryGetValue(reference.Function, out var summary)) {
             return summary.Where(i => i < arguments.Count).SelectMany(i => of(arguments[i]));
         }
 
-        return arguments.Where(static a => HoldsReference(a.Type)).SelectMany(of);
+        // A result that holds closures, not references, is taken to hold no
+        // reference it was lent — only what a region given to it, or a closure, holds.
+        var lent = HoldsReference(result, closures: false);
+        return arguments.Where(a => (lent ? HoldsReference(a.Type) : a.Type is ThickFunctionType) || a.Type == SilType.Region).SelectMany(of).Concat(of(callee));
     }
 
     /// <summary>
@@ -387,21 +662,77 @@ public static partial class RootChecker {
     /// <summary>Rule 3: a returned reference is rooted in parameters, static or heap — not in a local, which dies as the function returns.</summary>
     static void CheckReturns(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors, SourceText source, DiagnosticBag diagnostics) {
         foreach (var (value, at) in Returned(function)) {
-            var anchor = (anchors.GetValueOrDefault(value) ?? []).FirstOrDefault(static a => a is LocalAnchor or ValueAnchor);
-            if (anchor is null) {
+            if (LocalRoot(value, function, anchors) is not { } root) {
                 continue;
             }
 
-            var root = anchor is LocalAnchor local ? Describe(local.Slot, function) : ((ValueAnchor)anchor).Description;
-            var fix = root.StartsWith("parameter", StringComparison.Ordinal)
-                ? "take the parameter as 'ref', so the reference is rooted in the caller's value; or return an owned copy"
-                : root.StartsWith("region", StringComparison.Ordinal)
-                    ? "return a copy of the value, out of the region (r.toOwned()); or allocate it in a region the caller passes (fn f(in r: Region) -> T&)"
-                    : "return an owned value instead (copy what it refers to); allocate in the caller's region (fn f(in r: Region) -> T&); or return the whole value";
             diagnostics.Error(
                 ErrorCode.ERR_ReferenceOutlivesRoot,
                 SpanOf(at, source),
-                $"cannot return a reference rooted in {root}: it dies when the function returns. To fix it: {fix}"
+                $"cannot return a reference rooted in {root}{(function.DisplayName is { } instance ? $" (as {instance})" : "")}: it dies when the function returns. To fix it: {Fix(root)}"
+            );
+        }
+    }
+
+    /// <summary>The local, region or temporary a value may be rooted in, which dies with the function, described.</summary>
+    static string? LocalRoot(SilValue value, SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors) =>
+        (anchors.GetValueOrDefault(value) ?? []).FirstOrDefault(static a => a is LocalAnchor or ValueAnchor) switch {
+            LocalAnchor local => Describe(local.Slot, function),
+            ValueAnchor temporary => temporary.Description,
+            _ => null,
+        };
+
+    static string Fix(string root) =>
+        root.StartsWith("parameter", StringComparison.Ordinal)
+            ? "take the parameter as 'ref', so the reference is rooted in the caller's value; or return an owned copy"
+            : root.StartsWith("region", StringComparison.Ordinal)
+                ? "return a copy of the value, out of the region (r.toOwned()); or allocate it in a region the caller passes (fn f(in r: Region) -> T&)"
+                : "return an owned value instead (copy what it refers to); allocate in the caller's region (fn f(in r: Region) -> T&); or return the whole value";
+
+    /// <summary>
+    ///     A generic function compiled once gives its result through
+    ///     <c>$out</c>, not knowing whether it is a reference: what it may give
+    ///     that is rooted in its own local or region, described — for its
+    ///     callers to refuse where the result is one (<see cref="CheckGenericResults" />).
+    /// </summary>
+    static string? LocalGenericResult(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors) {
+        var outIndex = function.ParameterNames.IndexOf("$out");
+        if (!function.IsUnspecialised || outIndex < 0 || outIndex >= function.Entry.Arguments.Count) {
+            return null;
+        }
+
+        var output = function.Entry.Arguments[outIndex];
+        return function.Blocks.SelectMany(static b => b.Instructions).OfType<StoreInst>()
+            .Where(s => ReferenceEquals(s.Address, output) && s.Value.Type is OpaqueType)
+            .Select(s => LocalRoot(s.Value, function, anchors)).FirstOrDefault(static r => r is not null);
+    }
+
+    /// <summary>
+    ///     A call of a generic function compiled once whose result may be
+    ///     rooted in a region or local of its own (<see cref="LocalGenericResult" />),
+    ///     made with a reference among its types: the reference would outlive its root.
+    /// </summary>
+    static void CheckGenericResults(SilFunction function, Dictionary<string, string> localResults, SourceText source, DiagnosticBag diagnostics) {
+        if (localResults.Count == 0) {
+            return;
+        }
+
+        foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            (SilValue? callee, IEnumerable<SilValue> arguments) = instruction switch {
+                ApplyInst apply => (apply.Callee, apply.Arguments),
+                TryApplyInst tryApply => (tryApply.Callee, tryApply.Arguments),
+                _ => (null, Enumerable.Empty<SilValue>()),
+            };
+            if (callee is not FunctionRefInst { Function: var name } || !localResults.TryGetValue(name, out var root)
+                || arguments.OfType<MetadataInst>().FirstOrDefault(static m => HoldsReference(m.Described)) is not { } reference) {
+                continue;
+            }
+
+            var generic = function.Module?.Find(name) is { } found ? found.DisplayName ?? found.Name.Replace("$generic", "", StringComparison.Ordinal) : name;
+            diagnostics.Error(
+                ErrorCode.ERR_ReferenceOutlivesRoot,
+                SpanOf(instruction, source),
+                $"'{generic}' would return a reference rooted in {root}, which dies when it returns, as its result here is a reference ({(reference.Described is AddressType { Pointee: var pointee } ? TypeMetadata.DisplayName(pointee) + "&" : TypeMetadata.DisplayName(reference.Described))}). To fix it: {Fix(root)}"
             );
         }
     }
@@ -413,16 +744,19 @@ public static partial class RootChecker {
     ///     each be gone while the stored reference still could be read.
     /// </summary>
     static void CheckStores(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors, SourceText source, DiagnosticBag diagnostics) {
+        // What a closure captures is held to where the closure goes, not to the heap its context is in.
+        var contexts = Contexts(function);
         foreach (var block in function.Blocks) {
             foreach (var instruction in block.Instructions) {
-                if (instruction is not StoreInst store || store.Address is AllocStackInst || !HoldsReference(store.Value.Type)) {
+                if (instruction is not StoreInst store || !HoldsReference(store.Value.Type) || IntoVariable(store, contexts)) {
                     continue;
                 }
 
                 var destination = anchors.GetValueOrDefault(store.Address) ?? [];
                 var heap = destination.Contains(HeapAnchor.Instance);
                 foreach (var anchor in anchors.GetValueOrDefault(store.Value) ?? []) {
-                    if (destination.Contains(anchor) && !(heap && anchor is not HeapAnchor)) {
+                    // A closure parameter kept is the caller's to check (CheckEscapingClosures).
+                    if (destination.Contains(anchor) && !(heap && anchor is not HeapAnchor) || IsClosureParameter(anchor, function)) {
                         continue;
                     }
 
@@ -461,6 +795,8 @@ public static partial class RootChecker {
         bool Indirect(SilValue value) =>
             value switch {
                 LoadInst or ApplyInst => true,
+                LoadBorrowInst { Type: ThickFunctionType } => true,
+                BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_remove_last" or "array_take" } => true,
                 StructExtractInst extract => Indirect(extract.Value),
                 TupleExtractInst extract => Indirect(extract.Value),
                 SilArgument argument => argument.Block != function.Entry,
@@ -665,9 +1001,12 @@ public static partial class RootChecker {
                         continue;
                     }
 
+                    // A closure is used where it is called or passed on: what it captured must be alive.
                     foreach (var operand in instruction.Operands) {
-                        if (operand.Type is not (AddressType or InlinePointerType) || !Indirect(operand) || instruction is StoreInst store && ReferenceEquals(store.Value, operand)
-                            || instruction is BranchInst or CondBranchInst or ReturnInst) {
+                        if (operand.Type is not (AddressType or InlinePointerType or ThickFunctionType) || !Indirect(operand)
+                            || instruction is StoreInst store && ReferenceEquals(store.Value, operand)
+                            || instruction is BranchInst or CondBranchInst or ReturnInst
+                            || operand.Type is ThickFunctionType && instruction is DestroyValueInst or CopyValueInst) {
                             continue;
                         }
 
@@ -680,7 +1019,7 @@ public static partial class RootChecker {
                                 diagnostics.Error(
                                     ErrorCode.ERR_ReferenceOutlivesRoot,
                                     SpanOf(instruction, source),
-                                    $"this reference refers to {Describe(slot, function)}, which is gone — "
+                                    (operand.Type is ThickFunctionType ? $"this closure captured a reference into {Describe(slot, function)}, which is gone — " : $"this reference refers to {Describe(slot, function)}, which is gone — ")
                                     + (ended is LoadInst ? "its value was moved out" : slot.ElementType == SilType.Region ? "the region ended" : "its scope ended")
                                     + $" at {where}"
                                 );

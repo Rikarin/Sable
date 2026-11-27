@@ -244,6 +244,7 @@ struct TomlWriter {
         if let strip = profile.strip {
             match strip {
                 case .debuginfo => string("strip", "debuginfo")
+                case .local     => string("strip", "local")
                 case .symbols   => string("strip", "symbols")
             }
         }

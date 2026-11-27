@@ -58,6 +58,7 @@ static bool frame_place(const void *at, const void *image, char *place, size_t s
     return false;
 }
 #endif
+#include "symbols.c"
 
 #ifdef _WIN32
 #include "platform_win32.c"

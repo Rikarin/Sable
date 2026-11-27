@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Sable.Symbols;
 
 namespace Sable.CodeGen.Tests;
@@ -44,11 +45,23 @@ public sealed class TypeMetadataTests {
     internal static string Ir(string source, bool denyReflection = false) {
         var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "zoo.sb"))], denyReflection: denyReflection);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        return result.LlvmIr!;
+        // Read with its symbols as their SIL names (SymbolNames).
+        return SymbolNames.DemangleIr(result.LlvmIr!);
     }
 
     static string Line(string ir, string global) =>
         ir.Split('\n').Single(l => l.StartsWith(global + " = ", StringComparison.Ordinal));
+
+    // A record's pointer to data (#300): the distance from its field on macOS
+    // and Linux, the address on Windows; and its type, and null, there.
+    static readonly bool Relative = !OperatingSystem.IsWindows();
+    static readonly string RefType = Relative ? "i64" : "ptr";
+    static readonly string Null = Relative ? "i64 0" : "ptr null";
+
+    static string Ref(string target) => Relative ? $"i64 sub (i64 ptrtoint (ptr {target} to i64)" : $"ptr {target}";
+
+    // A pointer at a string constant, whatever its number.
+    static readonly string TrapRef = Relative ? "i64 sub (i64 ptrtoint (ptr @.trap." : "ptr @.trap.";
 
     [Fact]
     public void AClassesMetadataDescribesItsFieldsAndConformances() {
@@ -57,24 +70,27 @@ public sealed class TypeMetadataTests {
         // Every stored field, its superclass's first, with what it holds:
         // data (0), a strong reference (1).
         var fields = Line(ir, "@\"sable.fields.Zoo.Dog\"");
-        Assert.Contains("[3 x { ptr, ptr, i64, i64, ptr }]", fields, StringComparison.Ordinal);
-        Assert.Contains("ptr @.trap.", fields, StringComparison.Ordinal);
-        Assert.Matches(@"i32 3\) to i64\), i64 0, ptr null \}.*i32 4\) to i64\), i64 1, ptr null \}.*i32 5\) to i64\), i64 1, ptr null \}", fields);
+        Assert.Contains($"[3 x {{ {RefType}, {RefType}, i64, i64, {RefType} }}]", fields, StringComparison.Ordinal);
+        Assert.Contains(TrapRef, fields, StringComparison.Ordinal);
+        Assert.Matches($@"i32 3\) to i64\), i64 0, {Null} \}}.*i32 4\) to i64\), i64 1, {Null} \}}.*i32 5\) to i64\), i64 1, {Null} \}}", fields);
         Assert.Contains("c\"friend\\00\"", ir, StringComparison.Ordinal);
         Assert.Contains("c\"Zoo.Animal?\\00\"", ir, StringComparison.Ordinal);
 
         // A class's own conformances — with what they refine, and an
         // extension's — and its superclass's in its superclass's records.
-        Assert.Contains("[2 x { ptr, ptr }] [{ ptr, ptr } { ptr @\"sable.protocol.Zoo.Pet\", ptr null }, { ptr, ptr } { ptr @\"sable.protocol.Zoo.Named\", ptr null }]",
-            Line(ir, "@\"sable.conformances.Zoo.Animal\""), StringComparison.Ordinal);
-        Assert.Contains("[1 x { ptr, ptr }] [{ ptr, ptr } { ptr @\"sable.protocol.Zoo.Loud\", ptr null }]",
-            Line(ir, "@\"sable.conformances.Zoo.Dog\""), StringComparison.Ordinal);
+        var animal = Line(ir, "@\"sable.conformances.Zoo.Animal\"");
+        Assert.Contains($"[2 x {{ {RefType}, {RefType} }}]", animal, StringComparison.Ordinal);
+        Assert.Matches($"{Regex.Escape(Ref("@\"sable.protocol.Zoo.Pet\""))}.*{Regex.Escape(Ref("@\"sable.protocol.Zoo.Named\""))}", animal);
+        Assert.Equal(2, Regex.Matches(animal, Regex.Escape($", {Null} }}")).Count);
+        var dog = Line(ir, "@\"sable.conformances.Zoo.Dog\"");
+        Assert.Contains($"[1 x {{ {RefType}, {RefType} }}]", dog, StringComparison.Ordinal);
+        Assert.Contains(Ref("@\"sable.protocol.Zoo.Loud\""), dog, StringComparison.Ordinal);
         // Its type metadata: a class (1), three fields, one conformance
         // record, then its name and the rest — its object metadata last.
         var type = Line(ir, "@\"sable.type.Zoo.Dog\"");
-        Assert.StartsWith("@\"sable.type.Zoo.Dog\" = internal constant %SableTypeMetadata { i64 1, i64 3, ptr @\"sable.fields.Zoo.Dog\", i64 1, ptr @\"sable.conformances.Zoo.Dog\", ptr @.trap.",
-            type, StringComparison.Ordinal);
-        Assert.EndsWith("ptr @sable_reference_witnesses, i64 0, ptr null, ptr @\"sable.meta.Zoo.Dog\" }", type, StringComparison.Ordinal);
+        Assert.StartsWith($"@\"sable.type.Zoo.Dog\" = internal constant %SableTypeMetadata {{ i64 1, i64 3, {Ref("@\"sable.fields.Zoo.Dog\"")}", type, StringComparison.Ordinal);
+        Assert.Matches($"{Regex.Escape(Ref("@\"sable.fields.Zoo.Dog\""))}.*, i64 1, {Regex.Escape(Ref("@\"sable.conformances.Zoo.Dog\""))}.*{Regex.Escape(TrapRef)}", type);
+        Assert.Contains($"ptr @sable_reference_witnesses, i64 0, {Null}, {Ref("@\"sable.meta.Zoo.Dog\"")}", type, StringComparison.Ordinal);
 
         // The object metadata points at it, before the vtable.
         Assert.Contains("ptr @\"sable.type.Zoo.Dog\", [", Line(ir, "@\"sable.meta.Zoo.Dog\""), StringComparison.Ordinal);
@@ -83,7 +99,7 @@ public sealed class TypeMetadataTests {
     [Fact]
     public void DenyingReflectionLeavesTheDescriptorsWithoutNames() {
         var ir = Ir(Classes, denyReflection: true);
-        Assert.Contains("{ ptr, ptr, i64, i64, ptr } { ptr null, ptr null, i64 ptrtoint", Line(ir, "@\"sable.fields.Zoo.Dog\""), StringComparison.Ordinal);
+        Assert.Contains($"{{ {RefType}, {RefType}, i64, i64, {RefType} }} {{ {Null}, {Null}, i64 ptrtoint", Line(ir, "@\"sable.fields.Zoo.Dog\""), StringComparison.Ordinal);
         Assert.DoesNotContain("c\"friend\\00\"", ir, StringComparison.Ordinal);
     }
 
@@ -122,18 +138,30 @@ public sealed class TypeMetadataTests {
             return;
         }
 
+        // A record's pointers to data are SableRefs (#300): on macOS and
+        // Linux the distance from the field, which a record made here, as the
+        // runtime makes its own, sets as it starts; on Windows the address.
         const string c = """
                          #include <stdint.h>
                          #include <stdio.h>
                          #include <stdbool.h>
 
-                         typedef struct { const char *name; } SableProtocol;
-                         typedef struct { const SableProtocol *protocol; const void *witnesses; } SableConformance;
+                         typedef struct { uintptr_t bits; } Ref;
+                         static void set(Ref *ref, const void *to) {
+                         #if defined(_WIN32)
+                             ref->bits = (uintptr_t)to;
+                         #else
+                             ref->bits = to == 0 ? 0 : (uintptr_t)((const char *)to - (const char *)ref);
+                         #endif
+                         }
+
+                         typedef struct { Ref name; } SableProtocol;
+                         typedef struct { Ref protocol; Ref witnesses; } SableConformance;
                          struct SableMetadata;
                          typedef struct {
-                             int64_t kind, field_count; const void *fields; int64_t conformance_count; const SableConformance *conformances;
-                             const char *name; int64_t size, alignment, stride, flags; const void *witnesses;
-                             int64_t argument_count; const void *arguments; const struct SableMetadata *object;
+                             int64_t kind, field_count; Ref fields; int64_t conformance_count; Ref conformances;
+                             Ref name; int64_t size, alignment, stride, flags; const void *witnesses;
+                             int64_t argument_count; Ref arguments; Ref object;
                          } SableTypeMetadata;
                          typedef struct SableMetadata {
                              void (*destroy)(void *); const char *name; int64_t element_size;
@@ -146,26 +174,44 @@ public sealed class TypeMetadataTests {
                          const void *sable_witness_table(const SableTypeMetadata *, const SableProtocol *);
                          bool sable_conforms(const void *, const SableProtocol *);
 
-                         static const SableProtocol named = { "Zoo.Named" }, loud = { "Zoo.Loud" }, other = { "Zoo.Other" };
-                         static const SableProtocol named_elsewhere = { "Zoo.Named" };
+                         static SableProtocol named, loud, other, named_elsewhere;
                          static const int witnesses = 7;
-                         static const SableConformance animal_records[] = { { &named, &witnesses } };
-                         static const SableConformance dog_records[] = { { &loud, 0 } };
-                         static const SableConformance point_records[] = { { &named, &witnesses } };
-                         static const SableMetadata animal, dog;
-                         static const SableTypeMetadata animal_type = { 1, 0, 0, 1, animal_records, "Zoo.Animal", 8, 8, 8, 0, 0, 0, 0, &animal };
-                         static const SableTypeMetadata dog_type = { 1, 0, 0, 1, dog_records, "Zoo.Dog", 8, 8, 8, 0, 0, 0, 0, &dog };
-                         static const SableTypeMetadata point_type = { 2, 0, 0, 1, point_records, "Zoo.Point", 16, 8, 16, 1, 0, 0, 0, 0 };
+                         static SableConformance animal_records[1], dog_records[1], point_records[1];
+                         static SableTypeMetadata animal_type = { 1, 0, {0}, 1, {0}, {0}, 8, 8, 8, 0, 0, 0, {0}, {0} };
+                         static SableTypeMetadata dog_type = { 1, 0, {0}, 1, {0}, {0}, 8, 8, 8, 0, 0, 0, {0}, {0} };
+                         static SableTypeMetadata point_type = { 2, 0, {0}, 1, {0}, {0}, 16, 8, 16, 1, 0, 0, {0}, {0} };
                          static const SableMetadata animal = { 0, "Zoo.Animal", 0, 0, 0, 16, 8, 0, &animal_type };
                          static const SableMetadata dog = { 0, "Zoo.Dog", 0, &animal, 0, 16, 8, 0, &dog_type };
                          static const SableMetadata array = { 0, "[Int]", 8, 0, 0, 32, 8, 0, 0 };
 
+                         static void conformance(SableConformance *record, const SableProtocol *protocol, const void *table) {
+                             set(&record->protocol, protocol);
+                             set(&record->witnesses, table);
+                         }
+
+                         static void type(SableTypeMetadata *type, SableConformance *records, const char *name, const SableMetadata *object) {
+                             set(&type->conformances, records);
+                             set(&type->name, name);
+                             set(&type->object, object);
+                         }
+
                          int main(void) {
+                             set(&named.name, "Zoo.Named");
+                             set(&loud.name, "Zoo.Loud");
+                             set(&other.name, "Zoo.Other");
+                             set(&named_elsewhere.name, "Zoo.Named");
+                             conformance(&animal_records[0], &named, &witnesses);
+                             conformance(&dog_records[0], &loud, 0);
+                             conformance(&point_records[0], &named, &witnesses);
+                             type(&animal_type, animal_records, "Zoo.Animal", &animal);
+                             type(&dog_type, dog_records, "Zoo.Dog", &dog);
+                             type(&point_type, point_records, "Zoo.Point", 0);
                              const void *object[2] = { &dog, 0 };
+                             const SableConformance *found = sable_conformance(&dog, &named_elsewhere);
                              printf("%d %d %d %d %d %d %d %d\n",
                                  sable_conformance(&dog, &loud) == &dog_records[0],
                                  sable_conformance(&dog, &named) == &animal_records[0],
-                                 sable_conformance(&dog, &named_elsewhere)->witnesses == &witnesses,
+                                 (const char *)&found->witnesses + found->witnesses.bits == (const char *)&witnesses || found->witnesses.bits == (uintptr_t)&witnesses,
                                  sable_conformance(&animal, &loud) == 0,
                                  sable_conforms(object, &other),
                                  sable_conformance(&array, &named) == 0,

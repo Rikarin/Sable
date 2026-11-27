@@ -144,12 +144,13 @@ program asks about (`T.self`, a `Type`, the SIL instruction
 what those reach. Both formats only grow, at the end of each record.
 
 ```c
-typedef struct { const char *name; const char *type_name; int64_t offset;
+typedef struct { uintptr_t bits; } SableRef;                      // a pointer to data: see below
+typedef struct { SableRef name; SableRef type_name; int64_t offset;
                  int64_t kind;                                    // 0 data, 1 strong, 2 aggregate, 3 weak/unowned
-                 const SableTypeMetadata *type; } SableField;     // null unless SABLE_TYPE_FIELD_TYPES
-typedef struct { const char *name; } SableProtocol;               // "Module.Protocol"
-typedef struct { const SableProtocol *protocol;
-                 const SableWitnessTable *witnesses; } SableConformance;
+                 SableRef type; } SableField;                     // null unless SABLE_TYPE_FIELD_TYPES
+typedef struct { SableRef name; } SableProtocol;                  // "Module.Protocol"
+typedef struct { SableRef protocol;
+                 SableRef witnesses; } SableConformance;
 typedef struct {                                                  // a value's copy, move and destruction in memory
     void (*initialize_with_copy)(void *dest, void *src, const SableTypeMetadata *);
     void (*initialize_with_take)(void *dest, void *src, const SableTypeMetadata *);
@@ -160,16 +161,36 @@ typedef struct {                                                  // a value's c
 } SableValueWitnesses;
 typedef struct SableTypeMetadata {
     int64_t kind;                                                 // SABLE_KIND_*: 1 class, 2 struct, 3 enum, 4 union, ...
-    int64_t field_count; const SableField *fields;                // a class's always; others' with SABLE_TYPE_FIELDS
-    int64_t conformance_count; const SableConformance *conformances;
-    const char *name;                                             // 'Zoo.Animal?', 'Sable.Collections.Deque<String>'
+    int64_t field_count; SableRef fields;                         // a class's always; others' with SABLE_TYPE_FIELDS
+    int64_t conformance_count; SableRef conformances;
+    SableRef name;                                                // 'Zoo.Animal?', 'Sable.Collections.Deque<String>'
     int64_t size, alignment, stride, flags;                       // SABLE_TYPE_TRIVIAL, _NONCOPYABLE, _HAS_DEINIT, ...
     const SableValueWitnesses *witnesses;
     int64_t argument_count;
-    const SableTypeMetadata *const *arguments;                    // type arguments; an optional's, array's, tuple's parts
-    const SableMetadata *object;                                  // a class's object metadata: vtable, superclass
+    SableRef arguments;                                           // SableRef[]: type arguments; an optional's, array's, tuple's parts
+    SableRef object;                                              // a class's object metadata: vtable, superclass
 } SableTypeMetadata;
 ```
+
+**Relative pointers** (#300). A record's pointer to data — a type's name,
+fields, conformance records, type arguments and object metadata; a field's
+name, type name and type; a protocol descriptor's name; a conformance
+record's protocol and table; a witness table's protocol, associated types,
+associated conformances and bases — is a `SableRef`. On macOS and Linux
+(Mach-O and ELF, 64-bit) it holds the distance from the field itself to
+what it points at, 0 for null: the compiler writes it as `sub (ptrtoint
+@target, ptrtoint <the field>)`, which the static linker resolves, so the
+loader fixes nothing up and a record holding only such pointers is
+read-only data (`__TEXT,__const`, `.rodata`); the runtime makes its own
+records' the same way (`sable_set_ref`), whatever the distance. On Windows,
+whose COFF relocates such a difference only within a section, and on WASI,
+which has no load-time fixups to save, it holds the address. It is read with
+`sable_ref`, and a record holding one is never copied as it is. Pointers to
+code — the requirements of a witness table, a vtable, value witnesses,
+destroy and visit functions — and a type's value-witness table stay
+absolute everywhere, so a call through one costs what it did; so do the
+records the compiler gives only the runtime to build from (shapes,
+templates' accessors, the structural list's requirements).
 
 - **Layout**: size, alignment and stride as the value is stored —
   natively LLVM's own numbers for the type the code uses, in the
@@ -200,10 +221,11 @@ typedef struct SableTypeMetadata {
   an instance code compiled once makes for a type known only at run time
   is made then, once, and equal to the one emitted statically for the same
   arguments.
-- **Linkage**: every record is `linkonce_odr` (in a COMDAT on Windows) when
-  the program is built in units, as a box's class is, so the linker keeps
-  one of each and its address is the type's identity — `Type`'s `==` is a
-  pointer comparison. A Sable shared library and the program that loads it
+- **Linkage**: every record is `linkonce_odr hidden` (in a COMDAT on
+  Windows) when the program is built in units, as a box's class is, so the
+  static linker keeps one of each and its address is the type's identity —
+  `Type`'s `==` is a pointer comparison — and the loader binds nothing to it
+  (docs/05 §5.4, "Symbols"). A Sable shared library and the program that loads it
   each have their own records, so `sable_metadata_equal` falls back to the
   kind, the size and the name, and `sable_metadata_hash` hashes the name
   (FNV-1a), which the interpreter computes alike.
@@ -327,11 +349,11 @@ P refines directly, in the order it names them (`bases`), and then,
 inline, one entry per requirement P itself declares.
 
 ```c
-typedef struct { const SableProtocol *protocol;
-                 int64_t associated_type_count; const SableTypeMetadata *const *associated_types;
+typedef struct { SableRef protocol;
+                 int64_t associated_type_count; SableRef associated_types;     // SableRef[]
                  int64_t associated_conformance_count;
-                 const SableAssociatedConformance *associated_conformances;
-                 int64_t base_count; const SableWitnessTable *const *bases;
+                 SableRef associated_conformances;
+                 int64_t base_count; SableRef bases;                          // SableRef[]
                  int64_t requirement_count; void *const requirements[]; } SableWitnessTable;
 ```
 

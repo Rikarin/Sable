@@ -670,7 +670,7 @@ error.
 | `codegen-units` | — | `1` compiles the program whole even in a dev build; the units are otherwise the packages, so another count is warned about |
 | `incremental` | `true` | `false` compiles the program whole each time, keeping no unit's object; an unchanged build is still skipped |
 | `panic` | `"abort"` | a trap always aborts; `"unwind"` is warned about |
-| `strip` | `"none"` | `"debuginfo"` or `"symbols"`: the link's `--strip-debug`/`--strip-all` on Linux, `-S`/`-S -x` on macOS; a warning on Windows |
+| `strip` | `"none"` | `"debuginfo"` or `"symbols"`: the link's `--strip-debug`/`--strip-all` on Linux, `-S`/`-S -x` on macOS; `"local"`, the symbols nothing needs by name — every one of the program's own, which are hidden (§5.4, "Symbols") — and not the debug information, `--discard-all` and `-x`, which a backtrace and the debugger name functions by; a warning on Windows |
 | `rpath` | `false` | the executable looks for shared libraries beside itself (`$ORIGIN`, `@executable_path`); a warning on Windows, which does already |
 | `exclusivity` | `"checked"` / `"unchecked"` | keeps or drops the dynamic exclusivity checks (docs/02 §2.3) |
 | `overflow-checks` | `true` | `false`: integer `+ - *`, negation, `abs` and `as` wrap rather than trap |
@@ -1334,6 +1334,90 @@ table, then the entry) where it was one, but an existential of one
 protocol is three words, not one plus two per requirement, so copying one
 — what iterating an array of them does — is cheaper, and the existential
 benchmark is faster at both levels.
+
+*The inline buffer (#299 step 2)* is not built. A value of up to three
+words kept in the existential itself rather than in a box would save the
+box's allocation, but an existential would then no longer be what SIL, its
+ARC passes, the ownership checks and the interpreter take it to be — a
+struct whose one counted field is a reference — and copying, moving and
+destroying one would go through the value witnesses of what it holds. That
+is its own change, to be measured on its own.
+
+### Symbols
+
+A program's symbols are its functions' and records' SIL names behind
+`sable.` (#300), shortened, linked so that the loader has nothing to do
+with them, and needed by nothing at run time:
+
+- **Hidden.** Every definition a unit makes is `hidden` — a function only
+  it defines, and a `linkonce_odr` one another unit may make too (a generic
+  instance, a thunk, a type's metadata, a witness table) — and so is every
+  declaration of another unit's, and the runtime is compiled
+  `-fvisibility=hidden`. The static linker binds each reference and keeps
+  one copy of each `linkonce_odr` definition; nothing is exported or bound
+  by name as the program loads, and in the executable every one is a local
+  symbol. C reaches a library through the functions it exports
+  (`@export`), which stay visible, and a Sable shared library has records
+  of its own (docs/06 §6.2). Before, each `linkonce_odr` record was a weak
+  definition the loader coalesced across images by name: a bind for every
+  pointer to one, and an entry in the export trie.
+- **Shortened by substitutions** (`SymbolNames`), as Swift's mangling is:
+  a name is written chain by chain — a qualified name such as
+  `Sable.Core.Collection` — and a run of a chain's parts is `~` and a letter
+  for a module of the standard library (`~a` is `Sable.Core`) or a word
+  names are full of (`~A` is `witnesses`, `~B` `generic`), or `~`, a number
+  and `_` for a prefix of a chain the name has had before, numbered as each
+  chain ends where it is four characters or more; a `~` of the name is
+  `~~`. `sable.witnesses.Sable.Core.ClosedRange$of$Int.Sable.Core.Collection`
+  is `sable.~A.~a.ClosedRange$of$~M.~a.Collection`; most of a program's own
+  names have nothing to substitute and are as they were. The emitter writes
+  SIL names throughout and shortens every `@"sable.…"` last; a backtrace
+  reads a symbol back with the same tables (`runtime/symbols.c`), and the
+  debugger names functions by their DWARF names, which are not mangled.
+- **Strippable.** `strip = "local"` in a profile (§5.2.11) leaves the local
+  symbols out of the link (`-x`, `--discard-all`) and keeps the debug
+  information: a trap's backtrace then names a frame by the subprogram its
+  address is in, read from `.debug_info` (the `.dSYM`'s on macOS) — its
+  DWARF name, `App.inner at main.sb:4:5` — and lldb finds it as before. On
+  macOS a package so built has its `.dSYM` made beside it, which the
+  backtrace reads; the debugger reads the objects, as without.
+- **Relative pointers.** The records' pointers to data are distances from
+  the field on macOS and Linux (docs/06 §6.2, "Relative pointers"), which
+  the static linker resolves: no rebase at load time, and records that hold
+  nothing else are read-only data. Pointers to code stay absolute.
+
+Measured on `examples/ssg`, a single file's `sable build -O0` with the
+library's archive from the cache (`sable` built Debug, an M1 Max, macOS
+arm64), before (6cef6ce) and after; fixups are the rebases and binds
+`dyld_info -fixups` lists, the symbol table's string table is `strsize`:
+
+| | Before, specialised | After, specialised | Before, unspecialised | After, unspecialised |
+|---|---:|---:|---:|---:|
+| executable | 681,944 B | 622,936 B | 3,088,680 B | 2,378,968 B |
+| `__LINKEDIT` | 124,888 B | 82,264 B | 1,302,824 B | 593,112 B |
+| chained fixups (`LC_DYLD_CHAINED_FIXUPS`) | 19,176 B | 1,784 B | 367,336 B | 2,120 B |
+| export trie | 582 symbols | 111 | 5,851 symbols | 177 |
+| fixups | 1,151 | 685 | 11,519 | 5,562 |
+| of which binds | 541 | 114 | 8,217 | 133 |
+| string table | 53,688 B | 43,808 B | 559,496 B | 391,136 B |
+| `__DATA_CONST` | 65,536 B | 49,152 B | 475,136 B | 425,984 B |
+
+Each step on its own, unspecialised: hidden symbols took `__LINKEDIT` from
+1,302,824 to 762,152 bytes (the binds become rebases, 8,217 to 133, and the
+export trie and the chained fixups' import table all but go); the
+substitutions took the string table from 559,496 to 390,528 bytes (30%;
+19% specialised, whose names are mostly the program's); relative pointers
+took the rebases from 9,808 to 5,429 (44%; specialised 862 to 571), of
+which what is left is pointers to code — witnesses, vtables, value
+witnesses — and the records the compiler gives only the runtime to build
+from (shapes, the structural list).
+
+`strip = "local"`, measured on `examples/ssg` as a package's dev build,
+whose debug map — the entries by which the debugger finds the objects'
+DWARF — stays: the symbol table from 4,887 entries to 3,489 specialised and
+from 37,325 to 27,206 unspecialised, `__LINKEDIT` from 131,312 to 101,584
+bytes and from 1,019,744 to 846,784, the executable from 852,208 to 822,480
+and from 2,985,824 to 2,812,864 bytes.
 
 ### The build cache
 

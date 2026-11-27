@@ -109,7 +109,7 @@ static const SableField *metadata_field(const SableTypeMetadata *type, int64_t i
         sable_trap("field index out of range");
     }
 
-    return &type->fields[index];
+    return &type_fields(type)[index];
 }
 
 static SableString *metadata_text(const char *text) {
@@ -117,11 +117,11 @@ static SableString *metadata_text(const char *text) {
 }
 
 SableString *sable_metadata_name(const SableTypeMetadata *type) {
-    return metadata_text(type->name);
+    return metadata_text(type_name_of(type));
 }
 
 SableString *sable_metadata_field_name(const SableTypeMetadata *type, int64_t index) {
-    return metadata_text(metadata_field(type, index)->name);
+    return metadata_text(field_name(metadata_field(type, index)));
 }
 
 int64_t sable_metadata_field_offset(const SableTypeMetadata *type, int64_t index) {
@@ -129,7 +129,7 @@ int64_t sable_metadata_field_offset(const SableTypeMetadata *type, int64_t index
 }
 
 const SableTypeMetadata *sable_metadata_field_type(const SableTypeMetadata *type, int64_t index) {
-    const SableTypeMetadata *field = metadata_field(type, index)->type;
+    const SableTypeMetadata *field = field_type(metadata_field(type, index));
     if (field == NULL) {
         sable_trap("the metadata has no field types");
     }
@@ -142,7 +142,7 @@ const SableTypeMetadata *sable_metadata_argument(const SableTypeMetadata *type, 
         sable_trap("type argument index out of range");
     }
 
-    return type->arguments[index];
+    return type_argument(type, index);
 }
 
 // What an existential's box holds (docs/06 §6.2): its type's metadata — of
@@ -155,9 +155,9 @@ const SableTypeMetadata *sable_box_value_metadata(const void *box) {
         return box_type;
     }
 
-    const SableTypeMetadata *held = box_type->arguments[0];
+    const SableTypeMetadata *held = type_argument(box_type, 0);
     if (held->kind == SABLE_KIND_CLASS) {
-        const void *object = *(const void *const *)((const char *)box + box_type->fields[0].offset);
+        const void *object = *(const void *const *)((const char *)box + type_fields(box_type)[0].offset);
         return (*(const SableMetadata *const *)object)->type;
     }
 
@@ -175,15 +175,15 @@ bool sable_metadata_equal(const SableTypeMetadata *a, const SableTypeMetadata *b
         return true;
     }
 
-    return a != NULL && b != NULL && a->kind == b->kind && a->size == b->size && a->name != NULL && b->name != NULL
-           && strcmp(a->name, b->name) == 0;
+    return a != NULL && b != NULL && a->kind == b->kind && a->size == b->size && type_name_of(a) != NULL && type_name_of(b) != NULL
+           && strcmp(type_name_of(a), type_name_of(b)) == 0;
 }
 
 // A hash of the type that agrees with sable_metadata_equal: FNV-1a over its
 // name, as the interpreter computes it.
 uint64_t sable_metadata_hash(const SableTypeMetadata *type) {
     uint64_t hash = 14695981039346656037ULL;
-    for (const unsigned char *at = (const unsigned char *)(type->name == NULL ? "" : type->name); *at != 0; at++) {
+    for (const unsigned char *at = (const unsigned char *)(type_name_of(type) == NULL ? "" : type_name_of(type)); *at != 0; at++) {
         hash = (hash ^ *at) * 1099511628211ULL;
     }
 
@@ -200,7 +200,8 @@ static bool conforms_by_name(const SableTypeMetadata *type, const char *name, si
 
     memcpy(buffer, name, length);
     buffer[length] = 0;
-    SableProtocol protocol = {buffer};
+    SableProtocol protocol;
+    sable_set_ref(&protocol.name, buffer);
     return sable_type_conformance(type, &protocol) != NULL;
 }
 
@@ -215,8 +216,8 @@ bool sable_metadata_is_subtype(const SableTypeMetadata *type, const SableTypeMet
         return true;
     }
 
-    if (of->kind == SABLE_KIND_EXISTENTIAL && of->name != NULL && strncmp(of->name, "any ", 4) == 0) {
-        const char *parts = of->name + 4;
+    if (of->kind == SABLE_KIND_EXISTENTIAL && type_name_of(of) != NULL && strncmp(type_name_of(of), "any ", 4) == 0) {
+        const char *parts = type_name_of(of) + 4;
         if (strcmp(parts, "Any") == 0) {
             return true;
         }
@@ -438,11 +439,11 @@ static const SableTypeMetadata *structural_union_made(const SableTypeMetadata *c
 
 // Never's metadata is '()'s.
 static bool is_never(const SableTypeMetadata *type) {
-    return type->name != NULL && strcmp(type->name, "()") == 0;
+    return type_name_of(type) != NULL && strcmp(type_name_of(type), "()") == 0;
 }
 
 static bool is_any_error(const SableTypeMetadata *type) {
-    return type->kind == SABLE_KIND_CLASS && type->name != NULL && strcmp(type->name, "any$Error") == 0;
+    return type->kind == SABLE_KIND_CLASS && type_name_of(type) != NULL && strcmp(type_name_of(type), "any$Error") == 0;
 }
 
 enum { UNION_CASES = 64 };
@@ -450,7 +451,7 @@ enum { UNION_CASES = 64 };
 static void union_add(const SableTypeMetadata *type, const SableTypeMetadata **cases, int64_t *count) {
     if ((type->flags & SABLE_TYPE_STRUCTURAL) != 0) {
         for (int64_t i = 0; i < type->argument_count; i++) {
-            union_add(type->arguments[i], cases, count);
+            union_add(type_argument(type, i), cases, count);
         }
 
         return;
@@ -466,7 +467,7 @@ static void union_add(const SableTypeMetadata *type, const SableTypeMetadata **c
             return;
         }
 
-        if (strcmp(cases[at]->name, type->name) > 0) {
+        if (strcmp(type_name_of(cases[at]), type_name_of(type)) > 0) {
             break;
         }
     }
@@ -504,11 +505,17 @@ const SableTypeMetadata *sable_structural_union_type(int64_t count, const SableT
 
 // A structural union as one made at run time, whoever made its metadata.
 static const SableTypeMetadata *union_instance(const SableTypeMetadata *type) {
-    return structural_union_made(type->arguments, type->argument_count);
+    const SableTypeMetadata *cases[UNION_CASES];
+    int64_t count = type->argument_count < UNION_CASES ? type->argument_count : UNION_CASES;
+    for (int64_t i = 0; i < count; i++) {
+        cases[i] = type_argument(type, i);
+    }
+
+    return structural_union_made(cases, count);
 }
 
 const SableTypeMetadata *sable_union_case_metadata(const void *value, const SableTypeMetadata *type) {
-    return type->arguments[sable_enum_tag(value, union_instance(type))];
+    return type_argument(type, sable_enum_tag(value, union_instance(type)));
 }
 
 void *sable_union_case_payload(void *value, const SableTypeMetadata *type) {
@@ -533,7 +540,7 @@ void sable_union_inject(void *value, const SableTypeMetadata *type, void *into, 
     }
 
     for (int64_t i = 0; i < to->argument_count; i++) {
-        if (sable_metadata_equal(to->arguments[i], type)) {
+        if (sable_metadata_equal(type_argument(to, i), type)) {
             const SableTypeMetadata *instance = union_instance(to);
             memset(into, 0, (size_t)to->size);
             memcpy(sable_enum_payload(into, instance), value, (size_t)type->size);
@@ -570,8 +577,8 @@ static const SableWitnessTable *const nothing_bases[8] = {
 static const struct SableNothingTable nothing_table = {NULL, 0, NULL, 0, NULL, 8, nothing_bases, 8, {NULL}};
 
 static bool is_nothing(const SableTypeMetadata *type, const SableProtocol *protocol) {
-    return type->size == 0 && type->name != NULL && strcmp(type->name, "()") == 0 && protocol->name != NULL
-           && (strcmp(protocol->name, "Sable.Core.Error") == 0 || strcmp(protocol->name, "Sable.Core.Debug") == 0);
+    return type->size == 0 && type_name_of(type) != NULL && strcmp(type_name_of(type), "()") == 0 && protocol_name(protocol) != NULL
+           && (strcmp(protocol_name(protocol), "Sable.Core.Error") == 0 || strcmp(protocol_name(protocol), "Sable.Core.Debug") == 0);
 }
 
 // A call that opens a Type runs generic code compiled once with the type's
@@ -585,8 +592,8 @@ const SableWitnessTable *sable_witness_table_required(const SableTypeMetadata *t
 
     if (table == NULL) {
         char message[512];
-        snprintf(message, sizeof message, "'%s' does not conform to '%s'", type->name == NULL ? "?" : type->name,
-                 protocol->name == NULL ? "?" : protocol->name);
+        snprintf(message, sizeof message, "'%s' does not conform to '%s'", type_name_of(type) == NULL ? "?" : type_name_of(type),
+                 protocol_name(protocol) == NULL ? "?" : protocol_name(protocol));
         trap_here(message);
     }
 
@@ -733,7 +740,7 @@ void sable_register_caster(const SableTypeMetadata *type, SableCaster cast) {
 // The existential of a box's value, its protocols named by the type ('any
 // M.Shape & M.Named'): the box, shared, the value's metadata and its tables.
 static bool existential_made(void *box, const SableTypeMetadata *held, const SableTypeMetadata *to, void **into) {
-    const char *parts = to->name + 4;
+    const char *parts = type_name_of(to) + 4;
     if (strchr(parts, '<') != NULL || strchr(parts, '$') != NULL) {
         return false;
     }
@@ -751,7 +758,8 @@ static bool existential_made(void *box, const SableTypeMetadata *held, const Sab
 
             memcpy(name, parts, length);
             name[length] = 0;
-            SableProtocol protocol = {name};
+            SableProtocol protocol;
+            sable_set_ref(&protocol.name, name);
             tables[count] = sable_witness_table(held, &protocol);
             if (tables[count++] == NULL) {
                 return false;
@@ -784,8 +792,8 @@ bool sable_existential_cast(void *box, const SableTypeMetadata *to, void *into) 
     // To a structural union: one of its cases' types, put in it.
     if ((to->flags & SABLE_TYPE_STRUCTURAL) != 0) {
         for (int64_t i = 0; i < to->argument_count; i++) {
-            if (sable_metadata_is_subtype(held, to->arguments[i])) {
-                const SableTypeMetadata *instance = union_instance(to), *type = to->arguments[i];
+            if (sable_metadata_is_subtype(held, type_argument(to, i))) {
+                const SableTypeMetadata *instance = union_instance(to), *type = type_argument(to, i);
                 int64_t from = type->alignment > (int64_t)sizeof(SableObject) ? type->alignment : (int64_t)sizeof(SableObject);
                 memset(into, 0, (size_t)to->size);
                 type->witnesses->initialize_with_copy(sable_enum_payload(into, instance), (char *)box + from, type);
@@ -797,7 +805,7 @@ bool sable_existential_cast(void *box, const SableTypeMetadata *to, void *into) 
         return false;
     }
 
-    if (to->kind == SABLE_KIND_EXISTENTIAL && to->name != NULL && strncmp(to->name, "any ", 4) == 0) {
+    if (to->kind == SABLE_KIND_EXISTENTIAL && type_name_of(to) != NULL && strncmp(type_name_of(to), "any ", 4) == 0) {
         for (int64_t i = 0; i < caster_count; i++) {
             if (casters[i].type == to) {
                 return casters[i].cast(box, into);
@@ -948,17 +956,17 @@ static void instance_conformances(SableTypeMetadata *type, const SableAggregateS
         for (int64_t j = 0; j < conformance->requirement_count && holds; j++) {
             const SableShapeRequirement *requirement = &conformance->requirements[j];
             holds = requirement->argument < type->argument_count
-                    && sable_type_conformance(type->arguments[requirement->argument], requirement->protocol) != NULL;
+                    && sable_type_conformance(type_argument(type, requirement->argument), requirement->protocol) != NULL;
         }
 
         if (holds) {
-            records[count].protocol = conformance->protocol;
+            sable_set_ref(&records[count].protocol, conformance->protocol);
             count++;
         }
     }
 
     type->conformance_count = count;
-    type->conformances = records;
+    sable_set_ref(&type->conformances, records);
 }
 
 enum { LAYOUT_TAGGED = 0, LAYOUT_NULLABLE = 1, LAYOUT_BOOL = 2, LAYOUT_CHAR = 3, LAYOUT_FIELDS = 4 };
@@ -1058,7 +1066,7 @@ void sable_enum_inject(void *value, int64_t tag, const SableTypeMetadata *type) 
 
 // Where a struct's or a tuple's field is.
 void *sable_field_address(void *value, int64_t index, const SableTypeMetadata *type) {
-    return (char *)value + type->fields[index].offset;
+    return (char *)value + type_fields(type)[index].offset;
 }
 
 // The witnesses of a tagged enum, a struct or a tuple that holds references:
@@ -1069,7 +1077,7 @@ static void aggregate_copy(void *destination, void *source, const SableTypeMetad
     if (instance->layout == LAYOUT_FIELDS) {
         for (int64_t i = 0; i < instance->part_count; i++) {
             const SableTypeMetadata *part = instance->parts[i];
-            int64_t offset = type->fields[i].offset;
+            int64_t offset = type_fields(type)[i].offset;
             part->witnesses->initialize_with_copy((char *)destination + offset, (char *)source + offset, part);
         }
 
@@ -1088,7 +1096,7 @@ static void aggregate_destroy(void *value, const SableTypeMetadata *type) {
     if (instance->layout == LAYOUT_FIELDS) {
         for (int64_t i = 0; i < instance->part_count; i++) {
             const SableTypeMetadata *part = instance->parts[i];
-            part->witnesses->destroy((char *)value + type->fields[i].offset, part);
+            part->witnesses->destroy((char *)value + type_fields(type)[i].offset, part);
         }
 
         return;
@@ -1105,7 +1113,7 @@ static void aggregate_visit(void *value, const SableTypeMetadata *type) {
     if (instance->layout == LAYOUT_FIELDS) {
         for (int64_t i = 0; i < instance->part_count; i++) {
             const SableTypeMetadata *part = instance->parts[i];
-            part->witnesses->visit((char *)value + type->fields[i].offset, part);
+            part->witnesses->visit((char *)value + type_fields(type)[i].offset, part);
         }
 
         return;
@@ -1124,11 +1132,11 @@ static const SableValueWitnesses aggregate_witnesses = {
 static SableAggregateInstance *aggregate_instances;
 
 static size_t name_length(const SableTypeMetadata *type) {
-    return type == NULL || type->name == NULL ? 0 : strlen(type->name);
+    return type == NULL || type_name_of(type) == NULL ? 0 : strlen(type_name_of(type));
 }
 
 static const char *name_of(const SableTypeMetadata *type) {
-    return type == NULL || type->name == NULL ? "" : type->name;
+    return type == NULL || type_name_of(type) == NULL ? "" : type_name_of(type);
 }
 
 // What a case's payload is, its labels written: '(width: Int, height: M.Label)'
@@ -1145,7 +1153,7 @@ static char *labelled_name(const char *labels, const SableTypeMetadata *payload)
 
     size_t length = strlen(labels) + 3;
     for (int64_t i = 0; i < count; i++) {
-        length += 2 + name_length(count == 1 ? payload : payload->arguments[i]);
+        length += 2 + name_length(count == 1 ? payload : type_argument(payload, i));
     }
 
     char *name = malloc(length);
@@ -1159,7 +1167,7 @@ static char *labelled_name(const char *labels, const SableTypeMetadata *payload)
     for (int64_t i = 0; i < count; i++) {
         const char *end = strchr(label, ',');
         size_t label_length = end == NULL ? strlen(label) : (size_t)(end - label);
-        const char *type = name_of(count == 1 ? payload : payload->arguments[i]);
+        const char *type = name_of(count == 1 ? payload : type_argument(payload, i));
         if (i > 0) {
             *to++ = ',';
             *to++ = ' ';
@@ -1352,7 +1360,7 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
     made->fields = fields;
     made->type.kind = shape == NULL ? SABLE_KIND_TUPLE : shape->kind;
     made->type.field_count = part_count;
-    made->type.fields = fields;
+    sable_set_ref(&made->type.fields, fields);
     made->type.flags = SABLE_TYPE_FIELDS | SABLE_TYPE_FIELD_TYPES;
     if (enumeration) {
         lay_out_enum(made);
@@ -1360,25 +1368,27 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
         lay_out_fields(made);
     }
 
-    made->type.name = aggregate_name(made);
+    sable_set_ref(&made->type.name, aggregate_name(made));
     made->type.argument_count = optional ? 1 : shape == NULL ? part_count : shape->argument_count;
-    made->type.arguments = optional ? &kept[made->some] : shape == NULL ? kept : kept + part_count;
+    sable_set_ref(&made->type.arguments, sable_ref_array((const void *const *)(optional ? &kept[made->some] : shape == NULL ? kept : kept + part_count), made->type.argument_count));
     made->type.stride = round_up(made->type.size, made->type.alignment);
     instance_conformances(&made->type, optional ? NULL : shape);
     for (int64_t i = 0; i < part_count; i++) {
-        fields[i].type = parts[i];
-        fields[i].type_name = name_of(parts[i]);
+        sable_set_ref(&fields[i].type, parts[i]);
+        sable_set_ref(&fields[i].type_name, name_of(parts[i]));
         fields[i].kind = parts[i] == NULL || (parts[i]->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA : SABLE_FIELD_AGGREGATE;
         if (enumeration) {
             fields[i].offset = made->payload_offset;
             if (shape != NULL && shape->part_labels != NULL && shape->part_labels[i] != NULL && parts[i] != NULL) {
                 const char *labelled = labelled_name(shape->part_labels[i], parts[i]);
-                fields[i].type_name = labelled == NULL ? fields[i].type_name : labelled;
+                if (labelled != NULL) {
+                    sable_set_ref(&fields[i].type_name, labelled);
+                }
             }
         }
 
         if (shape != NULL) {
-            fields[i].name = shape->part_names[i];
+            sable_set_ref(&fields[i].name, shape->part_names[i]);
             continue;
         }
 
@@ -1388,7 +1398,7 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
         }
 
         snprintf(index, 24, "%lld", (long long)i);
-        fields[i].name = index;
+        sable_set_ref(&fields[i].name, index);
     }
 
     return made;
@@ -1469,7 +1479,7 @@ static const SableTypeMetadata *structural_union_made(const SableTypeMetadata *c
     SableAggregateInstance *instance = aggregate_make(shape, count, kept);
     instance->type.flags |= SABLE_TYPE_STRUCTURAL;
     instance->type.argument_count = count;
-    instance->type.arguments = kept;
+    sable_set_ref(&instance->type.arguments, sable_ref_array((const void *const *)kept, instance->type.argument_count));
     made->count = count;
     made->cases = kept;
     made->type = &instance->type;
@@ -1569,7 +1579,7 @@ static bool class_arguments_are(const SableTypeMetadata *type, int64_t count, co
     }
 
     for (int64_t i = 0; i < count; i++) {
-        if (type->arguments[i] != arguments[i] && (exactly || !sable_metadata_equal(type->arguments[i], arguments[i]))) {
+        if (type_argument(type, i) != arguments[i] && (exactly || !sable_metadata_equal(type_argument(type, i), arguments[i]))) {
             return false;
         }
     }
@@ -1632,13 +1642,13 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
         const SableTypeMetadata *part = kept[i];
         int64_t part_align = part->alignment < 1 ? 1 : part->alignment;
         int64_t at = round_up(end, part_align);
-        fields[i].name = shape->part_names[i];
-        fields[i].type_name = name_of(part);
+        sable_set_ref(&fields[i].name, shape->part_names[i]);
+        sable_set_ref(&fields[i].type_name, name_of(part));
         fields[i].offset = at;
         fields[i].kind = (part->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA
                          : part->kind == SABLE_KIND_CLASS ? SABLE_FIELD_STRONG
                          : SABLE_FIELD_AGGREGATE;
-        fields[i].type = part;
+        sable_set_ref(&fields[i].type, part);
         end = at + part->size;
         align = part_align > align ? part_align : align;
     }
@@ -1646,13 +1656,13 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     SableTypeMetadata *type = &made->type;
     type->kind = SABLE_KIND_CLASS;
     type->field_count = field_count;
-    type->fields = fields;
+    sable_set_ref(&type->fields, fields);
     type->size = type->alignment = type->stride = (int64_t)sizeof(void *);
     type->flags = SABLE_TYPE_NULLABLE | SABLE_TYPE_FIELDS | SABLE_TYPE_FIELD_TYPES;
     type->witnesses = &sable_reference_witnesses;
     type->argument_count = shape->argument_count;
-    type->arguments = kept + field_count;
-    type->object = &made->object;
+    sable_set_ref(&type->arguments, sable_ref_array((const void *const *)(kept + field_count), type->argument_count));
+    sable_set_ref(&type->object, &made->object);
     instance_conformances(type, shape);
 
     size_t base = strlen(shape->name);
@@ -1664,13 +1674,13 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     memcpy(before, shape->name, base);
     before[base] = '<';
     before[base + 1] = 0;
-    type->name = shape->argument_count == 0 ? shape->name : joined_name(before, shape->argument_count, type->arguments, ">");
+    sable_set_ref(&type->name, shape->argument_count == 0 ? shape->name : joined_name(before, shape->argument_count, kept + field_count, ">"));
     free(before);
 
     SableMetadata *object = &made->object;
     object->destroy = class_destroy;
-    object->copy_element = superclass == NULL ? NULL : (void (*)(void *, const void *))(void *)superclass->object;
-    object->name = type->name;
+    object->copy_element = superclass == NULL ? NULL : (void (*)(void *, const void *))(void *)type_object(superclass);
+    object->name = type_name_of(type);
     object->size = round_up(end, align);
     object->alignment = align;
     object->visit = class_visit;
@@ -1695,8 +1705,10 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
         SableTypeMetadata own = {0};
         own.kind = SABLE_KIND_CLASS;
         own.argument_count = shape->argument_count;
-        own.arguments = arguments;
+        SableRef *refs = sable_ref_array((const void *const *)arguments, shape->argument_count);
+        sable_set_ref(&own.arguments, refs);
         superclass = shape->superclass(&own);
+        free(refs);
     }
 
     // Found or made under a lock: two threads asking at once for the same
@@ -1737,7 +1749,7 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
 const SableTypeMetadata *sable_object_ancestor(const void *object, const char *name) {
     size_t length = strlen(name);
     for (const SableTypeMetadata *type = (*(const SableMetadata *const *)object)->type; type != NULL; type = superclass_of(type)) {
-        if (type->name != NULL && strncmp(type->name, name, length) == 0 && type->name[length] == '<') {
+        if (type_name_of(type) != NULL && strncmp(type_name_of(type), name, length) == 0 && type_name_of(type)[length] == '<') {
             return type;
         }
     }
@@ -1755,7 +1767,7 @@ static void *box_made(void *value, const SableTypeMetadata *type) {
     void *cache = NULL;
     const SableTypeMetadata *parts[] = {type, type};
     const SableTypeMetadata *made = sable_class_type(&cache, &shape, parts);
-    void *box = sable_alloc(made->object, made->object->size);
-    type->witnesses->initialize_with_copy((char *)box + made->fields[0].offset, value, type);
+    void *box = sable_alloc(type_object(made), type_object(made)->size);
+    type->witnesses->initialize_with_copy((char *)box + type_fields(made)[0].offset, value, type);
     return box;
 }

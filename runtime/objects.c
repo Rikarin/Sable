@@ -53,24 +53,78 @@ enum {
 
 struct SableTypeMetadata;
 
+// A pointer in a record to data (#300): where the object format relocates
+// the difference of two addresses at link time — Mach-O and ELF, in 64 bits —
+// the distance from the field itself to what it points at, so that a record
+// the compiler writes needs no fixup as the program loads and can be
+// read-only; elsewhere (COFF, which relocates such a difference only within
+// a section, and WebAssembly, which has no fixups to save) the address. 0 is
+// null either way, as no field points at itself. The runtime makes its own
+// records' the same way (sable_set_ref), any distance apart. Read with
+// sable_ref; a record holding one is never copied as it is, since a
+// distance means something only where it is. Pointers to code stay
+// absolute: a call through one is as quick as ever.
+typedef struct SableRef {
+    uintptr_t bits;
+} SableRef;
+
+#if UINTPTR_MAX > UINT32_MAX && !defined(_WIN32)
+#define SABLE_RELATIVE_REFS 1
+#else
+#define SABLE_RELATIVE_REFS 0
+#endif
+
+static inline const void *sable_ref(const SableRef *ref) {
+#if SABLE_RELATIVE_REFS
+    return ref->bits == 0 ? NULL : (const char *)ref + (intptr_t)ref->bits;
+#else
+    return (const void *)ref->bits;
+#endif
+}
+
+static inline void sable_set_ref(SableRef *ref, const void *pointer) {
+#if SABLE_RELATIVE_REFS
+    ref->bits = pointer == NULL ? 0 : (uintptr_t)((const char *)pointer - (const char *)ref);
+#else
+    ref->bits = (uintptr_t)pointer;
+#endif
+}
+
+// What a field points at, read: SABLE_REF(type->name).
+#define SABLE_REF(field) sable_ref(&(field))
+
+// An array of SableRefs to each of 'count' records, made where it stays.
+static SableRef *sable_ref_array(const void *const *pointers, int64_t count) {
+    SableRef *refs = calloc((size_t)(count > 0 ? count : 1), sizeof *refs);
+    if (refs == NULL) {
+        abort();
+    }
+
+    for (int64_t i = 0; i < count; i++) {
+        sable_set_ref(&refs[i], pointers[i]);
+    }
+
+    return refs;
+}
+
 typedef struct SableField {
-    const char *name;
-    const char *type_name;
-    int64_t offset;                       // from the start of the value — of an object, its header's bytes among them
-    int64_t kind;                         // SABLE_FIELD_*
-    const struct SableTypeMetadata *type; // null unless SABLE_TYPE_FIELD_TYPES, and for a case with no payload
+    SableRef name;      // const char *
+    SableRef type_name; // const char *
+    int64_t offset;     // from the start of the value — of an object, its header's bytes among them
+    int64_t kind;       // SABLE_FIELD_*
+    SableRef type;      // const SableTypeMetadata *: null unless SABLE_TYPE_FIELD_TYPES, and for a case with no payload
 } SableField;
 
 // A protocol, identified by its descriptor's address, or — across images,
 // each of which has its own copy — by its name.
 typedef struct SableProtocol {
-    const char *name;
+    SableRef name; // const char *
 } SableProtocol;
 
 // What an associated type must conform to: its index, and the protocol.
 typedef struct SableAssociatedConformance {
     int64_t associated_type;
-    const SableProtocol *protocol;
+    SableRef protocol; // const SableProtocol *
 } SableAssociatedConformance;
 
 // A conformance's witness table (#299): its associated types' metadata and
@@ -83,13 +137,13 @@ typedef struct SableAssociatedConformance {
 // goes, and Self's metadata. An existential holds a pointer to one per
 // protocol, so a call through it is two loads: the table, then the entry.
 typedef struct SableWitnessTable {
-    const SableProtocol *protocol;
+    SableRef protocol; // const SableProtocol *
     int64_t associated_type_count;
-    const struct SableTypeMetadata *const *associated_types;
+    SableRef associated_types; // SableRef[]: each const SableTypeMetadata *
     int64_t associated_conformance_count;
-    const SableAssociatedConformance *associated_conformances;
+    SableRef associated_conformances; // const SableAssociatedConformance *
     int64_t base_count;
-    const struct SableWitnessTable *const *bases;
+    SableRef bases; // SableRef[]: each const SableWitnessTable *, or null
     int64_t requirement_count;
     void *const requirements[];
 } SableWitnessTable;
@@ -98,8 +152,8 @@ typedef struct SableWitnessTable {
 // with the witness table an existential of the protocol is built from — or
 // null, where the program builds none.
 typedef struct SableConformance {
-    const SableProtocol *protocol;
-    const SableWitnessTable *witnesses;
+    SableRef protocol;  // const SableProtocol *
+    SableRef witnesses; // const SableWitnessTable *, or null
 } SableConformance;
 
 // How a value of a type is copied, moved and destroyed in memory, given its
@@ -121,10 +175,10 @@ struct SableMetadata;
 typedef struct SableTypeMetadata {
     int64_t kind; // SABLE_KIND_*
     int64_t field_count;
-    const SableField *fields; // a class's (its superclass's first) always; another type's with SABLE_TYPE_FIELDS
+    SableRef fields; // const SableField *: a class's (its superclass's first) always; another type's with SABLE_TYPE_FIELDS
     int64_t conformance_count;
-    const SableConformance *conformances; // a class's own: its superclass's are the superclass's
-    const char *name;                     // as Sable writes it: 'Zoo.Animal?', 'Sable.Collections.Deque<String>'
+    SableRef conformances; // const SableConformance *: a class's own: its superclass's are the superclass's
+    SableRef name; // const char *: as Sable writes it: 'Zoo.Animal?', 'Sable.Collections.Deque<String>'
     int64_t size;
     int64_t alignment;
     int64_t stride;
@@ -133,8 +187,8 @@ typedef struct SableTypeMetadata {
     // A generic type's arguments; an optional's wrapped type, an array's
     // element, a tuple's elements, a function's parameters and result.
     int64_t argument_count;
-    const struct SableTypeMetadata *const *arguments;
-    const struct SableMetadata *object; // a class's object metadata: its vtable, its superclass's; else null
+    SableRef arguments; // SableRef[]: each const SableTypeMetadata *
+    SableRef object;    // const SableMetadata *: a class's object metadata: its vtable, its superclass's; else null
 } SableTypeMetadata;
 
 // What a counted object is (docs/06 §6.2): how to destroy what it holds,
@@ -156,20 +210,83 @@ typedef struct SableMetadata {
     const SableTypeMetadata *type; // a class's; null for an array and the runtime's own objects
 } SableMetadata;
 
+// The records' pointers, read (SableRef).
+static inline const char *type_name_of(const SableTypeMetadata *type) {
+    return SABLE_REF(type->name);
+}
+
+static inline const SableField *type_fields(const SableTypeMetadata *type) {
+    return SABLE_REF(type->fields);
+}
+
+static inline const SableConformance *type_conformances(const SableTypeMetadata *type) {
+    return SABLE_REF(type->conformances);
+}
+
+static inline const SableMetadata *type_object(const SableTypeMetadata *type) {
+    return SABLE_REF(type->object);
+}
+
+// Type argument 'index': an element of an array of SableRefs, which the
+// runtime's own arrays of pointers are too, each being absolute.
+static inline const SableTypeMetadata *type_argument(const SableTypeMetadata *type, int64_t index) {
+    return sable_ref((const SableRef *)SABLE_REF(type->arguments) + index);
+}
+
+static inline const char *field_name(const SableField *field) {
+    return SABLE_REF(field->name);
+}
+
+static inline const char *field_type_name(const SableField *field) {
+    return SABLE_REF(field->type_name);
+}
+
+static inline const SableTypeMetadata *field_type(const SableField *field) {
+    return SABLE_REF(field->type);
+}
+
+static inline const char *protocol_name(const SableProtocol *protocol) {
+    return SABLE_REF(protocol->name);
+}
+
+static inline const SableProtocol *conformance_protocol(const SableConformance *conformance) {
+    return SABLE_REF(conformance->protocol);
+}
+
+static inline const SableWitnessTable *conformance_witnesses(const SableConformance *conformance) {
+    return SABLE_REF(conformance->witnesses);
+}
+
+static inline const SableProtocol *table_protocol(const SableWitnessTable *table) {
+    return SABLE_REF(table->protocol);
+}
+
+static inline const SableTypeMetadata *table_associated_type(const SableWitnessTable *table, int64_t index) {
+    return sable_ref((const SableRef *)SABLE_REF(table->associated_types) + index);
+}
+
+static inline const SableWitnessTable *table_base(const SableWitnessTable *table, int64_t index) {
+    return sable_ref((const SableRef *)SABLE_REF(table->bases) + index);
+}
+
+static inline const SableAssociatedConformance *table_associated_conformances(const SableWitnessTable *table) {
+    return SABLE_REF(table->associated_conformances);
+}
+
 // ---- Conformances -----------------------------------------------------------
 
 static bool same_protocol(const SableProtocol *a, const SableProtocol *b) {
-    return a == b || (a != NULL && b != NULL && a->name != NULL && b->name != NULL && strcmp(a->name, b->name) == 0);
+    return a == b || (a != NULL && b != NULL && protocol_name(a) != NULL && protocol_name(b) != NULL && strcmp(protocol_name(a), protocol_name(b)) == 0);
 }
 
 // The superclass's metadata, for a class's; null for any other type.
 static const SableTypeMetadata *superclass_of(const SableTypeMetadata *type) {
-    if (type->kind != SABLE_KIND_CLASS || type->object == NULL) {
+    if (type->kind != SABLE_KIND_CLASS || type_object(type) == NULL) {
         return NULL;
     }
 
     // A class keeps its superclass where an array keeps its element copier.
-    const SableMetadata *super = (const SableMetadata *)(const void *)type->object->copy_element;
+    const SableMetadata *super = (const SableMetadata *)(const void *)type_object(type)->copy_element;
     return super == NULL ? NULL : super->type;
 }
 
@@ -199,7 +316,7 @@ void sable_register_witness_table(const SableTypeMetadata *type, const SableWitn
 
 static const SableWitnessTable *registered_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (int64_t i = 0; i < registered_count; i++) {
-        if (registered_tables[i].type == type && same_protocol(registered_tables[i].table->protocol, protocol)) {
+        if (registered_tables[i].type == type && same_protocol(table_protocol(registered_tables[i].table), protocol)) {
             return registered_tables[i].table;
         }
     }
@@ -212,7 +329,7 @@ bool sable_metadata_equal(const SableTypeMetadata *a, const SableTypeMetadata *b
 // The table registered for a type the program names, for the same type made as it runs.
 static const SableWitnessTable *registered_for_equal(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (int64_t i = 0; i < registered_count; i++) {
-        if (same_protocol(registered_tables[i].table->protocol, protocol) && sable_metadata_equal(registered_tables[i].type, type)) {
+        if (same_protocol(table_protocol(registered_tables[i].table), protocol) && sable_metadata_equal(registered_tables[i].type, type)) {
             return registered_tables[i].table;
         }
     }
@@ -273,24 +390,27 @@ static const SableWitnessTable *template_instance(const SableTypeMetadata *type,
 
     size_t size = sizeof(SableWitnessTable) + (size_t)of->requirement_count * sizeof of->requirements[0];
     SableWitnessTable *table = malloc(size);
-    const SableTypeMetadata **types = calloc((size_t)of->associated_type_count + 1, sizeof *types);
-    const SableWitnessTable **bases = calloc((size_t)of->base_count + 1, sizeof *bases);
+    SableRef *types = calloc((size_t)of->associated_type_count + 1, sizeof *types);
+    SableRef *bases = calloc((size_t)of->base_count + 1, sizeof *bases);
     SableTemplateInstance *made = malloc(sizeof *made);
     if (table == NULL || types == NULL || bases == NULL || made == NULL) {
         sable_trap("out of memory");
     }
 
     memcpy(table, of, size);
+    // Its pointers to data made absolute: a relative one means something only where it is.
+    sable_set_ref(&table->protocol, table_protocol(of));
+    sable_set_ref(&table->associated_conformances, table_associated_conformances(of));
     for (int64_t i = 0; i < of->associated_type_count; i++) {
-        types[i] = associated[i](type);
+        sable_set_ref(&types[i], associated[i](type));
     }
 
     for (int64_t i = 0; i < of->base_count; i++) {
-        bases[i] = of->bases[i] == NULL ? NULL : sable_witness_table(type, of->bases[i]->protocol);
+        sable_set_ref(&bases[i], table_base(of, i) == NULL ? NULL : sable_witness_table(type, table_protocol(table_base(of, i))));
     }
 
-    table->associated_types = types;
-    table->bases = bases;
+    sable_set_ref(&table->associated_types, types);
+    sable_set_ref(&table->bases, bases);
     made->type = type;
     made->template_table = of;
     made->table = table;
@@ -316,13 +436,13 @@ static bool is_instance_of(const SableTypeMetadata *type, const char *name, size
             return strcmp(name, "|") == 0;
         }
 
-        return strncmp(type->name, name, length) == 0 && type->name[length] == '<';
+        return strncmp(type_name_of(type), name, length) == 0 && type_name_of(type)[length] == '<';
     }
 }
 
 static const SableWitnessTable *template_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (int64_t i = 0; i < template_count; i++) {
-        if (same_protocol(templates[i].table->protocol, protocol) && is_instance_of(type, templates[i].name, templates[i].length)) {
+        if (same_protocol(table_protocol(templates[i].table), protocol) && is_instance_of(type, templates[i].name, templates[i].length)) {
             return templates[i].associated == NULL ? templates[i].table : template_instance(type, templates[i].table, templates[i].associated);
         }
     }
@@ -369,14 +489,14 @@ static const SableConformance *structural_conformance(const SableTypeMetadata *t
     for (int64_t i = 0; i < structural_count; i++) {
         for (int64_t j = 0; j < structural[i].count; j++) {
             const SableStructuralConformance *each = &structural[i].list[j];
-            if (each->kind != type->kind || !same_protocol(each->record.protocol, protocol)) {
+            if (each->kind != type->kind || !same_protocol(conformance_protocol(&each->record), protocol)) {
                 continue;
             }
 
             bool holds = true;
             for (int64_t k = 0; k < each->requirement_count && holds; k++) {
                 for (int64_t m = 0; m < (is_union ? type->argument_count : 1) && holds; m++) {
-                    holds = sable_type_conformance(type->arguments[m], each->requirements[k]) != NULL;
+                    holds = sable_type_conformance(type_argument(type, m), each->requirements[k]) != NULL;
                 }
             }
 
@@ -398,8 +518,8 @@ static const SableConformance *structural_conformance(const SableTypeMetadata *t
 const SableConformance *sable_type_conformance(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (; type != NULL; type = superclass_of(type)) {
         for (int64_t i = 0; i < type->conformance_count; i++) {
-            if (same_protocol(type->conformances[i].protocol, protocol)) {
-                return &type->conformances[i];
+            if (same_protocol(conformance_protocol(&type_conformances(type)[i]), protocol)) {
+                return &type_conformances(type)[i];
             }
         }
 
@@ -424,9 +544,9 @@ const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, cons
     for (; type != NULL; type = superclass_of(type)) {
         bool conforms = false;
         for (int64_t i = 0; i < type->conformance_count; i++) {
-            if (same_protocol(type->conformances[i].protocol, protocol)) {
-                if (type->conformances[i].witnesses != NULL) {
-                    return type->conformances[i].witnesses;
+            if (same_protocol(conformance_protocol(&type_conformances(type)[i]), protocol)) {
+                if (conformance_witnesses(&type_conformances(type)[i]) != NULL) {
+                    return conformance_witnesses(&type_conformances(type)[i]);
                 }
 
                 conforms = true;
@@ -435,7 +555,7 @@ const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, cons
 
         conforms = conforms || structural_conformance(type, protocol) != NULL;
         const SableWitnessTable *table = registered_table(type, protocol);
-        if (table == NULL && conforms && type->argument_count > 0 && type->name != NULL) {
+        if (table == NULL && conforms && type->argument_count > 0 && type_name_of(type) != NULL) {
             table = template_table(type, protocol);
             if (table == NULL) {
                 table = registered_for_equal(type, protocol);
@@ -464,7 +584,7 @@ static const SableField *field_holding(const SableMetadata *type, const void *ob
     }
 
     for (int64_t i = 0; i < type->type->field_count; i++) {
-        const SableField *field = &type->type->fields[i];
+        const SableField *field = &type_fields(type->type)[i];
         if (field->kind == SABLE_FIELD_STRONG && *(const void *const *)((const char *)object + field->offset) == target) {
             return field;
         }

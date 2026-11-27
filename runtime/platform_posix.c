@@ -96,6 +96,19 @@ static void name_frame(void *frame, char *text, size_t size) {
     }
 #endif
 
+    // A program whose local symbols are stripped (#300) has none of its own
+    // functions': dladdr gives the nearest left before it, or none. The
+    // debug information names the function.
+    const char *function = NULL;
+    const void *function_start = NULL;
+    if ((symbol == NULL || strncmp(symbol, "sable", 5) != 0) && frame_function(at, image, &function, &function_start)
+        && (symbol == NULL || start == NULL || (const char *)start < (const char *)function_start)) {
+        symbol = function;
+        start = function_start;
+    }
+
+    char name[300];
+    symbol = symbol_demangle(symbol, name, sizeof name);
     if (symbol != NULL) {
         if (frame_place(at, image, place, sizeof place)) {
             snprintf(text, size, "%s at %s", symbol, place);
@@ -208,6 +221,14 @@ static bool line_sections(LineSections *sections) {
                         section_in(file, size, section[s].offset, section[s].size, &sections->line_str, &sections->line_str_size);
                     } else if (strncmp(section[s].sectname, "__debug_str", 16) == 0) {
                         section_in(file, size, section[s].offset, section[s].size, &sections->str, &sections->str_size);
+                    } else if (strncmp(section[s].sectname, "__debug_info", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->info, &sections->info_size);
+                    } else if (strncmp(section[s].sectname, "__debug_abbrev", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->abbrev, &sections->abbrev_size);
+                    } else if (strncmp(section[s].sectname, "__debug_str_offs", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->str_offsets, &sections->str_offsets_size);
+                    } else if (strncmp(section[s].sectname, "__debug_addr", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->addr, &sections->addr_size);
                     }
                 }
             }
@@ -278,6 +299,14 @@ static bool line_sections(LineSections *sections) {
             section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->line_str, &sections->line_str_size);
         } else if (strcmp(name, ".debug_str") == 0) {
             section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->str, &sections->str_size);
+        } else if (strcmp(name, ".debug_info") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->info, &sections->info_size);
+        } else if (strcmp(name, ".debug_abbrev") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->abbrev, &sections->abbrev_size);
+        } else if (strcmp(name, ".debug_str_offsets") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->str_offsets, &sections->str_offsets_size);
+        } else if (strcmp(name, ".debug_addr") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->addr, &sections->addr_size);
         }
     }
 

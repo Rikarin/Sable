@@ -155,6 +155,7 @@ public sealed partial class LlvmEmitter {
         _inherited = null;
         _headerReaders = null;
         TypeLayout.PointerBytes = _arch == "wasm32" ? 4 : 8;
+        _relative = !_windows && _arch != "wasm32";
         _checkExclusivity = module.CheckExclusivity;
         _debug?.Begin(module);
 
@@ -250,7 +251,7 @@ public sealed partial class LlvmEmitter {
         // One C sees ('@export var') is named for C, and visible to it.
         foreach (var (globalName, globalType) in module.Globals) {
             var exported = IsExportedGlobal(globalName);
-            var linkage = module.Unit is not null ? "linkonce_odr" : exported ? "dso_local" : "internal";
+            var linkage = module.Unit is not null ? exported ? "linkonce_odr" : "linkonce_odr hidden" : exported ? "dso_local" : "internal";
             output.Append(GlobalStorage(globalName)).Append($" = {linkage} global ")
                 .Append(Type(globalType)).Append(" zeroinitializer").Append(Comdat(GlobalStorage(globalName), linkage)).Append(StorageAlign(globalType));
             if (_debug?.GlobalVariable(globalName, globalType, local: module.Unit is null) is { } variable) {
@@ -298,7 +299,9 @@ public sealed partial class LlvmEmitter {
             output.Append(_debug.Metadata());
         }
 
-        return output.ToString();
+        // Every symbol shortened as the last step, so that what is written above
+        // names each by its SIL name, and only the object file sees the symbol.
+        return SymbolNames.MangleIr(output.ToString());
     }
 
     /// <summary>
@@ -1757,7 +1760,7 @@ public sealed partial class LlvmEmitter {
     ///     one unit of several — one copy for the program, since a class's
     ///     metadata is its identity to <c>is</c> and <c>as?</c>.
     /// </summary>
-    string SharedLinkage => _module?.Unit is null ? "internal" : "linkonce_odr";
+    string SharedLinkage => _module?.Unit is null ? "internal" : "linkonce_odr hidden";
 
     /// <summary>
     ///     How a function is linked. A whole program's are its own: nothing
@@ -1770,8 +1773,21 @@ public sealed partial class LlvmEmitter {
     /// </summary>
     string Linkage(string function) =>
         _module?.Unit is not { } unit ? "internal "
-        : unit.Owned.Contains(function) ? ""
-        : "linkonce_odr ";
+        : unit.Owned.Contains(function) ? OwnedLinkage
+        : "linkonce_odr hidden ";
+
+    /// <summary>
+    ///     How a function only its own unit defines is linked: seen by the
+    ///     program's other units, and by nothing outside it (#300). A Sable
+    ///     symbol is never looked up by name as the program runs — C reaches
+    ///     the exported functions through wrappers named for C, and a Sable
+    ///     shared library has records of its own — so it is hidden: the
+    ///     static linker binds every reference to it, it is no export, and in
+    ///     the executable it is a local symbol. A <c>linkonce_odr</c> one is
+    ///     hidden too, so that the linker keeps one copy and the loader binds
+    ///     nothing to it.
+    /// </summary>
+    const string OwnedLinkage = "hidden ";
 
     /// <summary>
     ///     A <c>declare</c> for every function the unit refers to and does not
@@ -1795,8 +1811,8 @@ public sealed partial class LlvmEmitter {
 
             var name = symbol[SymbolPrefix.Length..];
             declarations.Append(unit.External.TryGetValue(name, out var type)
-                ? $"declare {ReturnType(type)} @{Global(name)}({string.Join(", ", ResultPlaces(type).Concat(type.Parameters.Select(static p => p is AddressType ? "ptr noalias" : p == SilType.Unit ? "{}" : ValueType(p))))})\n"
-                : $"declare void @{Global(name)}()\n");
+                ? $"declare hidden {ReturnType(type)} @{Global(name)}({string.Join(", ", ResultPlaces(type).Concat(type.Parameters.Select(static p => p is AddressType ? "ptr noalias" : p == SilType.Unit ? "{}" : ValueType(p))))})\n"
+                : $"declare hidden void @{Global(name)}()\n");
         }
 
         return declarations.ToString();
@@ -2450,10 +2466,10 @@ public sealed partial class LlvmEmitter {
             var array = Fresh();
             var slot = Fresh();
             var entry = Fresh();
-            _entryAllocas.Append($"  {at} = getelementptr inbounds {WitnessTableRecord}, ptr {table}, i32 0, i32 {field}\n")
-                .Append($"  {array} = load ptr, ptr {at}\n")
-                .Append($"  {slot} = getelementptr inbounds ptr, ptr {array}, i64 {index}\n")
-                .Append($"  {entry} = load ptr, ptr {slot}\n");
+            _entryAllocas.Append($"  {at} = getelementptr inbounds {module.WitnessTableRecord}, ptr {table}, i32 0, i32 {field}\n")
+                .Append(module.LoadRef(array, at))
+                .Append($"  {slot} = getelementptr inbounds {module.RefType}, ptr {array}, i64 {index}\n")
+                .Append(module.LoadRef(entry, slot));
             return entry;
         }
 
@@ -3139,7 +3155,7 @@ public sealed partial class LlvmEmitter {
             // Sable has no unwinding: an error is a returned value and a trap
             // ends the program. Said, LLVM needs no unwind paths for calls.
             var linkage = module.Linkage(function.Name);
-            if (suffix.Length > 0 && linkage.Length == 0) {
+            if (suffix.Length > 0 && linkage == OwnedLinkage) {
                 linkage = "internal ";
             }
 
@@ -3361,6 +3377,9 @@ public sealed partial class LlvmEmitter {
                 : throw new InvalidOperationException("a value used before it was written");
 
         void Line(string text) => _out.Append("  ").Append(text).Append(_dbg).Append('\n');
+
+        /// <summary>Instructions as they are written, a line each (<see cref="LlvmEmitter.LoadRef" />).</summary>
+        void Raw(string lines) => _out.Append(lines);
 
         /// <summary>The object an optional class reference holds, or null: what a weak reference is made from.</summary>
         string WeakTarget(EnumType optional, string value) {
@@ -4038,7 +4057,7 @@ public sealed partial class LlvmEmitter {
                         var objectField = Fresh();
                         Line($"{objectField} = getelementptr inbounds %SableTypeMetadata, ptr {classMetadata}, i32 0, i32 13");
                         var objectMetadata = Fresh();
-                        Line($"{objectMetadata} = load ptr, ptr {objectField}");
+                        Raw(module.LoadRef(objectMetadata, objectField));
                         var sizeField = Fresh();
                         Line($"{sizeField} = getelementptr inbounds %SableMetadata, ptr {objectMetadata}, i32 0, i32 5");
                         var objectSize = Fresh();

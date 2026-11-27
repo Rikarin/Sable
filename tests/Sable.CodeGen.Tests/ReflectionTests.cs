@@ -321,8 +321,8 @@ public sealed class ReflectionTests {
             Program("struct Point { var x: Int }\nstruct Other { var y: Int }", "print(Reflect.describe(Point(x: 1)))\nprint(Other(y: 2).y)"),
             "test.sb"));
         Assert.True(reflecting.Succeeded, string.Join("\n", reflecting.Errors));
-        Assert.Contains("$reflect.describe$Point", reflecting.LlvmIr!);
-        Assert.DoesNotContain("$reflect.describe$Other", reflecting.LlvmIr!);
+        Assert.Contains("$reflect.describe$Point", SymbolNames.DemangleIr(reflecting.LlvmIr!));
+        Assert.DoesNotContain("$reflect.describe$Other", SymbolNames.DemangleIr(reflecting.LlvmIr!));
         Assert.DoesNotContain("TypeInfo", reflecting.LlvmIr!);
     }
 

@@ -26,8 +26,8 @@ namespace Sable.CodeGen;
 ///     </para>
 /// </remarks>
 public sealed partial class LlvmEmitter {
-    /// <summary>The runtime's <c>SableTypeMetadata</c>.</summary>
-    const string TypeMetadataRecord = "{ i64, i64, ptr, i64, ptr, ptr, i64, i64, i64, i64, ptr, i64, ptr, ptr }";
+    /// <summary>The runtime's <c>SableTypeMetadata</c>: its pointers to data <see cref="Ref" />s.</summary>
+    string TypeMetadataRecord => $"{{ i64, i64, {RefType}, i64, {RefType}, {RefType}, i64, i64, i64, i64, ptr, i64, {RefType}, {RefType} }}";
 
     /// <summary>Where each field of <c>SableTypeMetadata</c> is.</summary>
     internal const int MetadataKindField = 0, MetadataFieldCountField = 1, MetadataNameField = 5, MetadataSizeField = 6, MetadataAlignmentField = 7,
@@ -42,13 +42,66 @@ public sealed partial class LlvmEmitter {
     internal const int CopyWitness = 0, TakeWitness = 1, AssignWitness = 2, AssignWithTakeWitness = 3, DestroyWitness = 4;
 
     /// <summary>The runtime's <c>SableField</c>: name, type name, offset, kind, type.</summary>
-    const string FieldDescriptorType = "{ ptr, ptr, i64, i64, ptr }";
+    string FieldDescriptorType => $"{{ {RefType}, {RefType}, i64, i64, {RefType} }}";
 
     /// <summary>
     ///     The runtime's <c>SableWitnessTable</c>, but for its requirements,
     ///     which follow inline (<see cref="WitnessTableEntries" /> bytes on).
     /// </summary>
-    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr, i64 }";
+    string WitnessTableRecord => $"{{ {RefType}, i64, {RefType}, i64, {RefType}, i64, {RefType}, i64 }}";
+
+    /// <summary>
+    ///     Whether the records' pointers to data are relative (#300,
+    ///     <c>SableRef</c> in runtime/objects.c): the distance from the field
+    ///     to what it points at, which the static linker resolves, so that the
+    ///     loader has nothing to fix up and the record can be read-only.
+    ///     Mach-O and ELF relocate such a difference in 64 bits; COFF does
+    ///     only within a section, and WebAssembly has no fixups to save, so
+    ///     those keep addresses, as the runtime built for them reads them.
+    ///     Pointers to code — witnesses, vtables, value witnesses — stay
+    ///     absolute everywhere: a call through one is as quick as before.
+    /// </summary>
+    bool _relative;
+
+    /// <summary>The LLVM type of a record's pointer to data.</summary>
+    internal string RefType => _relative ? "i64" : "ptr";
+
+    /// <summary>A null <c>SableRef</c>, typed.</summary>
+    string NullRef => _relative ? "i64 0" : "ptr null";
+
+    /// <summary>
+    ///     A record's pointer to <paramref name="target" /> (or to nothing, for
+    ///     <c>null</c>), typed, as the field at <paramref name="field" /> — a
+    ///     constant <c>getelementptr</c> into the record being written —
+    ///     holds it.
+    /// </summary>
+    string Ref(string target, string field) =>
+        target == "null" ? NullRef
+        : !_relative ? $"ptr {target}"
+        : $"i64 sub (i64 ptrtoint (ptr {target} to i64), i64 ptrtoint (ptr {field} to i64))";
+
+    /// <summary>The address of field <paramref name="index" /> of the record <paramref name="global" /> of type <paramref name="type" />, as a constant.</summary>
+    static string FieldOf(string type, string global, int index) => $"getelementptr inbounds ({type}, ptr {global}, i32 0, i32 {index})";
+
+    /// <summary>The address of element <paramref name="index" /> of the array <paramref name="global" /> of <paramref name="count" /> of <paramref name="element" />, and of its field <paramref name="field" /> when given.</summary>
+    static string ElementOf(string element, int count, string global, int index, int? field = null) =>
+        $"getelementptr inbounds ([{count} x {element}], ptr {global}, i64 0, i64 {index}{(field is { } f ? $", i32 {f}" : "")})";
+
+    /// <summary>An array of <c>SableRef</c>s to <paramref name="targets" />, as the constant global <paramref name="global" />, whose type is given back with it.</summary>
+    (string Type, string Value) RefArray(string global, IReadOnlyList<string> targets) =>
+        ($"[{targets.Count} x {RefType}]", $"[{string.Join(", ", targets.Select((t, i) => Ref(t, ElementOf(RefType, targets.Count, global, i))))}]");
+
+    /// <summary>
+    ///     Instructions that read the <c>SableRef</c> at <paramref name="address" />
+    ///     into <paramref name="result" />, a <c>ptr</c>: a load, and where
+    ///     records are relative, the distance's decoding.
+    /// </summary>
+    internal string LoadRef(string result, string address) =>
+        !_relative ? $"  {result} = load ptr, ptr {address}\n"
+        : $"  {result}.bits = load i64, ptr {address}\n"
+          + $"  {result}.null = icmp eq i64 {result}.bits, 0\n"
+          + $"  {result}.at = getelementptr i8, ptr {address}, i64 {result}.bits\n"
+          + $"  {result} = select i1 {result}.null, ptr null, ptr {result}.at\n";
 
     /// <summary>Where a witness table's requirements start, in bytes.</summary>
     internal const int WitnessTableEntries = 64;
@@ -77,32 +130,35 @@ public sealed partial class LlvmEmitter {
         if (!fields.IsEmpty) {
             fieldArray = $"@\"sable.fields.{Mangled(type)}\"";
             var descriptors = fields.Select((f, i) =>
-                $"{FieldDescriptorType} {{ {(denied ? "ptr null, ptr null" : $"ptr {TrapMessage(f.Name)}, ptr {TrapMessage(f.TypeName)}")}, "
-                + $"i64 {LlvmOffset(type, i, f)}, i64 {f.Kind}, ptr {(fieldTypes && f.Type is { } fieldType && !SilType.MentionsOpaque(fieldType) ? TypeMetadataGlobal(fieldType) : "null")} }}").ToList();
+                $"{FieldDescriptorType} {{ {Ref(denied ? "null" : TrapMessage(f.Name), ElementOf(FieldDescriptorType, fields.Length, fieldArray, i, 0))}, {Ref(denied ? "null" : TrapMessage(f.TypeName), ElementOf(FieldDescriptorType, fields.Length, fieldArray, i, 1))}, "
+                + $"i64 {LlvmOffset(type, i, f)}, i64 {f.Kind}, {Ref(fieldTypes && f.Type is { } fieldType && !SilType.MentionsOpaque(fieldType) ? TypeMetadataGlobal(fieldType) : "null", ElementOf(FieldDescriptorType, fields.Length, fieldArray, i, 4))} }}").ToList();
             _globals.Append($"{fieldArray} = {SharedLinkage} constant [{fields.Length} x {FieldDescriptorType}] [{string.Join(", ", descriptors)}]{Comdat(fieldArray, SharedLinkage)}\n");
         }
 
-        var records = (_module?.ConformancesOf(type) ?? []).Select(r => $"{{ ptr, ptr }} {{ ptr {ProtocolDescriptor(r.Protocol)}, ptr {WitnessesOf(r.Witnesses)} }}").ToList();
-        var conformances = "null";
+        var conforming = _module?.ConformancesOf(type) ?? [];
+        var conformances = conforming.Count > 0 ? $"@\"sable.conformances.{Mangled(type)}\"" : "null";
+        var record = $"{{ {RefType}, {RefType} }}";
+        var records = conforming.Select((r, i) => $"{record} {{ {Ref(ProtocolDescriptor(r.Protocol), ElementOf(record, conforming.Count, conformances, i, 0))}, {Ref(WitnessesOf(r.Witnesses), ElementOf(record, conforming.Count, conformances, i, 1))} }}").ToList();
         if (records.Count > 0) {
-            conformances = $"@\"sable.conformances.{Mangled(type)}\"";
-            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
+            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {record}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
-        var argumentList = metadata.Arguments.Select(a => $"ptr {TypeMetadataGlobal(a)}").ToList();
+        var argumentList = metadata.Arguments.Select(TypeMetadataGlobal).ToList();
         var arguments = "null";
         if (argumentList.Count > 0) {
             arguments = $"@\"sable.arguments.{Mangled(type)}\"";
-            _globals.Append($"{arguments} = {SharedLinkage} constant [{argumentList.Count} x ptr] [{string.Join(", ", argumentList)}]{Comdat(arguments, SharedLinkage)}\n");
+            var (arrayType, array) = RefArray(arguments, argumentList);
+            _globals.Append($"{arguments} = {SharedLinkage} constant {arrayType} {array}{Comdat(arguments, SharedLinkage)}\n");
         }
 
         var witnesses = ValueWitnessTable(type, metadata);
         var typeName = TrapMessage(metadata.Name);
         var objectMetadata = type is ClassType classType ? ClassMetadata(classType) : "null";
         var flags = (int)metadata.FlagsIn(_module);
-        _globals.Append($"{name} = {SharedLinkage} constant %SableTypeMetadata {{ i64 {(int)metadata.Kind}, i64 {fields.Length}, ptr {fieldArray}, ")
-            .Append($"i64 {records.Count}, ptr {conformances}, ptr {typeName}, i64 {LlvmSize(type, metadata)}, i64 {LlvmAlignment(type, metadata)}, i64 {LlvmStride(type, metadata)}, ")
-            .Append($"i64 {flags}, ptr {witnesses}, i64 {argumentList.Count}, ptr {arguments}, ptr {objectMetadata} }}{Comdat(name, SharedLinkage)}\n");
+        string At(int field) => FieldOf("%SableTypeMetadata", name, field);
+        _globals.Append($"{name} = {SharedLinkage} constant %SableTypeMetadata {{ i64 {(int)metadata.Kind}, i64 {fields.Length}, {Ref(fieldArray, At(2))}, ")
+            .Append($"i64 {records.Count}, {Ref(conformances, At(4))}, {Ref(typeName, At(5))}, i64 {LlvmSize(type, metadata)}, i64 {LlvmAlignment(type, metadata)}, i64 {LlvmStride(type, metadata)}, ")
+            .Append($"i64 {flags}, ptr {witnesses}, i64 {argumentList.Count}, {Ref(arguments, At(12))}, {Ref(objectMetadata, At(13))} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -473,10 +529,10 @@ public sealed partial class LlvmEmitter {
                 _globals.Append($"{required} = internal constant [{requirements.Length} x ptr] [{each}]\n");
             }
 
-            records.Add($"{{ ptr, ptr, i64, i64, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, ptr null, i64 {(int)kind}, i64 {requirements.Length}, ptr {required} }}");
+            records.Add($"{{ {RefType}, {RefType}, i64, i64, ptr }} {{ {Ref(ProtocolDescriptor(protocol), ElementOf($"{{ {RefType}, {RefType}, i64, i64, ptr }}", module.StructuralConformances.Count, "@\"sable.structural\"", records.Count, 0))}, {NullRef}, i64 {(int)kind}, i64 {requirements.Length}, ptr {required} }}");
         }
 
-        _globals.Append($"@\"sable.structural\" = internal constant [{records.Count} x {{ ptr, ptr, i64, i64, ptr }}] [{string.Join(", ", records)}]\n");
+        _globals.Append($"@\"sable.structural\" = internal constant [{records.Count} x {{ {RefType}, {RefType}, i64, i64, ptr }}] [{string.Join(", ", records)}]\n");
         _helpers.Append($"define internal void @\"sable.structural.register\"() {{\nentry:\n  call void @sable_register_structural(ptr @\"sable.structural\", i64 {records.Count})\n  ret void\n}}\n\n");
         return "@\"sable.structural.register\"";
     }
@@ -568,23 +624,25 @@ public sealed partial class LlvmEmitter {
         var associatedTypes = "null";
         if (table is { IsTemplate: false, AssociatedTypes.Count: > 0 }) {
             associatedTypes = name[..^1] + ".associated\"";
-            var types = table.AssociatedTypes.Select(a => $"ptr {TypeMetadataGlobal(a.Type)}").ToList();
-            _globals.Append($"{associatedTypes} = {SharedLinkage} constant [{types.Count} x ptr] [{string.Join(", ", types)}]{Comdat(associatedTypes, SharedLinkage)}\n");
+            var (typesType, types) = RefArray(associatedTypes, table.AssociatedTypes.Select(a => TypeMetadataGlobal(a.Type)).ToList());
+            _globals.Append($"{associatedTypes} = {SharedLinkage} constant {typesType} {types}{Comdat(associatedTypes, SharedLinkage)}\n");
         }
 
         var associatedConformances = "null";
         if (table.AssociatedConformances.Count > 0) {
             associatedConformances = name[..^1] + ".associated_conformances\"";
-            var records = table.AssociatedConformances.Select(c => $"{{ i64, ptr }} {{ i64 {c.AssociatedType}, ptr {ProtocolDescriptor(c.Protocol)} }}").ToList();
-            _globals.Append($"{associatedConformances} = {SharedLinkage} constant [{records.Count} x {{ i64, ptr }}] [{string.Join(", ", records)}]{Comdat(associatedConformances, SharedLinkage)}\n");
+            var record = $"{{ i64, {RefType} }}";
+            var records = table.AssociatedConformances.Select((c, i) => $"{record} {{ i64 {c.AssociatedType}, {Ref(ProtocolDescriptor(c.Protocol), ElementOf(record, table.AssociatedConformances.Count, associatedConformances, i, 1))} }}").ToList();
+            _globals.Append($"{associatedConformances} = {SharedLinkage} constant [{records.Count} x {record}] [{string.Join(", ", records)}]{Comdat(associatedConformances, SharedLinkage)}\n");
         }
 
         // The conformer's tables of the protocols this one refines, for unspecialised code to reach them by.
         var bases = "null";
         if (table.Bases.Count > 0) {
-            var refined = table.Bases.Select(b => _module?.FindWitnessTable(table.Conformer, b) is { } baseTable ? $"ptr {WitnessTableGlobal(baseTable)}" : "ptr null").ToList();
+            var refined = table.Bases.Select(b => _module?.FindWitnessTable(table.Conformer, b) is { } baseTable ? WitnessTableGlobal(baseTable) : "null").ToList();
             bases = name[..^1] + ".bases\"";
-            _globals.Append($"{bases} = {SharedLinkage} constant [{refined.Count} x ptr] [{string.Join(", ", refined)}]{Comdat(bases, SharedLinkage)}\n");
+            var (basesType, baseArray) = RefArray(bases, refined);
+            _globals.Append($"{bases} = {SharedLinkage} constant {basesType} {baseArray}{Comdat(bases, SharedLinkage)}\n");
         }
 
         // Its requirements, inline: each the witness in the one calling
@@ -592,10 +650,11 @@ public sealed partial class LlvmEmitter {
         var entries = table.Entries.Select(e => e.Function is not { } witness || _reachable?.Contains(witness) == false || _module?.Find(witness) is null && _module?.Unit is null
             ? "ptr null"
             : $"ptr @{Global(witness)}").ToList();
-        var record = $"{{ ptr, i64, ptr, i64, ptr, i64, ptr, i64, [{entries.Count} x ptr] }}";
-        _globals.Append($"{name} = {SharedLinkage} constant {record} {{ ptr {protocol}, ")
-            .Append($"i64 {table.AssociatedTypes.Count}, ptr {associatedTypes}, i64 {table.AssociatedConformances.Count}, ptr {associatedConformances}, ")
-            .Append($"i64 {table.Bases.Count}, ptr {bases}, i64 {entries.Count}, [{entries.Count} x ptr] [{string.Join(", ", entries)}] }}{Comdat(name, SharedLinkage)}\n");
+        var tableRecord = $"{{ {RefType}, i64, {RefType}, i64, {RefType}, i64, {RefType}, i64, [{entries.Count} x ptr] }}";
+        string At(int field) => FieldOf(tableRecord, name, field);
+        _globals.Append($"{name} = {SharedLinkage} constant {tableRecord} {{ {Ref(protocol, At(0))}, ")
+            .Append($"i64 {table.AssociatedTypes.Count}, {Ref(associatedTypes, At(2))}, i64 {table.AssociatedConformances.Count}, {Ref(associatedConformances, At(4))}, ")
+            .Append($"i64 {table.Bases.Count}, {Ref(bases, At(6))}, i64 {entries.Count}, [{entries.Count} x ptr] [{string.Join(", ", entries)}] }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -609,7 +668,7 @@ public sealed partial class LlvmEmitter {
         var name = $"@\"sable.protocol.{protocol.Replace("\"", "", StringComparison.Ordinal)}\"";
         if (_emitted.Add(name)) {
             var text = TrapMessage(protocol);
-            _globals.Append($"{name} = {SharedLinkage} constant {{ ptr }} {{ ptr {text} }}{Comdat(name, SharedLinkage)}\n");
+            _globals.Append($"{name} = {SharedLinkage} constant {{ {RefType} }} {{ {Ref(text, FieldOf($"{{ {RefType} }}", name, 0))} }}{Comdat(name, SharedLinkage)}\n");
         }
 
         return name;
@@ -706,12 +765,14 @@ public sealed partial class LlvmEmitter {
         /// <summary>A load of the pointer at an index of one of a witness table's arrays, its field <paramref name="field" />.</summary>
         string TableEntry(string table, int field, int index) {
             var at = Fresh();
-            Line($"{at} = getelementptr inbounds {WitnessTableRecord}, ptr {table}, i32 0, i32 {field}");
+            Line($"{at} = getelementptr inbounds {module.WitnessTableRecord}, ptr {table}, i32 0, i32 {field}");
             var array = Fresh();
-            Line($"{array} = load ptr, ptr {at}");
+            Raw(module.LoadRef(array, at));
             var slot = Fresh();
-            Line($"{slot} = getelementptr inbounds ptr, ptr {array}, i64 {index}");
-            return $"load ptr, ptr {slot}";
+            Line($"{slot} = getelementptr inbounds {module.RefType}, ptr {array}, i64 {index}");
+            var entry = Fresh();
+            Raw(module.LoadRef(entry, slot));
+            return $"getelementptr i8, ptr {entry}, i64 0";
         }
 
         bool MetadataBuiltin(BuiltinInst builtin, string[] operands) {

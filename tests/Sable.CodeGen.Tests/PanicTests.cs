@@ -564,6 +564,46 @@ public sealed class PanicTests {
         Assert.DoesNotContain("inner at test.sb", plain.Stderr, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     A frame whose symbol is shortened by substitutions (#300) is named
+    ///     by the function's own name: <c>Test.Element.witness</c>, whose
+    ///     symbol is <c>sable.Test.~K.~C</c>, and a generic instance's
+    ///     repeated type names, written once and referred back to.
+    /// </summary>
+    [Fact]
+    public void ABacktraceNamesAFrameByItsNameWhereItsSymbolIsShortened() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var source = """
+                     module Test
+
+                     struct Element {
+                         let n: Int
+                         fn witness() -> Int {
+                             precondition(n < 3, "small")
+                             return n
+                         }
+                     }
+
+                     fn pair<A, B>(_ a: A, _ b: B, _ e: Element) -> Int {
+                         return e.witness()
+                     }
+
+                     @main
+                     fn main() {
+                         print(pair(Element { n: 1 }, Element { n: 1 }, Element { n: 1 }))
+                         print(pair(Element { n: 1 }, Element { n: 1 }, Element { n: 5 }))
+                     }
+                     """;
+        var plain = BuildAndRun(source, optimise: false, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "1" });
+        Assert.StartsWith("1\n", plain.Stdout, StringComparison.Ordinal);
+        Assert.Contains("sable.Test.Element.witness + ", plain.Stderr, StringComparison.Ordinal);
+        Assert.Contains("sable.Test.pair", plain.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("~", plain.Stderr, StringComparison.Ordinal);
+    }
+
     /// <summary>Built with -g, as <c>sable build -g</c> builds, and run.</summary>
     static Execution BuildAndRunDebug(string source, IReadOnlyDictionary<string, string> environment) {
         var directory = Directory.CreateTempSubdirectory("sable-lines-");

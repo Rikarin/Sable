@@ -1141,7 +1141,8 @@ public sealed partial class Manifest {
                             TomlBoolean { Value: false } or TomlString { Value: "none" } => profile with { Strip = StripMode.None },
                             TomlBoolean { Value: true } or TomlString { Value: "symbols" } => profile with { Strip = StripMode.Symbols },
                             TomlString { Value: "debuginfo" } => profile with { Strip = StripMode.DebugInfo },
-                            _ => Invalid(profile, value, path, "must be true, false, \"none\", \"debuginfo\" or \"symbols\""),
+                            TomlString { Value: "local" } => profile with { Strip = StripMode.Local },
+                            _ => Invalid(profile, value, path, "must be true, false, \"none\", \"debuginfo\", \"local\" or \"symbols\""),
                         };
                         recorded[key] = Written(value);
                         break;

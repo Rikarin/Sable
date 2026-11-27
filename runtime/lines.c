@@ -480,4 +480,377 @@ static bool frame_place(const void *at, const void *image, char *place, size_t s
     return false;
 }
 
+
+// ---- Functions by their DWARF (#300) ----------------------------------------
+//
+// A program may have its local symbols stripped (a profile's strip =
+// "local"): a frame in one of its functions then has no symbol of its own,
+// and dladdr names it by the nearest one that is left, before it. Its name
+// is in the debug information all the same: the DW_TAG_subprogram whose
+// addresses hold it, in .debug_info, its attributes read as .debug_abbrev
+// says, of DWARF 4 or 5.
+
+enum {
+    TAG_SUBPROGRAM = 0x2e,
+    AT_NAME = 0x03,
+    AT_LOW_PC = 0x11,
+    AT_HIGH_PC = 0x12,
+    AT_ABSTRACT_ORIGIN = 0x31,
+    AT_SPECIFICATION = 0x47,
+    AT_STR_OFFSETS_BASE = 0x72,
+    AT_ADDR_BASE = 0x73,
+};
+
+// One attribute's value, as its form says: an address, a number, an
+// offset or a string; 'kind' says which: 0 none, 1 a number (or an index,
+// for strx and addrx: 'index' set), 2 a string, 3 an address.
+typedef struct DwarfValue {
+    int kind;
+    bool index;
+    uint64_t number;
+    const char *text;
+} DwarfValue;
+
+typedef struct DwarfUnit {
+    const uint8_t *start; // the unit's header
+    int offset_size, address_size, version;
+    uint64_t str_offsets_base, addr_base;
+} DwarfUnit;
+
+static bool dwarf_value(LineCursor *cursor, uint64_t form, int64_t implicit, const DwarfUnit *unit, const LineSections *sections, DwarfValue *value) {
+    value->kind = 1;
+    value->index = false;
+    value->number = 0;
+    value->text = NULL;
+    switch (form) {
+    case 0x01: // addr
+        value->kind = 3;
+        value->number = line_read(cursor, unit->address_size);
+        return true;
+    case 0x1b: // addrx
+        value->kind = 3;
+        value->index = true;
+        value->number = line_uleb(cursor);
+        return true;
+    case 0x29: case 0x2a: case 0x2b: case 0x2c: // addrx1, 2, 3, 4
+        value->kind = 3;
+        value->index = true;
+        value->number = line_read(cursor, form == 0x29 ? 1 : form == 0x2a ? 2 : form == 0x2b ? 3 : 4);
+        return true;
+    case 0x08: // string
+    case 0x0e: // strp
+    case 0x1f: // line_strp
+        if (!line_form(cursor, form, unit->offset_size, sections, &value->text, &value->number)) {
+            return false;
+        }
+
+        value->kind = 2;
+        return true;
+    case 0x1a: // strx
+        value->kind = 2;
+        value->index = true;
+        value->number = line_uleb(cursor);
+        return true;
+    case 0x25: case 0x26: case 0x27: case 0x28: // strx1, 2, 3, 4
+        value->kind = 2;
+        value->index = true;
+        value->number = line_read(cursor, form == 0x25 ? 1 : form == 0x26 ? 2 : form == 0x27 ? 3 : 4);
+        return true;
+    case 0x0b: value->number = line_read(cursor, 1); return true;  // data1
+    case 0x05: value->number = line_read(cursor, 2); return true;  // data2
+    case 0x06: value->number = line_read(cursor, 4); return true;  // data4
+    case 0x07: value->number = line_read(cursor, 8); return true;  // data8
+    case 0x0d: value->number = (uint64_t)line_sleb(cursor); return true; // sdata
+    case 0x0f: value->number = line_uleb(cursor); return true;     // udata
+    case 0x11: value->number = line_read(cursor, 1); return true;  // ref1
+    case 0x12: value->number = line_read(cursor, 2); return true;  // ref2
+    case 0x13: value->number = line_read(cursor, 4); return true;  // ref4
+    case 0x14: value->number = line_read(cursor, 8); return true;  // ref8
+    case 0x15: value->number = line_uleb(cursor); return true;     // ref_udata
+    case 0x0c: value->number = line_read(cursor, 1); return true;  // flag
+    case 0x19: value->number = 1; return true;                     // flag_present
+    case 0x21: value->number = (uint64_t)implicit; return true;    // implicit_const
+    case 0x10: case 0x17: // ref_addr, sec_offset
+        value->number = line_read(cursor, unit->offset_size);
+        return true;
+    case 0x22: case 0x23: // loclistx, rnglistx
+        value->number = line_uleb(cursor);
+        return true;
+    case 0x1c: line_skip(cursor, 4); value->kind = 0; return true; // ref_sup4
+    case 0x20: case 0x24: line_skip(cursor, 8); value->kind = 0; return true; // ref_sig8, ref_sup8
+    case 0x1e: line_skip(cursor, 16); value->kind = 0; return true; // data16
+    case 0x0a: line_skip(cursor, line_read(cursor, 1)); value->kind = 0; return true; // block1
+    case 0x03: line_skip(cursor, line_read(cursor, 2)); value->kind = 0; return true; // block2
+    case 0x04: line_skip(cursor, line_read(cursor, 4)); value->kind = 0; return true; // block4
+    case 0x09: case 0x18: line_skip(cursor, line_uleb(cursor)); value->kind = 0; return true; // block, exprloc
+    case 0x16: { // indirect
+        uint64_t actual = line_uleb(cursor);
+        return actual != 0x16 && dwarf_value(cursor, actual, 0, unit, sections, value);
+    }
+    default:
+        return false;
+    }
+}
+
+// A string or an address that a value names by its index, looked up.
+static const char *dwarf_text(const DwarfValue *value, const DwarfUnit *unit, const LineSections *sections) {
+    if (value->kind != 2 || !value->index) {
+        return value->kind == 2 ? value->text : NULL;
+    }
+
+    uint64_t at = unit->str_offsets_base + value->number * (uint64_t)unit->offset_size;
+    if (sections->str_offsets == NULL || at + (uint64_t)unit->offset_size > sections->str_offsets_size) {
+        return NULL;
+    }
+
+    LineCursor cursor = { sections->str_offsets + at, sections->str_offsets + sections->str_offsets_size, false };
+    return line_string_at(sections->str, sections->str_size, line_read(&cursor, unit->offset_size));
+}
+
+static bool dwarf_address(const DwarfValue *value, const DwarfUnit *unit, const LineSections *sections, uint64_t *address) {
+    if (value->kind != 3) {
+        return false;
+    }
+
+    if (!value->index) {
+        *address = value->number;
+        return true;
+    }
+
+    uint64_t at = unit->addr_base + value->number * (uint64_t)unit->address_size;
+    if (sections->addr == NULL || at + (uint64_t)unit->address_size > sections->addr_size) {
+        return false;
+    }
+
+    LineCursor cursor = { sections->addr + at, sections->addr + sections->addr_size, false };
+    *address = line_read(&cursor, unit->address_size);
+    return true;
+}
+
+// The abbreviation 'code' of the table at 'offset': a cursor at its tag.
+static bool dwarf_abbreviation(const LineSections *sections, uint64_t offset, uint64_t code, LineCursor *found) {
+    if (offset >= sections->abbrev_size) {
+        return false;
+    }
+
+    LineCursor cursor = { sections->abbrev + offset, sections->abbrev + sections->abbrev_size, false };
+    while (!cursor.failed) {
+        uint64_t each = line_uleb(&cursor);
+        if (each == 0) {
+            return false;
+        }
+
+        if (each == code) {
+            *found = cursor;
+            return true;
+        }
+
+        line_uleb(&cursor); // the tag
+        line_skip(&cursor, 1); // whether it has children
+        for (;;) {
+            uint64_t attribute = line_uleb(&cursor), form = line_uleb(&cursor);
+            if (form == 0x21) {
+                line_sleb(&cursor);
+            }
+
+            if ((attribute == 0 && form == 0) || cursor.failed) {
+                break;
+            }
+        }
+    }
+
+    return false;
+}
+
+// One DIE read at 'cursor', which is left after it: its tag, whether it has
+// children, and the attributes asked about. False at the end of a list of
+// children (a 0 code) — 'tag' 0 — or where it cannot be read.
+typedef struct DwarfDie {
+    uint64_t tag;
+    bool children;
+    const char *name;
+    bool low, high_is_offset, has_high;
+    uint64_t low_pc, high_pc, origin;
+    bool has_origin;
+} DwarfDie;
+
+static bool dwarf_die(LineCursor *cursor, DwarfUnit *unit, uint64_t abbrev_offset, const LineSections *sections, DwarfDie *die) {
+    memset(die, 0, sizeof *die);
+    uint64_t code = line_uleb(cursor);
+    if (cursor->failed) {
+        return false;
+    }
+
+    if (code == 0) {
+        return true;
+    }
+
+    LineCursor abbreviation;
+    if (!dwarf_abbreviation(sections, abbrev_offset, code, &abbreviation)) {
+        return false;
+    }
+
+    die->tag = line_uleb(&abbreviation);
+    die->children = line_read(&abbreviation, 1) != 0;
+    DwarfValue name = { 0, false, 0, NULL };
+    for (;;) {
+        uint64_t attribute = line_uleb(&abbreviation), form = line_uleb(&abbreviation);
+        int64_t implicit = form == 0x21 ? line_sleb(&abbreviation) : 0;
+        if (abbreviation.failed) {
+            return false;
+        }
+
+        if (attribute == 0 && form == 0) {
+            break;
+        }
+
+        DwarfValue value;
+        if (!dwarf_value(cursor, form, implicit, unit, sections, &value) || cursor->failed) {
+            return false;
+        }
+
+        switch (attribute) {
+        case AT_NAME:
+            name = value;
+            break;
+        case AT_LOW_PC:
+            die->low = true;
+            die->low_pc = value.number;
+            if (value.kind == 3 && !dwarf_address(&value, unit, sections, &die->low_pc)) {
+                die->low = false;
+            }
+
+            break;
+        case AT_HIGH_PC:
+            die->has_high = true;
+            die->high_is_offset = value.kind != 3;
+            die->high_pc = value.number;
+            if (value.kind == 3 && !dwarf_address(&value, unit, sections, &die->high_pc)) {
+                die->has_high = false;
+            }
+
+            break;
+        case AT_ABSTRACT_ORIGIN:
+        case AT_SPECIFICATION:
+            die->has_origin = form != 0x10; // within the unit
+            die->origin = value.number;
+            break;
+        case AT_STR_OFFSETS_BASE:
+            unit->str_offsets_base = value.number;
+            break;
+        case AT_ADDR_BASE:
+            unit->addr_base = value.number;
+            break;
+        default:
+            break;
+        }
+    }
+
+    die->name = dwarf_text(&name, unit, sections);
+    return true;
+}
+
+// The name of the DIE at 'offset' in the unit: what a concrete function
+// that has no name of its own is named by, its abstract origin's.
+static const char *dwarf_name_at(DwarfUnit *unit, uint64_t abbrev_offset, uint64_t offset, const LineSections *sections, int depth) {
+    LineCursor cursor = { unit->start + offset, sections->info + sections->info_size, false };
+    DwarfDie die;
+    if (depth > 4 || cursor.at >= cursor.end || !dwarf_die(&cursor, unit, abbrev_offset, sections, &die)) {
+        return NULL;
+    }
+
+    return die.name != NULL || !die.has_origin ? die.name : dwarf_name_at(unit, abbrev_offset, die.origin, sections, depth + 1);
+}
+
+// The function whose code holds 'address' (an address as the debug
+// information has them, unmoved): its name and where it starts.
+static bool dwarf_function(const LineSections *sections, uint64_t address, const char **name, uint64_t *start) {
+    LineCursor units = { sections->info, sections->info + sections->info_size, false };
+    while (units.at < units.end && !units.failed) {
+        DwarfUnit unit = { units.at, 4, 8, 0, 0, 0 };
+        uint64_t length = line_read(&units, 4);
+        if (length == 0xffffffff) {
+            unit.offset_size = 8;
+            length = line_read(&units, 8);
+        }
+
+        const uint8_t *end = units.at + length;
+        if (units.failed || length > (uint64_t)(units.end - units.at)) {
+            return false;
+        }
+
+        LineCursor cursor = { units.at, end, false };
+        unit.version = (int)line_read(&cursor, 2);
+        uint64_t abbrev_offset;
+        if (unit.version >= 5) {
+            uint64_t type = line_read(&cursor, 1);
+            unit.address_size = (int)line_read(&cursor, 1);
+            abbrev_offset = line_read(&cursor, unit.offset_size);
+            if (type != 1) { // DW_UT_compile only
+                units.at = end;
+                continue;
+            }
+        } else {
+            abbrev_offset = line_read(&cursor, unit.offset_size);
+            unit.address_size = (int)line_read(&cursor, 1);
+        }
+
+        // Every DIE in order, children among them; the unit's own first,
+        // which gives the bases its indices are read from.
+        while (cursor.at < cursor.end && !cursor.failed) {
+            DwarfDie die;
+            if (!dwarf_die(&cursor, &unit, abbrev_offset, sections, &die)) {
+                break;
+            }
+
+            if (die.tag == 0) {
+                continue;
+            }
+
+            if (die.tag == TAG_SUBPROGRAM && die.low && die.has_high) {
+                uint64_t high = die.high_is_offset ? die.low_pc + die.high_pc : die.high_pc;
+                if (address >= die.low_pc && address < high) {
+                    *name = die.name != NULL || !die.has_origin ? die.name : dwarf_name_at(&unit, abbrev_offset, die.origin, sections, 0);
+                    *start = die.low_pc;
+                    return *name != NULL;
+                }
+            }
+        }
+
+        units.at = end;
+    }
+
+    return false;
+}
+
+// The function at 'at' by the program's debug information, where its
+// symbol is gone (#300): its name, and where it starts in memory. False
+// where the program has none, or 'at' is not in the program itself.
+static bool frame_function(const void *at, const void *image, const char **name, const void **start) {
+    int state = __atomic_load_n(&line_state, __ATOMIC_ACQUIRE);
+    if (state == 0) {
+        int expected = 0;
+        if (__atomic_compare_exchange_n(&line_state, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            state = line_sections(&line_table) ? 2 : 3;
+            __atomic_store_n(&line_state, state, __ATOMIC_RELEASE);
+        }
+    }
+
+    while ((state = __atomic_load_n(&line_state, __ATOMIC_ACQUIRE)) == 1) {
+        thread_yield();
+    }
+
+    if (state != 2 || line_table.info == NULL || line_table.abbrev == NULL
+        || (image != NULL && image != line_table.image && image != (const void *)line_table.slide)) {
+        return false;
+    }
+
+    uint64_t found = 0;
+    if (!dwarf_function(&line_table, (uint64_t)((uintptr_t)at - (uintptr_t)line_table.slide), name, &found)) {
+        return false;
+    }
+
+    *start = (const void *)(uintptr_t)(found + (uint64_t)line_table.slide);
+    return true;
+}
 #endif

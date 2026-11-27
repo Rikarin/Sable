@@ -188,8 +188,30 @@ static void thread_set_name(const char *name) {
     (void)name;
 }
 
-static void thread_set_priority(int priority) {
+// Unsupported: one thread, which the engine runs as it will.
+static bool thread_set_priority(int priority) {
     (void)priority;
+    return false;
+}
+
+static int thread_priority(void) {
+    return 0;
+}
+
+static bool thread_set_affinity(const int32_t *processors, int32_t count) {
+    (void)processors;
+    (void)count;
+    return false;
+}
+
+static int32_t thread_affinity(int32_t **processors) {
+    *processors = NULL;
+    return 0;
+}
+
+static bool topology_read(Topology *topology) {
+    (void)topology;
+    return false;
 }
 
 static int processor_count(void) {

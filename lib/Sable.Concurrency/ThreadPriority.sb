@@ -1,8 +1,33 @@
 module Sable.Concurrency
 
-/// How soon a thread runs when there is more to run than there are cores:
-/// .NET's `ThreadPriority`. A hint, which the system may not take: Linux
-/// lets only a privileged program raise one above `Normal`.
+/// How soon a thread runs when there is more to run than there are cores,
+/// and, where the system places threads by it, on which kind of core:
+/// .NET's `ThreadPriority`, Apple's quality-of-service classes. A hint,
+/// which the system may not take. `Thread.spawn` gives a thread one,
+/// `Thread.setPriority` the calling thread, and `WorkerPool.configure` the
+/// pool's.
+///
+/// | | macOS (QoS class) | Linux (nice) | Windows |
+/// |---|---|---|---|
+/// | `Lowest` | background: efficiency cores alone, I/O slowed | 19, `SCHED_IDLE` | lowest, power throttled (EcoQoS) |
+/// | `Low` | utility | 10 | below normal |
+/// | `Normal` | default | 0 | normal |
+/// | `High` | user-initiated: performance cores first | -5 | above normal, not throttled |
+/// | `Highest` | user-interactive | -10 | highest, not throttled |
+///
+/// Linux lets a thread be nicer than it was, never less so without
+/// `CAP_SYS_NICE` (or a high enough `RLIMIT_NICE`), and once it is
+/// `SCHED_IDLE` it stays so; the real-time policies are not used. WASI has
+/// one thread, and no priorities.
+///
+/// `Lowest` is for what may wait: on macOS and Linux such a thread runs only
+/// where nothing else would, so on a busy machine it may not run at all for
+/// a long while — nor, on macOS, return from the call that made it so.
+///
+/// ```sable
+/// let low = Thread.spawn(priority: .Low) { Thread.priority }
+/// assert(low.join() == .Low)
+/// ```
 @derive(Equatable, Debug)
 public enum ThreadPriority {
     Lowest
@@ -22,5 +47,9 @@ public enum ThreadPriority {
                 case .Highest => 2
             }
         }
+    }
+
+    static fn of(level: Int) -> ThreadPriority {
+        return level <= -2 ? .Lowest : level == -1 ? .Low : level == 0 ? .Normal : level == 1 ? .High : .Highest
     }
 }

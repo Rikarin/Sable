@@ -920,9 +920,153 @@ static void thread_set_name(const char *name) {
     pthread_setname_np(name);
 }
 
-static void thread_set_priority(int priority) {
+// A quality-of-service class: what the scheduler places a thread by, on
+// performance cores or efficiency ones, as well as how soon it runs.
+// Background runs on efficiency cores alone, and is slowed for I/O too.
+static bool thread_set_priority(int priority) {
     static const qos_class_t classes[] = { QOS_CLASS_BACKGROUND, QOS_CLASS_UTILITY, QOS_CLASS_DEFAULT, QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE };
-    pthread_set_qos_class_self_np(classes[priority + 2], 0);
+    return pthread_set_qos_class_self_np(classes[priority + 2], 0) == 0;
+}
+
+static int thread_priority(void) {
+    switch (qos_class_self()) {
+    case QOS_CLASS_BACKGROUND:
+        return -2;
+    case QOS_CLASS_UTILITY:
+        return -1;
+    case QOS_CLASS_USER_INITIATED:
+        return 1;
+    case QOS_CLASS_USER_INTERACTIVE:
+        return 2;
+    default:
+        return 0;
+    }
+}
+
+// No binding to processors: the system places a thread by its class alone.
+// (Affinity tags, THREAD_AFFINITY_POLICY, only group threads, and Apple's
+// own processors ignore them.)
+static bool thread_set_affinity(const int32_t *processors, int32_t count) {
+    (void)processors;
+    (void)count;
+    return false;
+}
+
+static int32_t thread_affinity(int32_t **processors) {
+    *processors = NULL;
+    return 0;
+}
+
+static int64_t sysctl_number(const char *name) {
+    int64_t value = 0;
+    size_t size = sizeof value;
+    if (sysctlbyname(name, &value, &size, NULL, 0) != 0) {
+        return 0;
+    }
+
+    // Some are 32 bits, given in the first four bytes.
+    return size == sizeof(int32_t) ? (int64_t) * (int32_t *)&value : value;
+}
+
+static int64_t perflevel_number(int level, const char *name) {
+    char full[64];
+    snprintf(full, sizeof full, "hw.perflevel%d.%s", level, name);
+    return sysctl_number(full);
+}
+
+// The caches of 'cores' cores of 'smt' processors each from 'first' on:
+// level 1's of each core, and level 2's of each 'per_l2' processors.
+static void apple_caches(Topology *topology, int32_t first, int32_t cores, int32_t smt, int64_t l1d, int64_t l1i, int64_t l2, int32_t per_l2, int64_t line) {
+    int32_t logical = cores * smt;
+    int32_t *ids = malloc(sizeof(int32_t) * (size_t)(logical > 0 ? logical : 1));
+    if (ids == NULL) {
+        return;
+    }
+
+    for (int32_t core = 0; core < cores; core++) {
+        for (int32_t i = 0; i < smt; i++) {
+            ids[i] = first + core * smt + i;
+        }
+
+        topology_add_cache(topology, 1, CACHE_DATA, l1d, line, ids, smt);
+        topology_add_cache(topology, 1, CACHE_INSTRUCTION, l1i, line, ids, smt);
+    }
+
+    per_l2 = per_l2 > 0 ? per_l2 : logical;
+    for (int32_t start = 0; l2 > 0 && start < logical; start += per_l2) {
+        int32_t count = start + per_l2 <= logical ? per_l2 : logical - start;
+        for (int32_t i = 0; i < count; i++) {
+            ids[i] = first + start + i;
+        }
+
+        topology_add_cache(topology, 2, CACHE_UNIFIED, l2, line, ids, count);
+    }
+
+    free(ids);
+}
+
+// hw.perflevelN for each kind of core, 0 the fastest. The system does not say
+// which processor numbers are of which level: they are taken as Apple's
+// systems number them, the slowest cores first, and a core's processors
+// (SMT, on Intel's) one after another. One package and one node: there is
+// no NUMA on a Mac.
+static bool topology_read(Topology *topology) {
+    int64_t levels = sysctl_number("hw.nperflevels");
+    int64_t line = sysctl_number("hw.cachelinesize");
+    int32_t next = 0;
+    if (levels <= 0) {
+        // Before macOS 12, or an Intel Mac: one kind of core, and what each
+        // level of cache is shared by in hw.cacheconfig.
+        int64_t physical = sysctl_number("hw.physicalcpu"), logical = sysctl_number("hw.logicalcpu");
+        if (physical <= 0 || logical < physical) {
+            return false;
+        }
+
+        int32_t smt = (int32_t)(logical / physical);
+        for (int32_t i = 0; i < (int32_t)logical; i++) {
+            topology_add(topology, i, i / smt, 0, 0, 0);
+        }
+
+        uint64_t shared[4] = { 0 };
+        size_t size = sizeof shared;
+        if (sysctlbyname("hw.cacheconfig", shared, &size, NULL, 0) != 0) {
+            memset(shared, 0, sizeof shared);
+        }
+
+        int64_t per_l2 = shared[2] > 0 ? (int64_t)shared[2] : smt;
+        apple_caches(topology, 0, (int32_t)physical, smt, sysctl_number("hw.l1dcachesize"), sysctl_number("hw.l1icachesize"), sysctl_number("hw.l2cachesize"), (int32_t)per_l2, line);
+        next = (int32_t)logical;
+    }
+
+    for (int level = (int)levels - 1; level >= 0; level--) {
+        int64_t physical = perflevel_number(level, "physicalcpu"), logical = perflevel_number(level, "logicalcpu");
+        if (physical <= 0 || logical < physical) {
+            continue;
+        }
+
+        int32_t smt = (int32_t)(logical / physical);
+        int32_t first = next;
+        for (int32_t i = 0; i < (int32_t)logical; i++, next++) {
+            topology_add(topology, next, first + i / smt, 0, 0, (int32_t)(levels - 1 - level));
+        }
+
+        apple_caches(topology, first, (int32_t)physical, smt, perflevel_number(level, "l1dcachesize"), perflevel_number(level, "l1icachesize"),
+            perflevel_number(level, "l2cachesize"), (int32_t)perflevel_number(level, "cpusperl2"), line);
+    }
+
+    // An Intel Mac's level 3, every core's; Apple's processors report none.
+    int64_t l3 = sysctl_number("hw.l3cachesize");
+    int32_t *all = next > 0 ? malloc(sizeof(int32_t) * (size_t)next) : NULL;
+    if (l3 > 0 && all != NULL) {
+        for (int32_t i = 0; i < next; i++) {
+            all[i] = i;
+        }
+
+        topology_add_cache(topology, 3, CACHE_UNIFIED, l3, line, all, next);
+    }
+
+    free(all);
+    return next > 0;
 }
 
 static int processor_count(void) {
@@ -946,10 +1090,278 @@ static void thread_set_name(const char *name) {
     pthread_setname_np(pthread_self(), some);
 }
 
-// Each thread's nice value is its own on Linux; to be nicer is always allowed.
-static void thread_set_priority(int priority) {
+// Each thread's nice value is its own on Linux; to be nicer is always allowed,
+// to be less so only with CAP_SYS_NICE or a high enough RLIMIT_NICE. The
+// lowest is SCHED_IDLE as well, which runs only where nothing else would;
+// the others SCHED_OTHER, which a thread may go back to while its limit
+// allows the nice value. The real-time policies are not used: they need
+// privilege, and can keep the system itself from running.
+static bool thread_set_priority(int priority) {
     static const int nice[] = { 19, 10, 0, -5, -10 };
-    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice[priority + 2]);
+    struct sched_param parameters = { .sched_priority = 0 };
+    int policy = sched_getscheduler(0);
+    int wanted = priority == -2 ? SCHED_IDLE : SCHED_OTHER;
+    if (policy != wanted && (policy == SCHED_IDLE || policy == SCHED_OTHER || policy == SCHED_BATCH)
+        && sched_setscheduler(0, wanted, &parameters) != 0) {
+        return false;
+    }
+
+    return setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice[priority + 2]) == 0;
+}
+
+static int thread_priority(void) {
+    if (sched_getscheduler(0) == SCHED_IDLE) {
+        return -2;
+    }
+
+    errno = 0;
+    int nice = getpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid));
+    if (nice == -1 && errno != 0) {
+        return 0;
+    }
+
+    return nice >= 15 ? -2 : nice >= 5 ? -1 : nice > -3 ? 0 : nice > -8 ? 1 : 2;
+}
+
+// A set of processors big enough for the largest number, allocated.
+static cpu_set_t *cpu_set_of(const int32_t *processors, int32_t count, size_t *size) {
+    int32_t most = 0;
+    for (int32_t i = 0; i < count; i++) {
+        most = processors[i] > most ? processors[i] : most;
+    }
+
+    cpu_set_t *set = CPU_ALLOC((size_t)most + 1);
+    if (set == NULL) {
+        return NULL;
+    }
+
+    *size = CPU_ALLOC_SIZE((size_t)most + 1);
+    CPU_ZERO_S(*size, set);
+    for (int32_t i = 0; i < count; i++) {
+        CPU_SET_S((size_t)processors[i], *size, set);
+    }
+
+    return set;
+}
+
+static bool thread_set_affinity(const int32_t *processors, int32_t count) {
+    size_t size = 0;
+    cpu_set_t *set = count > 0 ? cpu_set_of(processors, count, &size) : NULL;
+    if (set == NULL) {
+        return false;
+    }
+
+    bool bound = sched_setaffinity(0, size, set) == 0;
+    CPU_FREE(set);
+    return bound;
+}
+
+static int32_t thread_affinity(int32_t **processors) {
+    *processors = NULL;
+    for (int size = 1024; size <= 1 << 20; size *= 2) {
+        cpu_set_t *set = CPU_ALLOC((size_t)size);
+        if (set == NULL) {
+            return 0;
+        }
+
+        size_t bytes = CPU_ALLOC_SIZE((size_t)size);
+        if (sched_getaffinity(0, bytes, set) != 0) {
+            CPU_FREE(set);
+            if (errno == EINVAL) {
+                continue;
+            }
+
+            return 0;
+        }
+
+        int32_t count = (int32_t)CPU_COUNT_S(bytes, set), found = 0;
+        *processors = malloc(sizeof(int32_t) * (size_t)(count > 0 ? count : 1));
+        for (int i = 0; *processors != NULL && i < size && found < count; i++) {
+            if (CPU_ISSET_S((size_t)i, bytes, set)) {
+                (*processors)[found++] = i;
+            }
+        }
+
+        CPU_FREE(set);
+        return *processors != NULL ? found : 0;
+    }
+
+    return 0;
+}
+
+// The numbers a list in sysfs has, "0-3,8,10-11": how many, in memory the
+// caller frees; 0 where it cannot be read.
+static int32_t sysfs_list(const char *path, int32_t **numbers) {
+    *numbers = NULL;
+    FILE *file = fopen(path, "re");
+    if (file == NULL) {
+        return 0;
+    }
+
+    char text[8192];
+    char *read = fgets(text, sizeof text, file);
+    fclose(file);
+    if (read == NULL) {
+        return 0;
+    }
+
+    int32_t count = 0, capacity = 0;
+    for (char *at = text; *at != '\0' && *at != '\n';) {
+        char *end;
+        long first = strtol(at, &end, 10), last = first;
+        if (end == at || first < 0) {
+            break;
+        }
+
+        if (*end == '-') {
+            at = end + 1;
+            last = strtol(at, &end, 10);
+            if (end == at || last < first) {
+                break;
+            }
+        }
+
+        for (long n = first; n <= last && n < 1 << 20; n++) {
+            if (count == capacity) {
+                capacity = capacity > 0 ? capacity * 2 : 16;
+                int32_t *more = realloc(*numbers, sizeof(int32_t) * (size_t)capacity);
+                if (more == NULL) {
+                    free(*numbers);
+                    *numbers = NULL;
+                    return 0;
+                }
+
+                *numbers = more;
+            }
+
+            (*numbers)[count++] = (int32_t)n;
+        }
+
+        at = *end == ',' ? end + 1 : end;
+    }
+
+    return count;
+}
+
+// A number a file in sysfs holds, with K, M or G after it multiplied; or
+// 'otherwise'.
+static int64_t sysfs_number(const char *path, int64_t otherwise) {
+    FILE *file = fopen(path, "re");
+    if (file == NULL) {
+        return otherwise;
+    }
+
+    char text[64];
+    char *read = fgets(text, sizeof text, file);
+    fclose(file);
+    char *end;
+    long long number = read != NULL ? strtoll(text, &end, 10) : 0;
+    if (read == NULL || end == text) {
+        return otherwise;
+    }
+
+    return number * (*end == 'K' ? 1024 : *end == 'M' ? 1024 * 1024 : *end == 'G' ? 1024 * 1024 * 1024 : 1);
+}
+
+static bool sysfs_has(const int32_t *numbers, int32_t count, int32_t number) {
+    for (int32_t i = 0; i < count; i++) {
+        if (numbers[i] == number) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// /sys/devices/system/cpu: each online processor's core and package, and its
+// caches; /sys/devices/system/node, which node each is in. A hybrid Intel
+// processor lists its kinds of core in /sys/devices/cpu_core and cpu_atom;
+// an ARM one gives each processor's capacity, 1024 the fastest's.
+static bool topology_read(Topology *topology) {
+    int32_t *online;
+    int32_t count = sysfs_list("/sys/devices/system/cpu/online", &online);
+    if (count == 0) {
+        return false;
+    }
+
+    int32_t *nodes = calloc((size_t)count, sizeof(int32_t));
+    int32_t *fast, *slow;
+    int32_t fast_count = sysfs_list("/sys/devices/cpu_core/cpus", &fast);
+    int32_t slow_count = sysfs_list("/sys/devices/cpu_atom/cpus", &slow);
+    char path[256];
+    for (int node = 0; nodes != NULL && node < 1024; node++) {
+        snprintf(path, sizeof path, "/sys/devices/system/node/node%d/cpulist", node);
+        int32_t *in;
+        int32_t in_count = sysfs_list(path, &in);
+        for (int32_t i = 0; i < count; i++) {
+            if (sysfs_has(in, in_count, online[i])) {
+                nodes[i] = node;
+            }
+        }
+
+        free(in);
+    }
+
+    for (int32_t i = 0; i < count; i++) {
+        int32_t id = online[i];
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/topology/core_id", id);
+        int64_t core = sysfs_number(path, id);
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/topology/physical_package_id", id);
+        int64_t package = sysfs_number(path, 0);
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cpu_capacity", id);
+        int64_t capacity = sysfs_number(path, -1);
+        int32_t efficiency = fast_count > 0 && slow_count > 0 ? (sysfs_has(fast, fast_count, id) ? 1 : 0)
+            : capacity >= 0 ? (int32_t)capacity : 0;
+        topology_add(topology, id, core, package < 0 ? 0 : package, nodes != NULL ? nodes[i] : 0, efficiency);
+    }
+
+    for (int32_t i = 0; i < count; i++) {
+        for (int index = 0; index < 32; index++) {
+            int id = online[i];
+            snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cache/index%d/level", id, index);
+            int64_t level = sysfs_number(path, -1);
+            if (level < 0) {
+                break;
+            }
+
+            snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cache/index%d/type", id, index);
+            FILE *file = fopen(path, "re");
+            char type[32] = "";
+            if (file != NULL) {
+                if (fgets(type, sizeof type, file) == NULL) {
+                    type[0] = '\0';
+                }
+
+                fclose(file);
+            }
+
+            int32_t kind = strncmp(type, "Data", 4) == 0 ? CACHE_DATA : strncmp(type, "Instruction", 11) == 0 ? CACHE_INSTRUCTION : CACHE_UNIFIED;
+            snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cache/index%d/size", id, index);
+            int64_t size = sysfs_number(path, 0);
+            snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cache/index%d/coherency_line_size", id, index);
+            int64_t line = sysfs_number(path, 0);
+            snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cache/index%d/shared_cpu_list", id, index);
+            int32_t *shared;
+            int32_t shared_count = sysfs_list(path, &shared);
+            if (shared_count == 0) {
+                free(shared);
+                shared = malloc(sizeof(int32_t));
+                if (shared != NULL) {
+                    shared[0] = id;
+                    shared_count = 1;
+                }
+            }
+
+            topology_add_cache(topology, (int32_t)level, kind, size, line, shared, shared_count);
+            free(shared);
+        }
+    }
+
+    free(nodes);
+    free(fast);
+    free(slow);
+    free(online);
+    return true;
 }
 
 // The processors a control group's quota comes to, rounded up: what the file

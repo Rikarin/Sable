@@ -3519,6 +3519,14 @@ public static class SilBuiltins {
         Add("thread_unpark", SilType.Unit, SilType.Int);
         Add("thread_yield", SilType.Unit);
         Add("thread_workers", SilType.Int);
+        // Where threads run (runtime/topology.c): the machine's processors, the
+        // calling thread's priority and processors, and the pool's placement.
+        Add("thread_topology", new ArrayType(SilType.Int));
+        Add("thread_priority_set", SilType.Bool, SilType.Int);
+        Add("thread_priority_get", SilType.Int);
+        Add("thread_affinity_set", SilType.Bool, new ArrayType(SilType.Int));
+        Add("thread_affinity_get", new ArrayType(SilType.Int));
+        Add("thread_pool_place", SilType.Bool, SilType.Int, SilType.Int, new ArrayType(SilType.Int));
         Add("thread_loop_more", SilType.Unit);
         Add("thread_block_new", SilType.Int);
         Add("thread_block_done", SilType.Unit, SilType.Int);

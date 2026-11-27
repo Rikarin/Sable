@@ -1,0 +1,32 @@
+module Sable.Concurrency
+
+/// One of the processors' caches, and which of them share it: a level 1
+/// cache is usually one core's, a level 2 or 3 several cores' or a whole
+/// package's. Threads that share data run best on processors that share a
+/// cache.
+///
+/// ```sable
+/// for cache in ProcessorTopology.current.caches {
+///     assert(cache.level >= 1 && !cache.processors.isEmpty)
+/// }
+/// ```
+@derive(Equatable, Debug)
+public struct ProcessorCache {
+    /// 1 for the cache nearest the core.
+    public let level: Int
+    public let kind: CacheKind
+    /// Its size in bytes: 0 where the system does not say.
+    public let size: Int
+    /// The bytes it moves at a time: 0 where the system does not say.
+    public let lineSize: Int
+    /// The ids of the logical processors that share it, ascending.
+    public let processors: Int[>..]
+
+    public init(level: Int, kind: CacheKind, size: Int, lineSize: Int, processors: Int[>..]) {
+        self.level = level
+        self.kind = kind
+        self.size = size
+        self.lineSize = lineSize
+        self.processors = processors
+    }
+}

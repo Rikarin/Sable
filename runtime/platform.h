@@ -154,9 +154,20 @@ static bool thread_start(void (*run)(void *argument), void *argument);
 static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack);
 enum { THREAD_STACK = 8 * 1024 * 1024 };
 // The calling thread's, for a debugger to show, as much of it as there is room
-// for; and how soon it runs, from -2 to 2, where the system allows it.
+// for; and how soon it runs, from -2 to 2, where the system allows it: whether
+// it did (Linux lets only a privileged thread be less nice than it was).
 static void thread_set_name(const char *name);
-static void thread_set_priority(int priority);
+static bool thread_set_priority(int priority);
+// The calling thread's priority, -2 to 2, as the system has it: the nearest
+// to its nice value, its quality-of-service class or its Windows priority.
+static int thread_priority(void);
+// Binds the calling thread to the processors, by their numbers in the
+// topology (below): whether the system did. Not on macOS, which has no such
+// binding, nor on WASI.
+static bool thread_set_affinity(const int32_t *processors, int32_t count);
+// The processors the calling thread may run on, in memory the caller frees,
+// and how many: 0, and NULL, where the system does not say.
+static int32_t thread_affinity(int32_t **processors);
 // Has the calling thread, one the runtime did not start, give 'value' to
 // foreign_thread_end (foreign.c) as it ends.
 static void platform_at_thread_exit(void *value);
@@ -165,6 +176,44 @@ static void platform_at_thread_exit(void *value);
 static int processor_count(void);
 // Lets another thread run: a spin that has waited long enough.
 static void thread_yield(void);
+
+// ---- Topology (topology.c) ---------------------------------------------------
+
+// The machine's processors as the system describes them: each logical one
+// with its number (what thread_set_affinity takes: on Windows its group times
+// 64 and its number in the group), its core, package and NUMA node (each
+// numbered from 0 as found, by topology_add), and its efficiency class, the
+// higher the faster (0 where all are alike); and the caches, each with the
+// processors that share it. Filled by topology_read through topology_add and
+// topology_add_cache, which topology.c defines.
+typedef struct TopologyProcessor {
+    int32_t id, core, package, node, efficiency;
+} TopologyProcessor;
+
+enum { CACHE_DATA = 1, CACHE_INSTRUCTION = 2, CACHE_UNIFIED = 3 };
+
+typedef struct TopologyCache {
+    int32_t level, kind;   // 1 for L1; CACHE_*
+    int64_t size, line;    // bytes; 0 where not known
+    int32_t *processors;   // those that share it, ascending
+    int32_t count;
+} TopologyCache;
+
+typedef struct Topology {
+    TopologyProcessor *processors;
+    int32_t count, capacity;
+    TopologyCache *caches;
+    int32_t cache_count, cache_capacity;
+} Topology;
+
+// A processor, its core, package and node by the system's own numbers, which
+// are made the topology's, from 0 in the order each is first seen.
+static void topology_add(Topology *topology, int32_t id, int64_t core, int64_t package, int64_t node, int32_t efficiency);
+// A cache, unless one of its level and kind is shared by the same processors.
+static void topology_add_cache(Topology *topology, int32_t level, int32_t kind, int64_t size, int64_t line, const int32_t *processors, int32_t count);
+// What the system says, through those two: false where it says nothing, and
+// the topology is then one core per processor_count().
+static bool topology_read(Topology *topology);
 
 // ---- Libraries (foreign.c) ---------------------------------------------------
 

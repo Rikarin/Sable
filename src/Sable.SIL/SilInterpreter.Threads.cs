@@ -15,6 +15,7 @@ public sealed partial class SilInterpreter {
         public long Id => id;
         public string Name => name;
         public bool Ended, Token;
+        public long Priority;
 
         /// <summary>Its thread-locals, the latest made last: where each is, and what destroys it.</summary>
         public List<(long Key, long Cell, string Destroy, HeapObject Holder)> Locals { get; } = [];
@@ -84,7 +85,7 @@ public sealed partial class SilInterpreter {
         switch (name) {
             case "thread_new": {
                 var id = ++_nextThread;
-                _threads[id] = new(id, Text(operands[0]).Value);
+                _threads[id] = new(id, Text(operands[0]).Value) { Priority = (long)operands[2]! };
                 return id;
             }
 
@@ -155,6 +156,38 @@ public sealed partial class SilInterpreter {
             // As with SABLE_WORKERS=0: the one thread runs every task.
             case "thread_workers":
                 return 0L;
+
+            // What .NET says of the machine: a core for each processor, of one
+            // kind, and no caches. A thread's priority is kept, not given to
+            // the system; there is no binding to processors, and no pool to place.
+            case "thread_topology": {
+                var count = Environment.ProcessorCount;
+                List<long> numbers = [count, 0];
+                for (var i = 0; i < count; i++) {
+                    numbers.AddRange([i, i, 0, 0, 0]);
+                }
+
+                return IntArray([.. numbers]);
+            }
+
+            case "thread_priority_set": {
+                var priority = (long)operands[0]!;
+                if (priority is < -2 or > 2) {
+                    return false;
+                }
+
+                CurrentThread.Priority = priority;
+                return true;
+            }
+
+            case "thread_priority_get":
+                return CurrentThread.Priority;
+
+            case "thread_affinity_set" or "thread_pool_place":
+                return false;
+
+            case "thread_affinity_get":
+                return IntArray([]);
 
             case "thread_loop":
                 RunHeld((string)operands[0]!, (HeapObject)operands[1]!, depth);

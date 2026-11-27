@@ -1,0 +1,22 @@
+module Sable.Concurrency
+
+/// What a processor's cache holds.
+///
+/// ```sable
+/// let firstLevel = ProcessorTopology.current.caches.filter { $0.level == 1 }
+/// assert(firstLevel.allSatisfy { $0.kind != .Unified || $0.size >= 0 })
+/// ```
+@derive(Equatable, Debug)
+public enum CacheKind {
+    /// Data alone: a level 1 data cache.
+    Data
+    /// Instructions alone.
+    Instruction
+    /// Both: the caches past level 1.
+    Unified
+
+    // From the runtime's number: 1 data, 2 instructions, 3 both.
+    static fn of(_ number: Int) -> CacheKind {
+        return number == 1 ? .Data : number == 2 ? .Instruction : .Unified
+    }
+}

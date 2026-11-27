@@ -358,6 +358,35 @@ public struct Runtime {
     @builtin("thread_workers")
     public static fn workerCount() -> Int
 
+    /// The machine's processors (runtime/topology.c): how many processors and
+    /// caches; for each processor its id, core, package, node and efficiency
+    /// class; then for each cache its level, kind (1 data, 2 instruction, 3
+    /// unified), size, line size, how many processors share it, and their ids.
+    @builtin("thread_topology")
+    public static fn processorTopology() -> Int[>..]
+
+    /// The calling thread's priority, -2 to 2: whether the system took it.
+    @builtin("thread_priority_set")
+    public static fn setThreadPriority(_ level: Int) -> Bool
+
+    /// The calling thread's priority, -2 to 2, as the system has it.
+    @builtin("thread_priority_get")
+    public static fn threadPriority() -> Int
+
+    /// Binds the calling thread to the processors: whether the system did.
+    @builtin("thread_affinity_set")
+    public static fn setThreadAffinity(_ processors: Int[>..]) -> Bool
+
+    /// The processors the calling thread may run on; empty where the system
+    /// does not say.
+    @builtin("thread_affinity_get")
+    public static fn threadAffinity() -> Int[>..]
+
+    /// The pool's placement: the cores it leaves as it starts, and its workers'
+    /// priority and processors (empty: any). Whether the cores will be left.
+    @builtin("thread_pool_place")
+    public static fn placeWorkers(_ reserved: Int, _ priority: Int, _ processors: Int[>..]) -> Bool
+
     /// What the calling thread blocks on until a task says that it is done.
     /// Traps on a thread that runs tasks, other than the main one.
     @builtin("thread_block_new")

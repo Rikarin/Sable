@@ -249,6 +249,14 @@ public sealed partial class Manifest {
     /// </summary>
     public IReadOnlyList<string> GeneratorInputs { get; init; } = [];
 
+    /// <summary>
+    ///     <c>[modules]</c>: each module of a package of many and its tier,
+    ///     <c>"core"</c> or <c>"extension"</c>, in the order written. Only
+    ///     the standard library's says it today (<c>lib/package.sb</c>,
+    ///     which the compiler reads through <see cref="Sable.Symbols.LibraryTiers" />).
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, string>> Modules { get; init; } = [];
+
     /// <summary><c>[targets.*]</c>: each target's settings, in the order written.</summary>
     public IReadOnlyList<TargetSettings> Targets { get; init; } = [];
 
@@ -302,6 +310,7 @@ public sealed partial class Manifest {
         RegistryPath = RegistryPath,
         Lints = Lints,
         GeneratorInputs = GeneratorInputs,
+        Modules = Modules,
         Targets = Targets,
         Warnings = [..Warnings.Select(w => w with { File = file, Line = 1 })],
         InheritsFromWorkspace = InheritsFromWorkspace,
@@ -393,7 +402,7 @@ public sealed partial class Manifest {
         }
 
         public Manifest Read(TomlTable root) {
-            string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "targets", "build", "registry", "lints", "generators"];
+            string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "targets", "build", "registry", "lints", "generators", "modules"];
             foreach (var key in root.Keys.Where(k => !known.Contains(k))) {
                 switch (key) {
                     case "target":
@@ -559,6 +568,19 @@ public sealed partial class Manifest {
                 generatorInputs = Strings(g, "inputs", "generators.inputs") ?? [];
             }
 
+            List<KeyValuePair<string, string>> modules = [];
+            if (Table(root, "modules", "modules") is { } m) {
+                foreach (var key in m.Keys) {
+                    if (String(m, key, $"modules.{key}") is { } tier) {
+                        if (tier is "core" or "extension") {
+                            modules.Add(new(key, tier));
+                        } else {
+                            Error(m, key, $"modules.{key}", $"a module's tier is \"core\" or \"extension\", not \"{tier}\"");
+                        }
+                    }
+                }
+            }
+
             if (_errors.Count > 0) {
                 throw new ManifestException(_errors);
             }
@@ -582,6 +604,7 @@ public sealed partial class Manifest {
                 RegistryPath = registry,
                 Lints = lints,
                 GeneratorInputs = generatorInputs,
+                Modules = modules,
                 Warnings = _warnings,
                 InheritsFromWorkspace = _inherits,
             };

@@ -1,0 +1,36 @@
+module Sable.DependencyInjection
+
+import Sable.Diagnostics
+
+/// A `Logger.Of<Category>`, made with the container's `Logger` where it has
+/// one, or else with a new logger: registered for every type as
+/// `addTransient(open: Logger.Of.self, Logger.Of.self)` (a host registers
+/// it). Here, not in Sable.Diagnostics, so that a core module does not
+/// import an extension one.
+///
+/// ```sable
+/// import Sable.Diagnostics
+///
+/// struct Checkout {}
+///
+/// var services = ServiceCollection()
+/// services.addTransient(Logger.self) { _services in
+///     let root = Logger("app")
+///     root.threshold = .Warning
+///     return root
+/// }
+/// services.addTransient(open: Logger.Of.self, Logger.Of.self)
+/// let log = try! (try! services.build()).resolve(Logger.Of<Checkout>.self)
+/// assert(log.logger.name.hasSuffix("Checkout"))
+/// assert(!log.logger.isEnabled(.Info))
+/// ```
+extension Logger.Of: Injectable {
+    /// One made with the container's `Logger`, if it has one.
+    public static fn make(_ services: ServiceScope) throws -> Logger.Of<Category> {
+        return Logger.Of<Category>(try services.find(Logger.self))
+    }
+
+    public static fn dependencies() -> ServiceDependency[>..] {
+        return [ServiceDependency(Logger.self, kind: DependencyKind.Optional)]
+    }
+}

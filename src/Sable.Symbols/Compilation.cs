@@ -525,7 +525,7 @@ public sealed partial class Compilation {
             }
 
             CurrentScope = _fileScopes[tree];
-            ResolveImports(unit, CurrentScope);
+            ResolveImports(unit, CurrentScope, CoreLibrary.ModuleOf(tree));
         }
 
         CurrentScope = null;
@@ -534,7 +534,8 @@ public sealed partial class Compilation {
         DeclareDerivations();
     }
 
-    void ResolveImports(CompilationUnitSyntax unit, FileScope scope) {
+    void ResolveImports(CompilationUnitSyntax unit, FileScope scope, string? importer) {
+        var core = LibraryTiers.TierOf(importer) == ModuleTier.Core;
         foreach (var import in unit.Imports) {
             var name = NameOf(import.Name);
             var module = GetModule(name);
@@ -546,6 +547,17 @@ public sealed partial class Compilation {
                     $"no module named '{name}' in this compilation"
                 );
                 continue;
+            }
+
+            // The standard library's tiers (lib/package.sb): a core module
+            // is what a program has without the extensions, so it never
+            // imports one.
+            if (core && LibraryTiers.TierOf(name) == ModuleTier.Extension) {
+                ReportDeclaration(
+                    ErrorCode.ERR_CoreImportsExtension,
+                    import.Name.Span,
+                    $"'{importer}' is a core module of the standard library and cannot import '{name}', an extension (lib/package.sb): move what needs it into '{name}' or another extension"
+                );
             }
 
             if (import.Items is { } items) {

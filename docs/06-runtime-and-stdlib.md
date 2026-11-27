@@ -1349,7 +1349,8 @@ Sable.Crypto.X509   Certificate, CertificateVerifier (RFC 5280 paths, name
                     constraints, host names, revocation lists), TrustStore
                     (the system's), CertificateBuilder, CertificateRequest
 Sable.Diagnostics   Logger (structured, with the current span's ids;
-                    Logger.Of<T>, of T's name, which a container injects),
+                    Logger.Of<T>, of T's name, which a container injects
+                    through Sable.DependencyInjection),
                     Backtrace, Panic, Debugger; tracing: Tracer (withSpan,
                     startSpan), Span, SpanContext (W3C traceparent),
                     TraceContextPropagator, Tracing (listeners, the current
@@ -1374,6 +1375,14 @@ Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     variable), OwnedFd, OwnedHandle (Windows)
 Sable.Reflect       the reflection surface described above
 ```
+
+Each module is **core** or an **extension**, as `lib/package.sb` lists them
+(`modules: [.core("Sable.IO"), .extension("Sable.Hosting"), ...]`), the one
+list the compiler reads. The extensions are Sable.DependencyInjection,
+Hosting, Configuration, Validation, CommandLine, Serialize.Yaml, IO.Ports and
+Math.Tensors. A core module never imports an extension, directly or through
+another (S3239), so a conformance joining the two lives in the extension:
+Sable.DependencyInjection makes `Logger.Of` `Injectable`.
 
 ### Benchmarks
 

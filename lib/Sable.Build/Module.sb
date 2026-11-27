@@ -1,0 +1,21 @@
+module Sable.Build
+
+/// A module of a package of many, and its tier: what may import it. A core
+/// module imports only core modules; an extension module may import either.
+/// The standard library lists each of its modules so (`lib/package.sb`).
+public struct Module {
+    var name: String
+    /// Core, or else an extension (`extension` is a keyword, so no case of an enum).
+    var isCore: Bool
+
+    /// A module of the package's core: it never imports an extension module,
+    /// directly or through another.
+    public static fn core(_ name: String) -> Module {
+        return Module { name: name, isCore: true }
+    }
+
+    /// A module built on the core, which no core module imports.
+    public static fn extension(_ name: String) -> Module {
+        return Module { name: name, isCore: false }
+    }
+}

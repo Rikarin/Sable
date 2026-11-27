@@ -1,6 +1,5 @@
 module Sable.Diagnostics
 
-import Sable.DependencyInjection
 import Sable.Time
 
 // Structured logging (docs/06 §6.4): a line per event on standard error,
@@ -120,29 +119,22 @@ public open class Logger {
     public fn error(_ message: String, _ fields: Field[>..]) { log(Level.Error, message, fields) }
 
     /// A logger whose category is the type's name, .NET's `ILogger<T>`: what
-    /// a type that logs is given by a container, `log: Logger.Of<Checkout>`,
-    /// registered for every type as `addTransient(open: Logger.Of.self,
-    /// Logger.Of.self)` (a host registers it). It writes through a logger of
-    /// the category made `with` the container's `Logger`, where it has one,
-    /// so takes its threshold, fields and where its lines go; or else
-    /// through a new one. A Logger is not Sendable, so neither is this: a
-    /// container makes one for each that asks.
+    /// a type that logs is given, `log: Logger.Of<Checkout>`. It writes
+    /// through a logger of the category made `with` a parent, so takes its
+    /// threshold, fields and where its lines go; or else through a new one.
+    /// Sable.DependencyInjection makes it `Injectable`, made with the
+    /// container's `Logger`. A Logger is not Sendable, so neither is this.
     ///
     /// ```sable
     /// struct Checkout {}
     ///
-    /// var services = ServiceCollection()
-    /// services.addTransient(Logger.self) { _services in
-    ///     let root = Logger("app")
-    ///     root.threshold = .Warning
-    ///     return root
-    /// }
-    /// services.addTransient(open: Logger.Of.self, Logger.Of.self)
-    /// let log = try! (try! services.build()).resolve(Logger.Of<Checkout>.self)
+    /// let root = Logger("app")
+    /// root.threshold = .Warning
+    /// let log = Logger.Of<Checkout>(root)
     /// assert(log.logger.name.hasSuffix("Checkout"))
     /// assert(!log.logger.isEnabled(.Info))
     /// ```
-    public struct Of<Category>: Injectable {
+    public struct Of<Category> {
         /// What it writes through: a logger of the category.
         public let logger: Logger
 
@@ -151,15 +143,6 @@ public open class Logger {
         public init(_ parent: Logger? = none) {
             let name = "\(Category.self)"
             logger = parent?.with(name: name) ?? Logger(name)
-        }
-
-        /// One made with the container's `Logger`, if it has one.
-        public static fn make(_ services: ServiceScope) throws -> Logger.Of<Category> {
-            return Logger.Of<Category>(try services.find(Logger.self))
-        }
-
-        public static fn dependencies() -> ServiceDependency[>..] {
-            return [ServiceDependency(Logger.self, kind: DependencyKind.Optional)]
         }
 
         public fn isEnabled(_ level: Level) -> Bool { return logger.isEnabled(level) }

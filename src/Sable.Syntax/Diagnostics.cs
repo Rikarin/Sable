@@ -241,6 +241,9 @@ public enum ErrorCode {
     ERR_IsolatedWitness = 3237,
     ERR_IsolatedStateInSendableClosure = 3238,
 
+    // A core module of the standard library that imports an extension (lib/package.sb).
+    ERR_CoreImportsExtension = 3239,
+
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
     LNT_UnusedLocal = 3300,

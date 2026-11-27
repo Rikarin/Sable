@@ -488,8 +488,155 @@ static void thread_set_name(const char *name) {
     }
 }
 
-static void thread_set_priority(int priority) {
-    SetThreadPriority(GetCurrentThread(), priority);
+// THREAD_PRIORITY_LOWEST to THREAD_PRIORITY_HIGHEST are -2 to 2. With the
+// lowest a thread asks to be power throttled (EcoQoS: run slowly, on
+// efficiency cores where there are any), with the two highest not to be;
+// the others let the system decide. SetThreadInformation's
+// ThreadPowerThrottling is Windows 10 1709's on: asked for, not linked.
+typedef struct ThrottlingState {
+    ULONG version, control, state;
+} ThrottlingState;
+
+enum { THROTTLE_EXECUTION_SPEED = 1, THREAD_POWER_THROTTLING_CLASS = 3 };
+
+static void thread_set_throttling(int priority) {
+    typedef BOOL(WINAPI * Inform)(HANDLE, int, LPVOID, DWORD);
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    Inform inform = kernel != NULL ? (Inform)(void *)GetProcAddress(kernel, "SetThreadInformation") : NULL;
+    if (inform != NULL) {
+        ThrottlingState state = { 1, priority == -2 || priority >= 1 ? THROTTLE_EXECUTION_SPEED : 0, priority == -2 ? THROTTLE_EXECUTION_SPEED : 0 };
+        inform(GetCurrentThread(), THREAD_POWER_THROTTLING_CLASS, &state, sizeof state);
+    }
+}
+
+static bool thread_set_priority(int priority) {
+    thread_set_throttling(priority);
+    return SetThreadPriority(GetCurrentThread(), priority) != 0;
+}
+
+static int thread_priority(void) {
+    int priority = GetThreadPriority(GetCurrentThread());
+    return priority == THREAD_PRIORITY_ERROR_RETURN ? 0 : priority < -2 ? -2 : priority > 2 ? 2 : priority;
+}
+
+// A processor's number is its group's times 64 and its own in the group. A
+// thread is bound within one group: a set across several is refused.
+static bool thread_set_affinity(const int32_t *processors, int32_t count) {
+    if (count <= 0) {
+        return false;
+    }
+
+    GROUP_AFFINITY affinity;
+    memset(&affinity, 0, sizeof affinity);
+    affinity.Group = (WORD)(processors[0] / 64);
+    for (int32_t i = 0; i < count; i++) {
+        if (processors[i] / 64 != affinity.Group) {
+            return false;
+        }
+
+        affinity.Mask |= (KAFFINITY)1 << (processors[i] % 64);
+    }
+
+    return SetThreadGroupAffinity(GetCurrentThread(), &affinity, NULL) != 0;
+}
+
+static int32_t thread_affinity(int32_t **processors) {
+    *processors = NULL;
+    GROUP_AFFINITY affinity;
+    if (!GetThreadGroupAffinity(GetCurrentThread(), &affinity) || affinity.Mask == 0) {
+        return 0;
+    }
+
+    *processors = malloc(64 * sizeof(int32_t));
+    int32_t count = 0;
+    for (int bit = 0; *processors != NULL && bit < 64; bit++) {
+        if (affinity.Mask >> bit & 1) {
+            (*processors)[count++] = affinity.Group * 64 + bit;
+        }
+    }
+
+    return count;
+}
+
+// The processors of a group's mask, by number, into 'ids' (64 at most): how many.
+static int32_t group_processors(const GROUP_AFFINITY *mask, int32_t *ids) {
+    int32_t count = 0;
+    for (int bit = 0; bit < 64; bit++) {
+        if (mask->Mask >> bit & 1) {
+            ids[count++] = mask->Group * 64 + bit;
+        }
+    }
+
+    return count;
+}
+
+// GetLogicalProcessorInformationEx: its packages, NUMA nodes, cores (each
+// with its efficiency class, higher the faster) and caches. A node's and a
+// cache's processors are taken from their first group's mask.
+static bool topology_read(Topology *topology) {
+    DWORD size = 0;
+    GetLogicalProcessorInformationEx(RelationAll, NULL, &size);
+    if (size == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        return false;
+    }
+
+    char *buffer = malloc(size);
+    int32_t most = (int32_t)GetActiveProcessorGroupCount() * 64;
+    int32_t *packages = calloc((size_t)(most > 0 ? most : 64), sizeof(int32_t));
+    int32_t *nodes = calloc((size_t)(most > 0 ? most : 64), sizeof(int32_t));
+    if (buffer == NULL || packages == NULL || nodes == NULL || !GetLogicalProcessorInformationEx(RelationAll, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer, &size)) {
+        free(buffer);
+        free(packages);
+        free(nodes);
+        return false;
+    }
+
+    int32_t ids[64];
+    int32_t package = 0, core = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (char *at = buffer; at < buffer + size; at += ((PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)at)->Size) {
+            PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)at;
+            if (pass == 0 && info->Relationship == RelationProcessorPackage) {
+                for (WORD g = 0; g < info->Processor.GroupCount; g++) {
+                    int32_t count = group_processors(&info->Processor.GroupMask[g], ids);
+                    for (int32_t i = 0; i < count; i++) {
+                        if (ids[i] < most) {
+                            packages[ids[i]] = package;
+                        }
+                    }
+                }
+
+                package++;
+            } else if (pass == 0 && info->Relationship == RelationNumaNode) {
+                int32_t count = group_processors(&info->NumaNode.GroupMask, ids);
+                for (int32_t i = 0; i < count; i++) {
+                    if (ids[i] < most) {
+                        nodes[ids[i]] = (int32_t)info->NumaNode.NodeNumber;
+                    }
+                }
+            } else if (pass == 1 && info->Relationship == RelationProcessorCore) {
+                for (WORD g = 0; g < info->Processor.GroupCount; g++) {
+                    int32_t count = group_processors(&info->Processor.GroupMask[g], ids);
+                    for (int32_t i = 0; i < count; i++) {
+                        bool known = ids[i] < most;
+                        topology_add(topology, ids[i], core, known ? packages[ids[i]] : 0, known ? nodes[ids[i]] : 0, info->Processor.EfficiencyClass);
+                    }
+                }
+
+                core++;
+            } else if (pass == 1 && info->Relationship == RelationCache) {
+                CACHE_RELATIONSHIP *cache = &info->Cache;
+                int32_t kind = cache->Type == CacheData ? CACHE_DATA : cache->Type == CacheInstruction ? CACHE_INSTRUCTION : CACHE_UNIFIED;
+                int32_t count = group_processors(&cache->GroupMask, ids);
+                topology_add_cache(topology, cache->Level, kind, cache->CacheSize, cache->LineSize, ids, count);
+            }
+        }
+    }
+
+    free(buffer);
+    free(packages);
+    free(nodes);
+    return topology->count > 0;
 }
 
 // Those the process is bound to, where it is of one group of processors.

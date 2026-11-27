@@ -1,0 +1,40 @@
+module Sable.Concurrency
+
+/// One processor a thread can run on, as `ProcessorTopology` finds it: a
+/// core, or one of a core's hardware threads (SMT, Intel's
+/// Hyper-Threading), which share the core and its first caches.
+///
+/// ```sable
+/// let first = ProcessorTopology.current.processors[0]
+/// assert(first.core >= 0 && first.socket >= 0 && first.node >= 0)
+/// ```
+@derive(Equatable, Debug)
+public struct LogicalProcessor {
+    /// Its number, which `Thread.setAffinity` and `WorkerPool.configure`
+    /// take: on Linux the kernel's (`cpu3`); on Windows its processor
+    /// group's number times 64 and its own number in the group, so 0 to 63
+    /// in the first group; on macOS its place, the efficiency cores' first,
+    /// as Apple's systems number them.
+    public let id: Int
+    /// Its core: one of `ProcessorTopology.cores`, numbered from 0.
+    public let core: Int
+    /// Its package (socket), numbered from 0.
+    public let socket: Int
+    /// Its NUMA node, numbered from 0: the memory nearest it.
+    public let node: Int
+    /// How fast its core is among the kinds the machine has: 0 the slowest,
+    /// and every processor's 0 where all cores are alike.
+    public let efficiencyClass: Int
+    /// `Performance` where its class is the machine's highest, `Efficiency`
+    /// otherwise.
+    public let kind: CoreKind
+
+    public init(id: Int, core: Int, socket: Int = 0, node: Int = 0, efficiencyClass: Int = 0, kind: CoreKind = .Performance) {
+        self.id = id
+        self.core = core
+        self.socket = socket
+        self.node = node
+        self.efficiencyClass = efficiencyClass
+        self.kind = kind
+    }
+}

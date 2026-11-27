@@ -1,0 +1,59 @@
+module Sable.Concurrency
+
+/// The pool of threads tasks run on, and parallel loops: by default one
+/// thread a processor the program may use (`Thread.availableParallelism`),
+/// started as the first task is spawned. `configure` leaves cores to the
+/// rest of the system, and says where the workers run: an engine keeps
+/// them on the performance cores, off the core its render thread has, at
+/// a priority of their own.
+///
+/// ```sable
+/// let topology = ProcessorTopology.current
+/// _ = WorkerPool.configure(reserving: 1, priority: .High, processors: topology.performanceProcessors)
+/// assert(WorkerPool.count >= 0)
+/// ```
+///
+/// `SABLE_WORKERS` sets the size, whatever is reserved; with
+/// `SABLE_WORKERS=0`, on WASI and in the interpreter there is no pool, and
+/// the main thread runs every task. The blocking pool (`Task.blocking`) is
+/// not placed.
+public struct WorkerPool {
+    /// How many threads run tasks: 0 where the main thread runs every one.
+    /// It starts the pool, if it has not: what is reserved after cannot
+    /// change its size.
+    public static var count: Int => Runtime.workerCount()
+
+    /// Places the pool's threads: how many processors to leave to the rest
+    /// of the system, the priority each worker has, and the processors (by
+    /// `LogicalProcessor.id`) they run on, or any.
+    ///
+    /// The pool's size is fixed as it starts: as many workers as there are
+    /// processors given (or that the program may use, if fewer, or if none
+    /// are given), less those reserved, and at least one. Whether that will
+    /// be so is what this gives: false once the pool has started with
+    /// another count reserved, where `SABLE_WORKERS` sets its size, and
+    /// where there is no pool.
+    ///
+    /// The priority and the processors are each worker's from the next time
+    /// it looks for work, whenever this is called. Every worker is bound to
+    /// all the processors given, not one each, so the system can still move
+    /// them between those. As for a thread (`Thread.setAffinity`,
+    /// `ThreadPriority`), Linux and Windows bind workers to processors, and
+    /// macOS cannot: there the priority places them, `.High` and above on
+    /// the performance cores where it can, `.Lowest` on the efficiency
+    /// ones; and Linux lets a worker be made nicer but not less so.
+    ///
+    /// ```sable
+    /// let topology = ProcessorTopology.current
+    /// _ = WorkerPool.configure(processors: topology.onePerCore(of: .Performance))
+    /// _ = WorkerPool.configure()  // back to any processor, at `Normal`
+    /// ```
+    public static fn configure(reserving reserved: Int = 0, priority: ThreadPriority = .Normal, processors: Int[>..]? = none) -> Bool {
+        precondition(reserved >= 0, "\(reserved) processors reserved")
+        let ids = processors ?? []
+        for id in ids {
+            precondition(id >= 0, "a processor's id is not negative: \(id)")
+        }
+        return Runtime.placeWorkers(reserved, priority.level, ids)
+    }
+}

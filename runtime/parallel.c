@@ -365,6 +365,40 @@ int64_t sable_thread_workers(void) {
     return worker_count;
 }
 
+// WorkerPool.configure: the cores to leave to the system, which the pool
+// takes as it starts — whether it will, as it has not started yet, nor does
+// SABLE_WORKERS set its size, or had as many already — and the priority and
+// processors each worker is to have, which it takes as it next looks for
+// work (placement_follow).
+bool sable_thread_pool_place(int64_t reserved, int64_t priority, const SableArray *processors) {
+    int32_t *ids, count;
+    if (reserved < 0 || reserved > 1 << 20 || priority < -2 || priority > 2 || !processor_ids(processors, &ids, &count)) {
+        return false;
+    }
+
+    if (count == 0) {
+        free(ids);
+        ids = NULL;
+    }
+
+    const char *setting = getenv("SABLE_WORKERS");
+    bool fixed = !PLATFORM_THREADS || (setting != NULL && setting[0] != '\0');
+    spin_lock(&placement.lock);
+    int32_t *before = placement.processors;
+    placement.processors = ids;
+    placement.count = count;
+    placement.priority = (int32_t)priority;
+    if (!placement.sized) {
+        placement.reserved = (int32_t)reserved;
+    }
+
+    bool kept = !fixed && placement.reserved == reserved;
+    __atomic_store_n(&placement.generation, placement.generation + 1, __ATOMIC_RELEASE);
+    spin_unlock(&placement.lock);
+    free(before);
+    return kept;
+}
+
 // ---- Blocking on a task -----------------------------------------------------------
 
 // 'Thread.blockOn': the calling thread waits for a task to say it is done. The

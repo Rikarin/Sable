@@ -1,0 +1,18 @@
+module Sable.Concurrency
+
+/// A NUMA node: processors and the memory nearest them, which they reach
+/// sooner than another node's. A machine has one unless it has several
+/// packages, or a processor made of parts (some servers); a Mac, and a
+/// system that does not say, has one.
+///
+/// ```sable
+/// let nodes = ProcessorTopology.current.nodes
+/// assert(nodes.count >= 1 && nodes[0].id == 0)
+/// ```
+@derive(Equatable, Debug)
+public struct NumaNode {
+    /// Its number, from 0.
+    public let id: Int
+    /// The ids of its logical processors, ascending.
+    public let processors: Int[>..]
+}

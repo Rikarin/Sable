@@ -1,0 +1,194 @@
+module Sable.Concurrency
+
+/// The machine's processors as the system describes them: each logical
+/// processor with its core, package and NUMA node, the kinds of core
+/// (performance and efficiency), which processors are one core's (SMT), and
+/// the caches with the processors that share them. What `Thread.setAffinity`
+/// and `WorkerPool.configure` are given is chosen from it: a render thread on
+/// a core of its own, workers on the performance cores.
+///
+/// ```sable
+/// let topology = ProcessorTopology.current
+/// assert(topology.processors.count >= 1)
+/// assert(topology.cores.count <= topology.processors.count)
+/// assert(!topology.performanceProcessors.isEmpty)
+/// if topology.isHybrid {
+///     assert(!topology.efficiencyProcessors.isEmpty)
+/// }
+/// ```
+///
+/// Where it comes from:
+///
+/// - **macOS**: `sysctl`'s `hw.perflevel*` — how many processors and cores
+///   of each kind, and their level 1 and 2 caches. The system does not say
+///   which processor is which: they are numbered as Apple's systems number
+///   them, the efficiency cores first, a core's processors one after
+///   another. One package and one node.
+/// - **Linux**: `/sys/devices/system/cpu` — each online processor's core,
+///   package and caches, and its capacity on ARM; Intel's hybrid
+///   processors' kinds from `/sys/devices/cpu_core` and `cpu_atom` — and
+///   `/sys/devices/system/node` for the nodes.
+/// - **Windows**: `GetLogicalProcessorInformationEx` — packages, nodes,
+///   cores with their efficiency classes, and caches; a node's and a
+///   cache's processors are those of its first processor group.
+/// - **WASI**, and wherever the system does not say: one core for each of
+///   `Thread.availableParallelism`, all alike, and no caches.
+@derive(Equatable, Debug)
+public struct ProcessorTopology {
+    /// The logical processors, by id.
+    public let processors: LogicalProcessor[>..]
+    /// The caches, by level, then kind, then the first processor sharing it.
+    public let caches: ProcessorCache[>..]
+
+    /// A topology of the processors and caches given, for a machine that is
+    /// not this one (a test's): processors in order of id, cores and nodes
+    /// numbered from 0.
+    public init(processors: LogicalProcessor[>..], caches: ProcessorCache[>..] = []) {
+        self.processors = processors
+        self.caches = caches
+    }
+
+    /// This machine's, as the system says it is now: each time asked, as a
+    /// processor may be taken offline.
+    public static var current: ProcessorTopology => ProcessorTopology.decoded(Runtime.processorTopology())
+
+    // The runtime's numbers (Runtime.processorTopology).
+    static fn decoded(_ numbers: Int[>..]) -> ProcessorTopology {
+        let count = numbers[0]
+        let cacheCount = numbers[1]
+        var highest = 0
+        for i in 0..<count {
+            highest = highest.max(other: numbers[2 + i * 5 + 4])
+        }
+        var processors: LogicalProcessor[>..] = []
+        for i in 0..<count {
+            let at = 2 + i * 5
+            let efficiency = numbers[at + 4]
+            processors.append(LogicalProcessor(id: numbers[at], core: numbers[at + 1], socket: numbers[at + 2], node: numbers[at + 3],
+                efficiencyClass: efficiency, kind: efficiency == highest ? .Performance : .Efficiency))
+        }
+        var caches: ProcessorCache[>..] = []
+        var at = 2 + count * 5
+        for _ in 0..<cacheCount {
+            let shared = numbers[at + 4]
+            var sharing: Int[>..] = []
+            for p in 0..<shared {
+                sharing.append(numbers[at + 5 + p])
+            }
+            caches.append(ProcessorCache(level: numbers[at], kind: CacheKind.of(numbers[at + 1]), size: numbers[at + 2], lineSize: numbers[at + 3], processors: sharing))
+            at += 5 + shared
+        }
+        return ProcessorTopology(processors: processors, caches: caches)
+    }
+
+    /// The ids of every processor, ascending.
+    public var ids: Int[>..] => processors.map { $0.id }
+
+    /// The cores, by number, each with its processors.
+    ///
+    /// ```sable
+    /// let topology = ProcessorTopology(processors: [
+    ///     LogicalProcessor(id: 0, core: 0), LogicalProcessor(id: 1, core: 0), LogicalProcessor(id: 2, core: 1),
+    /// ])
+    /// assert(topology.cores.count == 2)
+    /// assert(topology.cores[0].processors == [0, 1] && topology.cores[0].isMultithreaded)
+    /// ```
+    public var cores: ProcessorCore[>..] {
+        get {
+            var most = -1
+            for processor in processors {
+                most = most.max(other: processor.core)
+            }
+            var cores: ProcessorCore[>..] = []
+            for core in 0..<(most + 1) {
+                let on = processors.filter { $0.core == core }
+                if let first = on.first {
+                    cores.append(ProcessorCore { id: core, processors: on.map { $0.id }, socket: first.socket, node: first.node,
+                        efficiencyClass: first.efficiencyClass, kind: first.kind })
+                }
+            }
+            return cores
+        }
+    }
+
+    /// The NUMA nodes, by number, each with its processors.
+    public var nodes: NumaNode[>..] {
+        get {
+            var most = 0
+            for processor in processors {
+                most = most.max(other: processor.node)
+            }
+            var nodes: NumaNode[>..] = []
+            for node in 0..<(most + 1) {
+                let on = processors.filter { $0.node == node }.map { $0.id }
+                if !on.isEmpty {
+                    nodes.append(NumaNode { id: node, processors: on })
+                }
+            }
+            return nodes
+        }
+    }
+
+    /// How many packages (sockets) there are.
+    public var socketCount: Int {
+        get {
+            var most = 0
+            for processor in processors {
+                most = most.max(other: processor.socket)
+            }
+            return most + 1
+        }
+    }
+
+    /// Whether there is more than one kind of core.
+    public var isHybrid: Bool => processors.contains { $0.kind == .Efficiency }
+
+    /// The ids of the processors on the fastest cores: every one where all
+    /// are alike.
+    public var performanceProcessors: Int[>..] => processors.filter { $0.kind == .Performance }.map { $0.id }
+
+    /// The ids of the processors on slower cores: none where all are alike.
+    ///
+    /// ```sable
+    /// let hybrid = ProcessorTopology(processors: [
+    ///     LogicalProcessor(id: 0, core: 0, kind: .Efficiency),
+    ///     LogicalProcessor(id: 1, core: 1, efficiencyClass: 1),
+    /// ])
+    /// assert(hybrid.isHybrid)
+    /// assert(hybrid.performanceProcessors == [1] && hybrid.efficiencyProcessors == [0])
+    /// ```
+    public var efficiencyProcessors: Int[>..] => processors.filter { $0.kind == .Efficiency }.map { $0.id }
+
+    /// The first processor of each core, of the kind if one is given: a
+    /// thread each on them has a core to itself.
+    ///
+    /// ```sable
+    /// let topology = ProcessorTopology(processors: [
+    ///     LogicalProcessor(id: 0, core: 0), LogicalProcessor(id: 1, core: 0),
+    ///     LogicalProcessor(id: 2, core: 1), LogicalProcessor(id: 3, core: 1),
+    /// ])
+    /// assert(topology.onePerCore() == [0, 2])
+    /// ```
+    public fn onePerCore(of kind: CoreKind? = none) -> Int[>..] {
+        return cores.filter { kind == none || $0.kind == kind }.map { $0.processors[0] }
+    }
+
+    /// The processor of the id, if there is one.
+    public fn processor(_ id: Int) -> LogicalProcessor? {
+        return processors.first { $0.id == id }
+    }
+
+    /// The caches the processor uses, the nearest first.
+    ///
+    /// ```sable
+    /// let topology = ProcessorTopology(processors: [LogicalProcessor(id: 0, core: 0), LogicalProcessor(id: 1, core: 1)], caches: [
+    ///     ProcessorCache(level: 1, kind: .Data, size: 32_768, lineSize: 64, processors: [1]),
+    ///     ProcessorCache(level: 2, kind: .Unified, size: 1_048_576, lineSize: 64, processors: [0, 1]),
+    /// ])
+    /// assert(topology.caches(of: 0).map { $0.level } == [2])
+    /// assert(topology.caches(of: 1).count == 2)
+    /// ```
+    public fn caches(of processor: Int) -> ProcessorCache[>..] {
+        return caches.filter { $0.processors.contains(processor) }
+    }
+}

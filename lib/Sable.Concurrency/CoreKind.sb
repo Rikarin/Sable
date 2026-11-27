@@ -1,0 +1,17 @@
+module Sable.Concurrency
+
+/// Which kind of core a processor is on, where a machine has more than one:
+/// Apple's performance and efficiency cores, Intel's P-cores and E-cores,
+/// ARM's big and LITTLE. Where every core is alike, each is `Performance`.
+///
+/// ```sable
+/// let kinds = ProcessorTopology.current.processors.map { $0.kind }
+/// assert(kinds.contains(.Performance))
+/// ```
+@derive(Equatable, Debug)
+public enum CoreKind {
+    /// The fastest cores the machine has.
+    Performance
+    /// Slower ones, which use less power.
+    Efficiency
+}

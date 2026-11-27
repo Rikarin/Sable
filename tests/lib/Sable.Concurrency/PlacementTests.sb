@@ -1,0 +1,219 @@
+module PlacementTests
+
+// ProcessorTopology and what it is made of, a thread's priority and affinity
+// (Thread+Placement), and WorkerPool (Sable.Concurrency). What is placed is a
+// thread spawned for the test, so that the runner's own are left as they were.
+
+import Sable.Concurrency
+import Sable.Testing
+
+// Two packages, each a node: an efficiency core of one processor, and a
+// performance core of two (SMT), with a level 1 cache each and a level 2
+// cache the package's.
+fn hybrid() -> ProcessorTopology {
+    return ProcessorTopology(processors: [
+        LogicalProcessor(id: 0, core: 0, efficiencyClass: 0, kind: .Efficiency),
+        LogicalProcessor(id: 1, core: 1, efficiencyClass: 1),
+        LogicalProcessor(id: 2, core: 1, efficiencyClass: 1),
+        LogicalProcessor(id: 4, core: 2, socket: 1, node: 1, efficiencyClass: 0, kind: .Efficiency),
+        LogicalProcessor(id: 5, core: 3, socket: 1, node: 1, efficiencyClass: 1),
+        LogicalProcessor(id: 6, core: 3, socket: 1, node: 1, efficiencyClass: 1),
+    ], caches: [
+        ProcessorCache(level: 1, kind: .Data, size: 65_536, lineSize: 128, processors: [0]),
+        ProcessorCache(level: 1, kind: .Data, size: 131_072, lineSize: 128, processors: [1, 2]),
+        ProcessorCache(level: 2, kind: .Unified, size: 4_194_304, lineSize: 128, processors: [0, 1, 2]),
+        ProcessorCache(level: 2, kind: .Unified, size: 4_194_304, lineSize: 128, processors: [4, 5, 6]),
+    ])
+}
+
+@test
+fn thisMachinesTopologyHoldsTogether() {
+    let topology = ProcessorTopology.current
+    let ids = topology.ids
+    require(!ids.isEmpty)
+    expect(ids == ids.sorted())
+    expect(ids.count >= Thread.availableParallelism)
+    expect(topology.cores.reduce(0) { $0 + $1.processors.count } == ids.count)
+    expect(topology.nodes.reduce(0) { $0 + $1.processors.count } == ids.count)
+    expect(topology.socketCount >= 1)
+    expect(topology.performanceProcessors.count + topology.efficiencyProcessors.count == ids.count)
+    expect(!topology.performanceProcessors.isEmpty)
+    expect(topology.isHybrid == !topology.efficiencyProcessors.isEmpty)
+    for processor in topology.processors {
+        expect(topology.processor(processor.id) == processor)
+        expect(topology.cores[processor.core].processors.contains(processor.id))
+        expect((processor.kind == .Performance) == topology.performanceProcessors.contains(processor.id))
+    }
+    for cache in topology.caches {
+        expect(cache.level >= 1 && cache.size >= 0 && cache.lineSize >= 0)
+        expect(cache.processors.allSatisfy { ids.contains($0) })
+    }
+    // What a thread may run on is of the machine's.
+    if let allowed = Thread.affinity {
+        expect(allowed.allSatisfy { ids.contains($0) })
+    }
+}
+
+@test
+fn coresGatherTheirProcessors() {
+    let cores = hybrid().cores
+    assertEqual(cores.count, 4)
+    assertEqual(cores[1].processors, [1, 2])
+    expect(cores[1].isMultithreaded && !cores[0].isMultithreaded)
+    assertEqual(cores[0].kind, .Efficiency)
+    assertEqual(cores[3].socket, 1)
+    assertEqual(cores[3].node, 1)
+    assertEqual(cores[3].efficiencyClass, 1)
+    assertEqual(cores.map { $0.id }, [0, 1, 2, 3])
+}
+
+@test
+fn nodesAndSocketsAreCounted() {
+    let topology = hybrid()
+    assertEqual(topology.nodes, [NumaNode { id: 0, processors: [0, 1, 2] }, NumaNode { id: 1, processors: [4, 5, 6] }])
+    assertEqual(topology.socketCount, 2)
+    assertEqual(topology.ids, [0, 1, 2, 4, 5, 6])
+}
+
+@test
+fn performanceAndEfficiencyProcessorsAreApart() {
+    let topology = hybrid()
+    expect(topology.isHybrid)
+    assertEqual(topology.performanceProcessors, [1, 2, 5, 6])
+    assertEqual(topology.efficiencyProcessors, [0, 4])
+    assertEqual(topology.onePerCore(), [0, 1, 4, 5])
+    assertEqual(topology.onePerCore(of: .Performance), [1, 5])
+    assertEqual(topology.onePerCore(of: .Efficiency), [0, 4])
+}
+
+@test
+fn aTopologyOfOneKindIsNotHybrid() {
+    let topology = ProcessorTopology(processors: [LogicalProcessor(id: 0, core: 0), LogicalProcessor(id: 1, core: 1)])
+    expect(!topology.isHybrid)
+    assertEqual(topology.performanceProcessors, [0, 1])
+    expect(topology.efficiencyProcessors.isEmpty)
+    expect(topology.caches.isEmpty)
+    let empty = ProcessorTopology(processors: [])
+    expect(empty.cores.isEmpty && empty.nodes.isEmpty)
+    assertEqual(empty.socketCount, 1)
+}
+
+@test
+fn aProcessorsCachesAreThoseItShares() {
+    let topology = hybrid()
+    assertEqual(topology.caches(of: 0).map { $0.size }, [65_536, 4_194_304])
+    assertEqual(topology.caches(of: 2).map { $0.level }, [1, 2])
+    assertEqual(topology.caches(of: 5).map { $0.kind }, [.Unified])
+    expect(topology.caches(of: 9).isEmpty)
+    expect(topology.processor(3) == none)
+    assertEqual(topology.processor(4)?.socket, 1)
+}
+
+// Not to `Lowest`, which runs only while nothing else would: on a busy
+// machine such a thread may not end for a long while.
+@test
+fn aThreadMayAlwaysBeLowered() {
+    let seen = Thread.spawn {
+        let taken = Thread.setPriority(.Low)
+        return (taken, Thread.priority)
+    }.join()
+    expect(seen.0)
+    assertEqual(seen.1, .Low)
+}
+
+@test(arguments: [ThreadPriority.Low, ThreadPriority.High, ThreadPriority.Highest])
+fn aThreadIsSpawnedWithItsPriority(_ priority: ThreadPriority) {
+    let seen = Thread.spawn(priority: priority) {
+        // Linux lets only a privileged thread be less nice: then it is as
+        // it was.
+        return Thread.priority == priority || priority.isRaised && Thread.setPriority(priority) == false
+    }.join()
+    expect(seen)
+}
+
+@test
+fn aThreadRaisedWhereTheSystemAllowsHasThePriority() {
+    let seen = Thread.spawn {
+        let raised = Thread.setPriority(.High)
+        return !raised || Thread.priority == .High
+    }.join()
+    expect(seen)
+}
+
+extension ThreadPriority {
+    var isRaised: Bool => self == .High || self == .Highest
+}
+
+@test
+fn aThreadIsBoundWhereTheSystemBindsThreads() throws {
+    try skip(if: Thread.affinity == none, "this system binds no thread to processors (macOS)")
+    let bound = Thread.spawn {
+        let allowed = Thread.affinity!
+        let one = allowed[allowed.count - 1]
+        let took = Thread.setAffinity([one])
+        return (took, Thread.affinity ?? [], Thread.setAffinity(allowed), Thread.affinity ?? [])
+    }.join()
+    expect(bound.0)
+    assertEqual(bound.2, true)
+    expect(bound.1.count == 1)
+    expect(bound.3.count >= 1)
+}
+
+@test
+fn anAffinityNoProcessorHasIsRefused() {
+    let refused = Thread.spawn {
+        return (Thread.setAffinity([]), Thread.setAffinity([1 << 19]), Thread.setAffinity([1 << 30]))
+    }.join()
+    expect(!refused.0)
+    expect(!refused.1)
+    expect(!refused.2)
+}
+
+@test
+fn aBindingMacOSCannotMakeIsRefused() throws {
+    try skip(if: Platform.operatingSystem != .MacOS, "only macOS has no binding")
+    let refused = Thread.spawn { (Thread.affinity == none, Thread.setAffinity([0])) }.join()
+    expect(refused.0)
+    expect(!refused.1)
+}
+
+@test
+fn aStartedPoolKeepsItsSize() async {
+    let workers = WorkerPool.count
+    expect(workers >= 0)
+    // Started: the cores it reserved are as they were, whatever is asked.
+    expect(!WorkerPool.configure(reserving: 1_000))
+    let processors = Thread.affinity ?? ProcessorTopology.current.ids
+    _ = WorkerPool.configure(priority: .Normal, processors: processors)
+    _ = WorkerPool.configure()
+    assertEqual(WorkerPool.count, workers)
+    // And it runs tasks all the same.
+    let sum = await withTaskGroup(of: Int.self) { group in
+        for i in 1...20 {
+            group.spawn { i }
+        }
+        var sum = 0
+        for await one in group {
+            sum += one
+        }
+        return sum
+    }
+    assertEqual(sum, 210)
+}
+
+@test
+fn partsOfATopologyCompareByWhatTheyHold() {
+    let topology = hybrid()
+    expect(topology == hybrid())
+    expect(topology != ProcessorTopology(processors: topology.processors))
+    assertEqual(topology.cores[0], ProcessorCore { id: 0, processors: [0], socket: 0, node: 0, efficiencyClass: 0, kind: .Efficiency })
+    assertEqual(topology.caches(of: 4), [ProcessorCache(level: 2, kind: .Unified, size: 4_194_304, lineSize: 128, processors: [4, 5, 6])])
+    expect("\(topology.caches[0])".contains("65536"))
+}
+
+@test
+fn aCoreNumberWithNoProcessorsIsLeftOut() {
+    let topology = ProcessorTopology(processors: [LogicalProcessor(id: 0, core: 0), LogicalProcessor(id: 1, core: 2)])
+    assertEqual(topology.cores.map { $0.id }, [0, 2])
+    assertEqual(topology.onePerCore(), [0, 1])
+}

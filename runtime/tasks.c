@@ -2702,7 +2702,9 @@ static void worker_main(void *argument) {
     active_begin();
     bool searches = false; // counted in 'searching'
     bool watches = false;  // it is the one 'watched' says
+    int32_t placed = 0;    // the pool's placement it has taken (topology.c)
     for (;;) {
+        placed = placement_follow(placed);
         // A quick worker asks the time only now and then (note_task).
         if (!self->quick || (self->ran & (QUICK_TASKS - 1)) == 0) {
             wake_sleepers();
@@ -2786,11 +2788,12 @@ static void worker_main(void *argument) {
 }
 
 // The pool, as the first task is spawned: SABLE_WORKERS threads, by
-// default one per core; 0, none — the main thread runs every task, as it
+// default one per core, less those WorkerPool.configure reserved
+// (placement_workers); 0, none — the main thread runs every task, as it
 // always does where there are no threads (WASI).
 static void pool_start(void) {
     const char *setting = getenv("SABLE_WORKERS");
-    int count = setting != NULL && setting[0] != '\0' ? atoi(setting) : processor_count();
+    int count = setting != NULL && setting[0] != '\0' ? atoi(setting) : placement_workers(processor_count());
     if (count < 0 || !PLATFORM_THREADS) {
         count = 0;
     }

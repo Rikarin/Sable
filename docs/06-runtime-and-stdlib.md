@@ -3129,7 +3129,41 @@ recover at the task boundary.
   (one token a thread), `availableParallelism`: the processors the process is
   bound to and, on Linux, its control groups' quota rounded up, which is also
   how many workers the pool has. A stack is at least 256 KiB; a priority is a
-  hint (a quality-of-service class on Apple's systems, a nice value on Linux).
+  hint (a quality-of-service class on Apple's systems, a nice value on Linux),
+  which `Thread.setPriority` gives the calling thread too (below).
+- **Topology and placement** (runtime/topology.c). `ProcessorTopology.current`
+  is the machine as the system describes it: each `LogicalProcessor` (id,
+  core, socket, NUMA node, efficiency class and `CoreKind`), `cores` with
+  their SMT siblings, `nodes`, the `ProcessorCache`s and the processors each
+  is shared by, and `performanceProcessors`, `efficiencyProcessors` and
+  `onePerCore(of:)` to choose from. macOS gives it by `hw.perflevel*` (which
+  processor is of which level it does not say: the efficiency cores are taken
+  to be numbered first, as XNU numbers them), Linux by
+  `/sys/devices/system/cpu` and `/sys/devices/system/node` (a hybrid Intel's
+  kinds from `/sys/devices/cpu_core` and `cpu_atom`, an ARM's from
+  `cpu_capacity`), Windows by `GetLogicalProcessorInformationEx` (a
+  processor's id is its group's number times 64 and its own); WASI, and a
+  system that says nothing, a core per processor, alike, with no caches.
+  The calling thread's `Thread.priority` and `setPriority`, `affinity` and
+  `setAffinity`, each a `Bool` of whether the system did it:
+
+  | | priority | affinity |
+  |---|---|---|
+  | macOS | a QoS class (`pthread_set_qos_class_self_np`), which is also what places a thread on performance or efficiency cores | none: affinity tags only group threads, and Apple's processors ignore them; `setAffinity` is false |
+  | Linux | a nice value, `Lowest` `SCHED_IDLE` too; less nice only with `CAP_SYS_NICE`; no real-time policy | `sched_setaffinity`, within the control group's processors |
+  | Windows | `SetThreadPriority`, and power throttling (EcoQoS) for `Lowest`, none for `High` and above | `SetThreadGroupAffinity`, within one processor group |
+  | WASI | none | none |
+
+  `WorkerPool.configure(reserving:priority:processors:)` places the pool: as
+  it starts it has a worker for each processor given (or each it may use),
+  less those reserved, at least one — `SABLE_WORKERS` wins — and false says
+  that will not be so (started already with another count, or no pool).
+  Each worker takes the priority and the processors, all of them, not one
+  each, as it next looks for work (a generation it compares, a load in the
+  loop it runs), so a configure before the first task places every worker
+  before it runs one. The blocking pool is not placed. The interpreter keeps
+  a thread's priority without telling the system, binds nothing, and has
+  no pool.
 - **A thread and tasks.** A thread has a task of its own to be running, as one
   C made has (§6.4, "Calling C"): the tasks it spawns are that one's children,
   which no one waits for or cancels once the thread ends. `Thread.blockOn`

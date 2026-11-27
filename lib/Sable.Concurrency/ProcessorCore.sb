@@ -1,0 +1,27 @@
+module Sable.Concurrency
+
+/// A core of the machine, and the logical processors on it: more than one
+/// where it runs threads simultaneously (SMT), which then share its time
+/// and its first caches.
+///
+/// ```sable
+/// let cores = ProcessorTopology.current.cores
+/// assert(cores.allSatisfy { !$0.processors.isEmpty })
+/// ```
+@derive(Equatable, Debug)
+public struct ProcessorCore {
+    /// Its number: its processors' `core`.
+    public let id: Int
+    /// The ids of its logical processors, ascending.
+    public let processors: Int[>..]
+    /// Its package (socket).
+    public let socket: Int
+    /// Its NUMA node.
+    public let node: Int
+    /// As its processors': 0 the slowest kind.
+    public let efficiencyClass: Int
+    public let kind: CoreKind
+
+    /// Whether it runs more than one thread at once (SMT).
+    public var isMultithreaded: Bool => processors.count > 1
+}

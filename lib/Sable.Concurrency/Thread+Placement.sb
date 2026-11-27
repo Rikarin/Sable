@@ -1,0 +1,81 @@
+module Sable.Concurrency
+
+// Where the calling thread runs: its priority and the processors it may run
+// on (runtime/topology.c). Each is the calling thread's alone: macOS lets a
+// thread set only its own class, so a thread is placed from inside, as its
+// body begins.
+extension Thread {
+    /// The calling thread's priority as the system has it: the nearest to
+    /// its nice value on Linux, its quality-of-service class on macOS, its
+    /// priority on Windows; `Normal` on WASI.
+    ///
+    /// ```sable
+    /// let utility = Thread.spawn(priority: .Low) { Thread.priority }
+    /// assert(utility.join() == .Low)
+    /// ```
+    public static var priority: ThreadPriority => ThreadPriority.of(level: Runtime.threadPriority())
+
+    /// Gives the calling thread the priority (see `ThreadPriority` for what
+    /// each is on each system): whether the system took it. On Linux a
+    /// thread may always be made nicer, never less nice without privilege;
+    /// on WASI there is none to give.
+    ///
+    /// ```sable
+    /// let lowered = Thread.spawn {
+    ///     _ = Thread.setPriority(.Low)
+    ///     return Thread.priority
+    /// }
+    /// assert(lowered.join() == .Low)
+    /// ```
+    public static fn setPriority(_ priority: ThreadPriority) -> Bool {
+        return Runtime.setThreadPriority(priority.level)
+    }
+
+    /// The ids of the processors (`LogicalProcessor.id`) the calling thread
+    /// may run on, ascending; none where the system does not say: macOS,
+    /// which binds no thread to a processor, and WASI. On Windows, those of
+    /// the thread's processor group.
+    ///
+    /// ```sable
+    /// if let allowed = Thread.affinity {
+    ///     assert(!allowed.isEmpty)
+    /// }
+    /// ```
+    public static var affinity: Int[>..]? {
+        get {
+            let processors = Runtime.threadAffinity()
+            return processors.isEmpty ? none : processors
+        }
+    }
+
+    /// Binds the calling thread to the processors, by id: it runs on none
+    /// other from then on. Whether the system did:
+    ///
+    /// - **Linux** binds it (`sched_setaffinity`), to those of the
+    ///   processors its control group allows.
+    /// - **Windows** binds it within one processor group
+    ///   (`SetThreadGroupAffinity`): a set across groups is refused.
+    /// - **macOS** has no binding to processors — the scheduler places a
+    ///   thread by its quality-of-service class alone, and Apple's
+    ///   processors ignore affinity tags — so this is always false there:
+    ///   `setPriority(.High)` or above keeps a thread on the performance
+    ///   cores where it can, and `.Lowest` on the efficiency ones. So is it
+    ///   on WASI.
+    ///
+    /// False too for an empty set, or one with no processor the thread may
+    /// use; a negative id traps.
+    ///
+    /// ```sable
+    /// let pinned = Thread.spawn {
+    ///     let first = ProcessorTopology.current.processors[0].id
+    ///     return !Thread.setAffinity([first]) || (Thread.affinity ?? []) == [first]
+    /// }
+    /// assert(pinned.join())
+    /// ```
+    public static fn setAffinity(_ processors: Int[>..]) -> Bool {
+        for id in processors {
+            precondition(id >= 0, "a processor's id is not negative: \(id)")
+        }
+        return Runtime.setThreadAffinity(processors)
+    }
+}

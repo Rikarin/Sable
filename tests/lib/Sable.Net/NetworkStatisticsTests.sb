@@ -10,6 +10,7 @@ module NetworkStatisticsTests
 import NetSupport
 import Sable.IO
 import Sable.Net
+import Sable.Process
 import Sable.Testing
 import Sable.Time
 
@@ -20,7 +21,8 @@ fn aListenerOfThisProcessIsListed() throws {
     assertEqual(listed.count, 1)
     assertEqual(listed[0].state, TcpState.Listen)
     assertEqual(listed[0].remote.port, 0)
-    expect(listed[0].processId == none || listed[0].processId! > 0)
+    // Every system says which process has it: this one.
+    assertEqual(listed[0].processId, Process.id())
     expect(try NetworkStatistics.tcpListeners().contains(listener.localAddress))
 }
 
@@ -41,7 +43,11 @@ fn aConnectionIsListedEstablishedFromEachEnd() async throws {
     let ours = all.filter { $0.local == client.localAddress && $0.remote == listener.localAddress }
     assertEqual(ours.count, 1)
     assertEqual(ours[0].state, TcpState.Established)
-    expect(all.contains(where: { $0.local == server.localAddress && $0.state == TcpState.Established }))
+    assertEqual(ours[0].processId, Process.id())
+    let theirs = all.filter { $0.local == server.localAddress && $0.remote == client.localAddress }
+    assertEqual(theirs.count, 1)
+    assertEqual(theirs[0].state, TcpState.Established)
+    assertEqual(theirs[0].processId, Process.id())
 }
 
 @test

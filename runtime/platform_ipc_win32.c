@@ -13,7 +13,7 @@
 
 static int ipc_error_kind(DWORD code) {
     switch (code) {
-        case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_BAD_NETPATH: return NET_ERROR_NOT_FOUND;
+        case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_BAD_NETPATH: case ERROR_NONE_MAPPED: return NET_ERROR_NOT_FOUND;
         case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION: case ERROR_PRIVILEGE_NOT_HELD: return NET_ERROR_PERMISSION;
         case ERROR_ALREADY_EXISTS: case ERROR_FILE_EXISTS: return NET_ERROR_EXISTS;
         case ERROR_INVALID_PARAMETER: case ERROR_INVALID_NAME: case ERROR_BAD_PATHNAME: case ERROR_FILENAME_EXCED_RANGE: return NET_ERROR_INVALID;
@@ -162,20 +162,63 @@ static PSID current_user(void) {
     return sid;
 }
 
-// Who may open the pipe: this user alone (a DACL of one ACE, its SID's), or,
+// The group of the name, as a SID in memory the caller frees; NULL, failing
+// (ERROR_NONE_MAPPED for a name that is no one's).
+static PSID group_sid(const char *name) {
+    wchar_t *wide = to_wide(name);
+    DWORD size = 0, domain_size = 0;
+    SID_NAME_USE use;
+    LookupAccountNameW(NULL, wide, NULL, &size, NULL, &domain_size, &use);
+    DWORD code = GetLastError();
+    if (size == 0) {
+        free(wide);
+        ipc_fail_with(code == ERROR_SUCCESS || code == ERROR_INSUFFICIENT_BUFFER ? ERROR_NONE_MAPPED : code);
+        return NULL;
+    }
+
+    PSID sid = malloc(size);
+    wchar_t *domain = malloc((size_t)(domain_size + 1) * sizeof *domain);
+    if (sid == NULL || domain == NULL) {
+        sable_trap("out of memory");
+    }
+
+    if (!LookupAccountNameW(NULL, wide, sid, &size, domain, &domain_size, &use)) {
+        ipc_fail();
+        free(sid);
+        sid = NULL;
+    }
+
+    free(domain);
+    free(wide);
+    return sid;
+}
+
+// Who may open the pipe: this user alone (a DACL of one ACE, its SID's),
+// this user and a group's members (another ACE, to read and write), or,
 // NULL, as the system's default has it. The descriptor and its ACL are one
 // block, which the caller frees.
-static PSECURITY_DESCRIPTOR local_security(int flags) {
-    if ((flags & LOCAL_CURRENT_USER) == 0) {
+static PSECURITY_DESCRIPTOR local_security(int flags, const char *group) {
+    if ((flags & (LOCAL_CURRENT_USER | LOCAL_GROUP)) == 0) {
         return NULL;
     }
 
     PSID sid = current_user();
     if (sid == NULL) {
+        ipc_fail();
         return NULL;
     }
 
-    DWORD acl_size = (DWORD)(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(sid));
+    PSID members = NULL;
+    if (flags & LOCAL_GROUP) {
+        members = group_sid(group);
+        if (members == NULL) {
+            free(sid);
+            return NULL;
+        }
+    }
+
+    DWORD ace = (DWORD)(sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD));
+    DWORD acl_size = (DWORD)sizeof(ACL) + ace + GetLengthSid(sid) + (members == NULL ? 0 : ace + GetLengthSid(members));
     size_t at = (SECURITY_DESCRIPTOR_MIN_LENGTH + 7) & ~(size_t)7;
     char *block = malloc(at + acl_size);
     if (block == NULL) {
@@ -185,8 +228,15 @@ static PSECURITY_DESCRIPTOR local_security(int flags) {
     PSECURITY_DESCRIPTOR descriptor = block;
     PACL acl = (PACL)(block + at);
     bool made = InitializeSecurityDescriptor(descriptor, SECURITY_DESCRIPTOR_REVISION) && InitializeAcl(acl, acl_size, ACL_REVISION)
-                && AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, sid) && SetSecurityDescriptorDacl(descriptor, TRUE, acl, FALSE);
+                && AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, sid)
+                && (members == NULL || AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_READ | GENERIC_WRITE, members))
+                && SetSecurityDescriptorDacl(descriptor, TRUE, acl, FALSE);
+    if (!made) {
+        ipc_fail();
+    }
+
     free(sid);
+    free(members);
     if (!made) {
         free(block);
         return NULL;
@@ -195,12 +245,20 @@ static PSECURITY_DESCRIPTOR local_security(int flags) {
     return descriptor;
 }
 
-static PlatformPipe local_listen(const char *name, int flags, bool first) {
+// Opening a socket's file to a group is POSIX's: here a pipe's DACL is.
+static bool local_share(const char *path, const char *group) {
+    (void)path;
+    (void)group;
+    socket_fail_as(NET_ERROR_UNSUPPORTED);
+    return false;
+}
+
+static PlatformPipe local_listen(const char *name, int flags, const char *group, bool first) {
     wchar_t *path = ipc_wide_name(L"\\\\.\\pipe\\", name);
-    PSECURITY_DESCRIPTOR descriptor = local_security(flags);
-    if ((flags & LOCAL_CURRENT_USER) && descriptor == NULL) {
+    PSECURITY_DESCRIPTOR descriptor = local_security(flags, group);
+    if ((flags & (LOCAL_CURRENT_USER | LOCAL_GROUP)) && descriptor == NULL) {
         free(path);
-        return ipc_fail();
+        return IO_FAILED;
     }
 
     SECURITY_ATTRIBUTES security = { sizeof security, descriptor, FALSE };
@@ -474,6 +532,9 @@ static bool serial_configure(PlatformPipe port, const SerialSettings *settings) 
         return false;
     }
 
+    // Both set by the DCB (RTS by the driver, under RTS/CTS, as it may be
+    // sent to).
+    ((WinPipe *)port)->lines = SERIAL_DTR | SERIAL_RTS;
     return true;
 }
 
@@ -516,7 +577,36 @@ static HANDLE serial_handle(PlatformPipe port) {
     return handle;
 }
 
-// DTR and RTS are what this program sets, and Windows does not say them.
+// IOCTL_SERIAL_GET_DTRRTS of ntddser.h, which the lean windows.h leaves
+// out: CTL_CODE(FILE_DEVICE_SERIAL_PORT, 30, METHOD_BUFFERED,
+// FILE_ANY_ACCESS). What it gives: SERIAL_DTR_STATE 1, SERIAL_RTS_STATE 2.
+#define SERIAL_GET_DTRRTS 0x001B0078u
+
+// DTR and RTS as the driver has them (this end's: GetCommModemStatus says
+// the other's lines alone), or -1 where it will not say.
+static int serial_own_lines(HANDLE handle) {
+    OVERLAPPED operation;
+    memset(&operation, 0, sizeof operation);
+    operation.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (operation.hEvent == NULL) {
+        return -1;
+    }
+
+    ULONG state = 0;
+    DWORD got = 0;
+    BOOL done = DeviceIoControl(handle, SERIAL_GET_DTRRTS, NULL, 0, &state, (DWORD)sizeof state, &got, &operation);
+    if (!done && GetLastError() == ERROR_IO_PENDING) {
+        done = GetOverlappedResult(handle, &operation, &got, TRUE);
+    }
+
+    CloseHandle(operation.hEvent);
+    if (!done || got < sizeof state) {
+        return -1;
+    }
+
+    return (state & 1 ? SERIAL_DTR : 0) | (state & 2 ? SERIAL_RTS : 0);
+}
+
 static int serial_lines(PlatformPipe port) {
     HANDLE handle = serial_handle(port);
     DWORD status = 0;
@@ -525,7 +615,13 @@ static int serial_lines(PlatformPipe port) {
         return -1;
     }
 
-    return (status & MS_CTS_ON ? SERIAL_CTS : 0) | (status & MS_DSR_ON ? SERIAL_DSR : 0) | (status & MS_RING_ON ? SERIAL_RING : 0)
+    // A driver that does not say them: as this program last set them.
+    int own = serial_own_lines(handle);
+    if (own < 0) {
+        own = ((WinPipe *)port)->lines;
+    }
+
+    return own | (status & MS_CTS_ON ? SERIAL_CTS : 0) | (status & MS_DSR_ON ? SERIAL_DSR : 0) | (status & MS_RING_ON ? SERIAL_RING : 0)
            | (status & MS_RLSD_ON ? SERIAL_CARRIER : 0);
 }
 
@@ -537,6 +633,8 @@ static bool serial_set_line(PlatformPipe port, int line, bool on) {
         return false;
     }
 
+    WinPipe *pipe = (WinPipe *)port;
+    pipe->lines = on ? pipe->lines | line : pipe->lines & ~line;
     return true;
 }
 

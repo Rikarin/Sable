@@ -1,0 +1,51 @@
+module Sable.Net
+
+import Sable.IO
+
+/// What a watch of the network's changes goes by (`NetworkChange.events`):
+/// what says the interfaces may have changed, and what lists them. The
+/// system's is `NetworkChange.events()`'s; a program's own stands in for it
+/// (`NetworkChange.events(from:)`), as a test's does to see what a change
+/// of the interfaces is given as, with no interface changed.
+///
+/// ```sable
+/// fn firstChange(of source: any NetworkChangeSource) async -> NetworkChangeEvent? {
+///     var changes = NetworkChange.events(from: source).makeAsyncIterator()
+///     return await changes.next()
+/// }
+/// ```
+public protocol NetworkChangeSource: Sendable {
+    /// The interfaces as they are.
+    fn interfaces() throws(IoError) -> NetworkInterface[>..]
+
+    /// Waits until the interfaces may have changed since it last returned,
+    /// or since the source was made; or until the task is cancelled. What
+    /// changed after it returns is said by the next call.
+    fn changed() async
+}
+
+// The system's: a routing socket on macOS, netlink on Linux, the
+// notifications of Windows.
+@immutable
+final class SystemNetworkChanges: NetworkChangeSource {
+    let watch: Int
+
+    init(watch: Int) {
+        self.watch = watch
+    }
+
+    deinit {
+        closeChanges(watch)
+    }
+
+    fn interfaces() throws(IoError) -> NetworkInterface[>..] {
+        return try NetworkInterface.all()
+    }
+
+    fn changed() async {
+        await Runtime.waitForSocket(changesEvent(watch), writable: false)
+        // What the system said is taken before the interfaces are listed
+        // again: a change after it is said again.
+        drainChanges(watch)
+    }
+}

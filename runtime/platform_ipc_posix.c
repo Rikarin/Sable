@@ -4,6 +4,7 @@
 // raw sockets, changes and statistics". Part of platform_posix.c, after
 // platform_process_posix.c, whose pipes these are.
 
+#include <grp.h>
 #include <semaphore.h>
 #include <sys/file.h>
 #include <termios.h>
@@ -127,10 +128,29 @@ static char *local_directory(bool any) {
     return strdup(path);
 }
 
+static bool local_share(const char *path, const char *group) {
+    struct group entry, *found = NULL;
+    char room[4096];
+    int code = getgrnam_r(group, &entry, room, sizeof room, &found);
+    if (code != 0 || found == NULL) {
+        ipc_fail_with(code != 0 && code != ENOENT && code != ESRCH ? code : ENXIO);
+        return false;
+    }
+
+    // Another's group, of which this user is no member: EPERM.
+    if (chown(path, (uid_t)-1, found->gr_gid) != 0 || chmod(path, 0660) != 0) {
+        ipc_fail();
+        return false;
+    }
+
+    return true;
+}
+
 // Local streams are Unix domain sockets here (Sable.Net's): no named pipes.
-static PlatformPipe local_listen(const char *name, int flags, bool first) {
+static PlatformPipe local_listen(const char *name, int flags, const char *group, bool first) {
     (void)name;
     (void)flags;
+    (void)group;
     (void)first;
     return socket_fail_as(NET_ERROR_UNSUPPORTED);
 }
@@ -316,6 +336,43 @@ static speed_t serial_speed(int64_t baud) {
 
     return 0;
 }
+
+// Any rate, by the kernel's termios2 and BOTHER (asm/termbits.h, which
+// cannot be included with termios.h): its layout, and so TCGETS2's and
+// TCSETS2's numbers, are asm-generic's on these machines alone.
+#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__) || defined(__arm__) || defined(__riscv) || defined(__loongarch__)
+#define SERIAL_TERMIOS2 1
+typedef struct SerialTermios2 {
+    unsigned int c_iflag, c_oflag, c_cflag, c_lflag;
+    unsigned char c_line;
+    unsigned char c_cc[19];
+    unsigned int c_ispeed, c_ospeed;
+} SerialTermios2;
+
+enum { SERIAL_CBAUD = 0010017, SERIAL_BOTHER = 0010000, SERIAL_CIBAUD = 002003600000 };
+
+static bool serial_set_rate(int fd, uint32_t baud) {
+    SerialTermios2 mode;
+    if (ioctl(fd, _IOR('T', 0x2A, SerialTermios2), &mode) != 0) {
+        return false;
+    }
+
+    // The input's rate is the output's: CIBAUD clear.
+    mode.c_cflag &= ~(unsigned int)(SERIAL_CBAUD | SERIAL_CIBAUD);
+    mode.c_cflag |= SERIAL_BOTHER;
+    mode.c_ispeed = baud;
+    mode.c_ospeed = baud;
+    return ioctl(fd, _IOW('T', 0x2B, SerialTermios2), &mode) == 0;
+}
+#else
+#define SERIAL_TERMIOS2 0
+static bool serial_set_rate(int fd, uint32_t baud) {
+    (void)fd;
+    (void)baud;
+    errno = EINVAL;
+    return false;
+}
+#endif
 #endif
 
 static bool serial_configure(PlatformPipe port, const SerialSettings *settings) {
@@ -369,15 +426,16 @@ static bool serial_configure(PlatformPipe port, const SerialSettings *settings) 
     mode.c_cc[VMIN] = 1;
     mode.c_cc[VTIME] = 0;
 #if defined(__linux__)
+    // A rate termios has no name for is set by termios2, after the rest.
     speed_t speed = serial_speed(settings->baud);
-    if (speed == 0) {
+    if (speed == 0 && (settings->baud <= 0 || settings->baud > UINT32_MAX || !SERIAL_TERMIOS2)) {
         ipc_fail_with(EINVAL);
         return false;
     }
 
-    cfsetispeed(&mode, speed);
-    cfsetospeed(&mode, speed);
-    if (tcsetattr(fd, TCSANOW, &mode) != 0) {
+    cfsetispeed(&mode, speed == 0 ? B38400 : speed);
+    cfsetospeed(&mode, speed == 0 ? B38400 : speed);
+    if (tcsetattr(fd, TCSANOW, &mode) != 0 || (speed == 0 && !serial_set_rate(fd, (uint32_t)settings->baud))) {
         ipc_fail();
         return false;
     }
@@ -675,24 +733,96 @@ static bool proc_address(const char *text, bool six, PlatformAddress *address) {
     return true;
 }
 
+// A row's socket, by the inode /proc/net gives it, to be found among the
+// processes' descriptors.
+typedef struct ConnectionInode {
+    unsigned long inode;
+    int row;
+} ConnectionInode;
+
+static int connection_inode_order(const void *a, const void *b) {
+    unsigned long x = ((const ConnectionInode *)a)->inode, y = ((const ConnectionInode *)b)->inode;
+    return x < y ? -1 : x > y;
+}
+
+// Each row's process: one with a descriptor of its socket, found by
+// /proc/<pid>/fd's links ("socket:[inode]"). Only the processes this one
+// may look into are seen (its user's, or every one to root): the rest's
+// rows stay -1.
+static void connections_owners(PlatformConnection *rows, ConnectionInode *inodes, int count) {
+    qsort(inodes, (size_t)count, sizeof *inodes, connection_inode_order);
+    DIR *processes = opendir("/proc");
+    if (processes == NULL) {
+        return;
+    }
+
+    struct dirent *process;
+    while ((process = readdir(processes)) != NULL) {
+        char *end = NULL;
+        long pid = strtol(process->d_name, &end, 10);
+        if (pid <= 0 || *end != '\0') {
+            continue;
+        }
+
+        char path[64];
+        snprintf(path, sizeof path, "/proc/%ld/fd", pid);
+        DIR *fds = opendir(path);
+        if (fds == NULL) {
+            continue;
+        }
+
+        struct dirent *fd;
+        while ((fd = readdir(fds)) != NULL) {
+            if (fd->d_name[0] == '.') {
+                continue;
+            }
+
+            char link[96], target[64];
+            snprintf(link, sizeof link, "/proc/%ld/fd/%s", pid, fd->d_name);
+            ssize_t length = readlink(link, target, sizeof target - 1);
+            if (length <= 8 || strncmp(target, "socket:[", 8) != 0) {
+                continue;
+            }
+
+            target[length] = '\0';
+            ConnectionInode key = { strtoul(target + 8, NULL, 10), 0 };
+            ConnectionInode *found = bsearch(&key, inodes, (size_t)count, sizeof *inodes, connection_inode_order);
+            // The first process found with it is said: a socket a child
+            // inherited is as much its parent's.
+            if (found != NULL && rows[found->row].process < 0) {
+                rows[found->row].process = pid;
+            }
+        }
+
+        closedir(fds);
+    }
+
+    closedir(processes);
+}
+
 static int connections_list(int protocol, PlatformConnection **rows) {
     static const int states[] = { 0, 5, 3, 4, 6, 7, 11, 1, 8, 10, 2, 9 };
     *rows = NULL;
-    int count = 0, capacity = 0;
+    int count = 0, capacity = 0, known = 0;
+    ConnectionInode *inodes = NULL;
     for (int six = 0; six < 2; six++) {
         char path[32];
         snprintf(path, sizeof path, "/proc/net/%s%s", protocol == 6 ? "tcp" : "udp", six ? "6" : "");
-        FILE *file = fopen(path, "r");
+        FILE *file = fopen(path, "rb");
         if (file == NULL) {
             continue;
         }
 
+        // sl, local, remote, state, queues, timer, retransmits, uid,
+        // timeout, inode.
         char line[512];
         bool first = true;
         while (fgets(line, sizeof line, file) != NULL) {
             char local[64], remote[64];
             unsigned int state = 0;
-            if (first || sscanf(line, " %*d: %63s %63s %x", local, remote, &state) != 3) {
+            unsigned long inode = 0;
+            int parts = first ? 0 : sscanf(line, " %*d: %63s %63s %x %*s %*s %*s %*u %*d %lu", local, remote, &state, &inode);
+            if (parts < 3) {
                 first = false;
                 continue;
             }
@@ -703,12 +833,35 @@ static int connections_list(int protocol, PlatformConnection **rows) {
             row->state = protocol == 6 && state < sizeof states / sizeof *states ? states[state] : 0;
             if (!proc_address(local, six, &row->local) || !proc_address(remote, six, &row->remote)) {
                 count--;
+                continue;
+            }
+
+            // A connection in TIME_WAIT has none: no process has it.
+            if (parts == 4 && inode != 0) {
+                if (known % 64 == 0) {
+                    ConnectionInode *grown = realloc(inodes, (size_t)(known + 64) * sizeof *inodes);
+                    if (grown == NULL) {
+                        sable_trap("out of memory");
+                    }
+
+                    inodes = grown;
+                }
+
+                inodes[known].inode = inode;
+                inodes[known].row = at;
+                known++;
             }
         }
 
         fclose(file);
     }
 
+    // NetworkStatistics says the process of TCP's alone.
+    if (known > 0 && protocol == 6) {
+        connections_owners(*rows, inodes, known);
+    }
+
+    free(inodes);
     return count;
 }
 
@@ -780,6 +933,86 @@ static void pcb_address(const unsigned char *at, bool six, int port, PlatformAdd
     }
 }
 
+static bool connection_address_is(const PlatformAddress *a, const PlatformAddress *b) {
+    return a->family == b->family && a->high == b->high && a->low == b->low && a->port == b->port;
+}
+
+// The socket's addresses, if it is one of the protocol's.
+static bool connection_socket(int pid, int fd, int protocol, PlatformAddress *local, PlatformAddress *remote) {
+    struct socket_fdinfo info;
+    if (proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &info, (int)sizeof info) != (int)sizeof info
+        || (info.psi.soi_family != AF_INET && info.psi.soi_family != AF_INET6) || info.psi.soi_protocol != protocol
+        || (info.psi.soi_kind != SOCKINFO_IN && info.psi.soi_kind != SOCKINFO_TCP)) {
+        return false;
+    }
+
+    const struct in_sockinfo *in = info.psi.soi_kind == SOCKINFO_TCP ? &info.psi.soi_proto.pri_tcp.tcpsi_ini : &info.psi.soi_proto.pri_in;
+    bool six = (in->insi_vflag & INI_IPV6) != 0;
+    memset(local, 0, sizeof *local);
+    memset(remote, 0, sizeof *remote);
+    pcb_address((const unsigned char *)&in->insi_laddr, six, ntohs((uint16_t)in->insi_lport), local);
+    pcb_address((const unsigned char *)&in->insi_faddr, six, ntohs((uint16_t)in->insi_fport), remote);
+    return true;
+}
+
+// Each row's process: one with a socket of the row's addresses, as libproc
+// tells them (lsof's way). Only the processes this one may look into are
+// seen (its user's, or every one to root), this process first, which is
+// all there is to see where the list holds only its sockets.
+static void connections_owners(int protocol, PlatformConnection *rows, int count) {
+    int room = proc_listallpids(NULL, 0);
+    if (room <= 0) {
+        return;
+    }
+
+    room += 64;
+    pid_t *pids = malloc((size_t)room * sizeof *pids);
+    if (pids == NULL) {
+        sable_trap("out of memory");
+    }
+
+    int listed = proc_listallpids(pids, room * (int)sizeof *pids);
+    pid_t self = getpid();
+    int remaining = count;
+    for (int i = -1; i < listed && remaining > 0; i++) {
+        pid_t pid = i < 0 ? self : pids[i];
+        if (i >= 0 && pid == self) {
+            continue;
+        }
+
+        int size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+        if (size <= 0) {
+            continue;
+        }
+
+        size += 32 * (int)sizeof(struct proc_fdinfo);
+        struct proc_fdinfo *fds = malloc((size_t)size);
+        if (fds == NULL) {
+            sable_trap("out of memory");
+        }
+
+        size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, size);
+        for (int f = 0; f < size / (int)sizeof *fds && remaining > 0; f++) {
+            PlatformAddress local, remote;
+            if (fds[f].proc_fdtype != PROX_FDTYPE_SOCKET || !connection_socket(pid, fds[f].proc_fd, protocol, &local, &remote)) {
+                continue;
+            }
+
+            for (int r = 0; r < count; r++) {
+                if (rows[r].process < 0 && connection_address_is(&rows[r].local, &local) && connection_address_is(&rows[r].remote, &remote)) {
+                    rows[r].process = pid;
+                    remaining--;
+                    break;
+                }
+            }
+        }
+
+        free(fds);
+    }
+
+    free(pids);
+}
+
 static int connections_list(int protocol, PlatformConnection **rows) {
     static const int states[] = { 1, 2, 3, 4, 5, 8, 6, 9, 10, 7, 11 };
     *rows = NULL;
@@ -832,6 +1065,11 @@ static int connections_list(int protocol, PlatformConnection **rows) {
     }
 
     free(list);
+    // NetworkStatistics says the process of TCP's alone.
+    if (count > 0 && protocol == 6) {
+        connections_owners(protocol, *rows, count);
+    }
+
     return count;
 }
 

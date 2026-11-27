@@ -8,7 +8,8 @@ import Sable.Net
 /// Linux, a named pipe (`\\.\pipe\name`) on Windows. .NET's
 /// `NamedPipeServerStream`, Rust's `interprocess` local sockets.
 ///
-/// By default only this user's programs may connect (`LocalAccess`). The
+/// By default only this user's programs may connect; a group's members, or
+/// anyone's, may be let in too (`LocalAccess`). The
 /// name is up to 64 letters, digits, '.', '_' and '-'. Deeply immutable, so
 /// Sendable; one task at a time accepts.
 ///
@@ -64,12 +65,7 @@ public final class LocalListener: Sendable {
     public static fn bind(name: String, access: LocalAccess = .CurrentUserOnly, messages: Bool = false) throws(IoError) -> LocalListener {
         try checkName(name, most: 64)
         #if os(windows)
-        let flags = (access == .CurrentUserOnly ? 1 : 0) + (messages ? 2 : 0)
-        let handle = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
-            unsafe {
-                return localListen(at, count, flags, true)
-            }
-        }
+        let handle = LocalListener.instance(name, access, messages, first: true)
         if handle == 0 {
             throw IoError.lastSystemError(name)
         }
@@ -88,16 +84,48 @@ public final class LocalListener: Sendable {
             }
             listener = try UnixListener.bind(path, replacing: true)
         }
-        if access == .AnyUser {
-            try File.setPermissions(path, FilePermissions(mode: 0o666))
+        match access {
+            case .CurrentUserOnly => { }
+            case .Group(let group) => {
+                let shared = withBytes(path) { (at: RawPtr<U8>, count: Int) -> Bool in
+                    return withBytes(group) { (named: RawPtr<U8>, length: Int) -> Bool in
+                        unsafe {
+                            return localShare(at, count, named, length)
+                        }
+                    }
+                }
+                if !shared {
+                    let error = IoError.lastSystemError(group)
+                    listener!.close()
+                    try? File.remove(path)
+                    throw error
+                }
+            }
+            case .AnyUser => {
+                try File.setPermissions(path, FilePermissions(mode: 0o666))
+            }
         }
         return LocalListener(name: name, path: path, access: access, messages: false, unix: listener, instance: 0)
         #endif
     }
 
+    #if os(windows)
+    // An instance of the named pipe, to accept the next client by; 0 failing.
+    static fn instance(_ name: String, _ access: LocalAccess, _ messages: Bool, first: Bool) -> Int {
+        let flags = access.flags + (messages ? 2 : 0)
+        return withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
+            return withBytes(access.groupName ?? "") { (group: RawPtr<U8>, length: Int) -> Int in
+                unsafe {
+                    return localListen(at, count, flags, group, length, first)
+                }
+            }
+        }
+    }
+    #endif
+
     // Where a name's socket is.
     static fn socketPath(_ name: String, _ access: LocalAccess) throws(IoError) -> String {
-        return "\(try localDirectory(anyUser: access == .AnyUser))/\(name).socket"
+        return "\(try localDirectory(anyUser: access.isShared))/\(name).socket"
     }
 
     // Whether the socket at the path is one no server listens by any more.
@@ -123,12 +151,7 @@ public final class LocalListener: Sendable {
             let result = localAccept(handle)
             if result == 0 {
                 // The next client connects to another instance, made first.
-                let flags = (access == .CurrentUserOnly ? 1 : 0) + (messages ? 2 : 0)
-                let next = withBytes(name) { (at: RawPtr<U8>, count: Int) -> Int in
-                    unsafe {
-                        return localListen(at, count, flags, false)
-                    }
-                }
+                let next = LocalListener.instance(name, access, messages, first: false)
                 if next == 0 {
                     throw IoError.lastSystemError(name)
                 }
@@ -153,7 +176,8 @@ public final class LocalListener: Sendable {
         #else
         while true {
             let connection = try await unix!.accept()
-            if access == .AnyUser {
+            // The group's members are let in by the socket's file.
+            if access != .CurrentUserOnly {
                 return LocalStream(unix: connection, reader: 0, writer: 0, server: true)
             }
             let peer = try connection.peerCredentials()

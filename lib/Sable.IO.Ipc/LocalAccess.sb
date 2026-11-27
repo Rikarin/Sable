@@ -1,14 +1,56 @@
 module Sable.IO.Ipc
 
 /// Who may connect to a local stream (`LocalListener`): .NET's
-/// `PipeOptions.CurrentUserOnly`, or not.
-public enum LocalAccess {
+/// `PipeSecurity` and `PipeOptions.CurrentUserOnly`, as each system has
+/// them — a Unix socket's file mode, group and directory; a named pipe's
+/// DACL.
+///
+/// ```sable
+/// let access = LocalAccess.Group(name: "staff")
+/// assert(access.groupName == "staff" && LocalAccess.CurrentUserOnly.groupName == none)
+/// ```
+@derive(Equatable, Debug)
+public union LocalAccess {
     /// This user's programs alone: the socket is in a directory no one else
     /// may enter ($XDG_RUNTIME_DIR, or /tmp/sable-<uid>), and the named
     /// pipe's DACL is this user's. A client asking so connects only to a
     /// server of its own user.
     CurrentUserOnly
+    /// This user's programs and those of the group's members: the socket is
+    /// in /tmp, its file the group's and of mode 0660 (this user must be a
+    /// member, or it is PermissionDenied); the named pipe's DACL is this
+    /// user's and the group's, by its name or `DOMAIN\name`. NotFound for a
+    /// group there is none of. A client asking so connects to a server of
+    /// any user.
+    Group(name: String)
     /// Any user's: the socket is in /tmp, writable by all; the named pipe
     /// has the system's default DACL.
     AnyUser
+
+    /// The group's name, of Group.
+    public var groupName: String? {
+        get {
+            return match self {
+                case .Group(let name) => name
+                case _                => none
+            }
+        }
+    }
+
+    // In /tmp, where any user's sockets are.
+    var isShared: Bool => self != .CurrentUserOnly
+
+    #if os(windows)
+    // As the runtime takes it, for a named pipe: 1 this user alone, 4 the
+    // group's too.
+    var flags: Int {
+        get {
+            return match self {
+                case .CurrentUserOnly => 1
+                case .Group(_)        => 4
+                case .AnyUser         => 0
+            }
+        }
+    }
+    #endif
 }

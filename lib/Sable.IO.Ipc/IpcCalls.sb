@@ -74,7 +74,10 @@ fn pause(_ times: Int) async throws(IoError) {
 unsafe fn ipcDirectory(_ anyUser: Bool, _ into: RawPtr<U8>, _ room: Int) -> Int
 
 @extern("c", "sable_ipc_local_listen")
-unsafe fn localListen(_ name: RawPtr<U8>, _ length: Int, _ flags: Int, _ first: Bool) -> Int
+unsafe fn localListen(_ name: RawPtr<U8>, _ length: Int, _ flags: Int, _ group: RawPtr<U8>, _ groupLength: Int, _ first: Bool) -> Int
+
+@extern("c", "sable_ipc_local_share")
+unsafe fn localShare(_ path: RawPtr<U8>, _ length: Int, _ group: RawPtr<U8>, _ groupLength: Int) -> Bool
 
 @extern("c", "sable_ipc_local_accept")
 fn localAccept(_ handle: Int) -> Int

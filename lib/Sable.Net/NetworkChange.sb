@@ -25,7 +25,14 @@ public struct NetworkChange {
         if watch == 0 {
             throw socketError("the network's changes")
         }
-        return NetworkChangeSequence(watch: watch, first: (try? NetworkInterface.all()) ?? [])
+        return NetworkChange.events(from: SystemNetworkChanges(watch: watch))
+    }
+
+    /// The changes as the source says them (`NetworkChangeSource`): from
+    /// the interfaces it lists now, each time it says they may have
+    /// changed. A program's own source stands in for the system's.
+    public static fn events(from source: any NetworkChangeSource) -> NetworkChangeSequence {
+        return NetworkChangeSequence(source: source, first: (try? source.interfaces()) ?? [])
     }
 
     /// What changed from the interfaces as they were to as they are, each

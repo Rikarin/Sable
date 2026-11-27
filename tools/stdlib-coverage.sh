@@ -75,6 +75,10 @@ for module in "${modules[@]}"; do
         continue
     fi
 
+    # What was skipped, and why, is said: a test that skips on a runner
+    # (no other user, no ICMP) shows it did not run.
+    grep -E '^test .* \.\.\. skipped' "$log" || true
+
     if [[ ! -f "$lcov" ]]; then
         cat "$log"
         echo "stdlib-coverage: $module: no coverage was written" >&2

@@ -1631,8 +1631,9 @@ public sealed partial class LlvmEmitter {
         // One whose initialiser threw was never made (SABLE_UNMADE, 1024, in
         // its header's flag word, at 12): no deinit sees it.
         var deinits = false;
+        // A deinit nothing reached is of a class the program never makes.
         for (var level = type; level is not null; level = level.Superclass) {
-            if (level.Deinit is not { } deinit) {
+            if (level.Deinit is not { } deinit || _reachable?.Contains(deinit) == false) {
                 continue;
             }
 

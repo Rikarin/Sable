@@ -2142,7 +2142,19 @@ public sealed class SilModule {
             }
         }
 
-        return Functions.RemoveAll(match);
+        var removed = Functions.RemoveAll(match);
+
+        // A class whose deinit went is one nothing makes (SilPassManager.Reachable):
+        // there is no object of it to run one on.
+        if (removed > 0 && Unit is null) {
+            foreach (var type in Types.OfType<ClassType>()) {
+                if (type.Deinit is { } deinit && !_byName.ContainsKey(deinit)) {
+                    type.Deinit = null;
+                }
+            }
+        }
+
+        return removed;
     }
 
     public SilFunction Add(SilFunction function) {

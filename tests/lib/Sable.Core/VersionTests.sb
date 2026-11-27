@@ -1,0 +1,152 @@
+module VersionTests
+
+// Version (Sable.Core): SemVer 2.0.0's versions, with the examples of
+// semver.org's specification and the valid and invalid strings its FAQ's
+// regular expression is shown with. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn version(_ text: String) -> Version {
+    return try! Version.parse(text)
+}
+
+// The specification's examples (items 9, 10 and 11) and the FAQ's valid strings.
+@test(arguments: ["0.0.4", "1.2.3", "10.20.30", "1.1.2-prerelease+meta", "1.1.2+meta", "1.1.2+meta-valid", "1.0.0-alpha", "1.0.0-beta", "1.0.0-alpha.beta",
+    "1.0.0-alpha.beta.1", "1.0.0-alpha.1", "1.0.0-alpha0.valid", "1.0.0-alpha.0valid", "1.0.0-alpha-a.b-c-somethinglong+build.1-aef.1-its-okay", "1.0.0-rc.1+build.1",
+    "2.0.0-rc.1+build.123", "1.2.3-beta", "10.2.3-DEV-SNAPSHOT", "1.2.3-SNAPSHOT-123", "1.0.0", "2.0.0", "1.1.7", "2.0.0+build.1848", "2.0.1-alpha.1227", "1.0.0-alpha+beta",
+    "1.2.3----RC-SNAPSHOT.12.9.1--.12+788", "1.2.3----R-S.12.9.1--.12+meta", "1.2.3----RC-SNAPSHOT.12.9.1--.12", "1.0.0+0.build.1-rc.10000aaa-kk-0.1", "1.0.0-0A.is.legal",
+    "1.0.0-0.3.7", "1.0.0-x.7.z.92", "1.0.0-x-y-z.--", "1.0.0-alpha+001", "1.0.0+20130313144700", "1.0.0-beta+exp.sha.5114f85", "1.0.0+21AF26D3----117B344092BD",
+    "9223372036854775807.9223372036854775807.9223372036854775807"])
+fn aValidVersionIsWrittenAsItWasRead(_ text: String) {
+    expect(version(text).toString() == text)
+    expect("\(version(text))" == text)
+    expect(version(text).debugDescription() == text)
+}
+
+// The FAQ's invalid strings.
+@test(arguments: ["", "1", "1.2", "1.2.3-0123", "1.2.3-0123.0123", "1.1.2+.123", "+invalid", "-invalid", "-invalid+invalid", "-invalid.01", "alpha", "alpha.beta",
+    "alpha.beta.1", "alpha.1", "alpha+beta", "alpha_beta", "alpha.", "alpha..", "beta", "1.0.0-alpha_beta", "-alpha.", "1.0.0-alpha..", "1.0.0-alpha..1", "1.0.0-alpha...1",
+    "1.0.0-alpha....1", "01.1.1", "1.01.1", "1.1.01", "1.2.3.DEV", "1.2-SNAPSHOT", "1.2.31.2.3----RC-SNAPSHOT.12.09.1--..12+788", "1.2-RC-SNAPSHOT", "-1.0.3-gamma+b7718",
+    "+justmeta", "9.8.7+meta+meta", "9.8.7-whatever+meta+meta", "99999999999999999999999.999999999999999999.99999999999999999----RC-SNAPSHOT.12.09.1--------------------------------..12",
+    "1.2.3-", "1.2.3+", "1.2.3 ", " 1.2.3", "1.2.3.4", "1.2.x", "1..3", "1.2.", "v1.2.3", "1.2.3-é"])
+fn anInvalidVersionIsRefused(_ text: String) {
+    expectThrows { _ = try Version.parse(text) }
+}
+
+@test
+fn aRefusalSaysWhere() {
+    expectThrows(ParseError.Empty) { _ = try Version.parse("") }
+    expectThrows(ParseError.InvalidDigit(at: 3)) { _ = try Version.parse("1.2") }
+    expectThrows(ParseError.InvalidDigit(at: 2)) { _ = try Version.parse("1.a.3") }
+    expectThrows(ParseError.Invalid(at: 0)) { _ = try Version.parse("01.2.3") }
+    expectThrows(ParseError.Invalid(at: 6)) { _ = try Version.parse("1.2.3-01") }
+    expectThrows(ParseError.Invalid(at: 7)) { _ = try Version.parse("1.2.3-a_b") }
+    expectThrows(ParseError.Invalid(at: 6)) { _ = try Version.parse("1.2.3+") }
+    expectThrows(ParseError.Overflow) { _ = try Version.parse("9223372036854775808.0.0") }
+}
+
+// Item 11's example of precedence, the numbers before it.
+@test
+fn versionsOrderAsTheSpecificationSays() {
+    let ordered = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "2.0.0", "2.1.0", "2.1.1"]
+    for i in 0..<ordered.count {
+        for j in 0..<ordered.count {
+            expect(version(ordered[i]).compare(version(ordered[j])) == i.compare(j), "\(ordered[i]) against \(ordered[j])")
+            expect((version(ordered[i]) < version(ordered[j])) == (i < j))
+        }
+    }
+}
+
+@test(arguments: [
+    ("1.0.0-0", "1.0.0-alpha"),
+    ("1.0.0-9", "1.0.0-10"),
+    ("1.0.0-99999999999999999999", "1.0.0-100000000000000000000"),
+    ("1.0.0-99999999999999999999", "1.0.0-a"),
+    ("1.0.0-Beta", "1.0.0-alpha"),
+    ("1.0.0-a.b", "1.0.0-a-b"),
+    ("0.9.9", "1.0.0-0"),
+    ("1.9.0", "1.10.0"),
+    ("1.0.9", "1.0.10"),
+])
+fn preReleaseIdentifiersCompareAsNumbersThenInAsciiOrder(_ low: String, _ high: String) {
+    expect(version(low) < version(high))
+    expect(version(high) > version(low))
+}
+
+@test
+fn buildMetadataIsKeptButNotCompared() {
+    let a = version("1.0.0-rc.1+build.1")
+    let b = version("1.0.0-rc.1+build.2")
+    expect(a == b)
+    expect(a.hashValue == b.hashValue)
+    expect(a.build == ["build", "1"])
+    var seen: [Version: Int] = [:]
+    seen[a] = 1
+    seen[b] = 2
+    expect(seen.count == 1)
+    expect(version("1.0.0+exp") != version("1.0.0-exp"))
+}
+
+@test
+fn aVersionHasItsNeighbours() {
+    let v = version("1.4.2-beta.3+build.7")
+    expect(v.isPreRelease)
+    expect(!v.release.isPreRelease && v.release.build.isEmpty)
+    expect(v.release.toString() == "1.4.2")
+    expect(v.firstPreRelease.toString() == "1.4.2-0")
+    expect(v.firstPreRelease < v)
+    expect(v.nextMajor == Version(2, 0, 0))
+    expect(v.nextMinor == Version(1, 5, 0))
+    expect(v.nextPatch == Version(1, 4, 3))
+    expect("[\(Version(1, 2, 3):>7)]" == "[  1.2.3]")
+}
+
+@test
+fn aVersionIsParsedFromAPieceOfText() {
+    let line = "version = 1.2.3-rc.1"
+    expect(try! Version.parse(line[line.index(atScalar: 10)...]) == Version(1, 2, 3, preRelease: ["rc", "1"]))
+}
+
+let identifiers: Gen<String> = Gen.element(of: ["alpha", "beta", "rc", "0", "1", "2", "11", "x-y", "--", "0A", "Z"])
+
+let versions: Gen<Version> = Gen.number(in: 0...3).array(count: 3...3).zip(identifiers.array(count: 0...3)).zip(identifiers.array(count: 0...2))
+    .map { (parts: ((Int[>..], String[>..]), String[>..])) in
+    let ((numbers, preRelease), build) = parts
+    return Version(numbers[0], numbers[1], numbers[2], preRelease: preRelease, build: build)
+}
+
+@test
+fn aVersionReadsBackAsItself() {
+    forAll(versions) { (v: Version) in
+        let back = try Version.parse(v.toString())
+        expect(back == v)
+        expect(back.build == v.build && back.preRelease == v.preRelease)
+    }
+}
+
+@test
+fn theOrderIsTotal() {
+    forAll(versions, versions) { (a: Version, b: Version) in
+        expect(a.compare(b) == b.compare(a).reversed)
+        expect((a == b) == (a.compare(b) == .Equal))
+        expect(a != b || a.hashValue == b.hashValue)
+        expect((a < b) || (b < a) || (a == b))
+    }
+}
+
+@test
+fn theOrderIsTransitive() {
+    forAll(versions, versions, versions) { (a: Version, b: Version, c: Version) in
+        expect(!(a <= b && b <= c) || a <= c)
+    }
+}
+
+@test
+fn aReleaseIsAboveItsPreReleases() {
+    forAll(versions) { (v: Version) in
+        expect(v.firstPreRelease <= v)
+        expect(v <= v.release)
+        expect(v.release < v.nextPatch && v.nextPatch < v.nextMinor && v.nextMinor < v.nextMajor)
+    }
+}

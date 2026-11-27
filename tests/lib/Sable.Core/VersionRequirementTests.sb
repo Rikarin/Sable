@@ -1,0 +1,176 @@
+module VersionRequirementTests
+
+// VersionRequirement (Sable.Core): the requirements the package manager
+// reads, held to the cases of tests/Sable.CodeGen.Tests/SemverTests.cs so
+// that the two agree. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn requirement(_ text: String) -> VersionRequirement {
+    return try! VersionRequirement.parse(text)
+}
+
+fn versions(_ text: String) -> Version[>..] {
+    var result: Version[>..] = []
+    for word in text.split(" ", omittingEmpty: true) {
+        result.append(try! Version.parse(word))
+    }
+    return result
+}
+
+@test(arguments: [
+    ("1.2.3", "1.2.3 1.9.0", "1.2.2 2.0.0 2.0.0-rc.1"),
+    ("^1.2", "1.2.0 1.99.0", "1.1.9 2.0.0"),
+    ("1", "1.0.0 1.5.0", "0.9.0 2.0.0"),
+    ("0.2.3", "0.2.3 0.2.9", "0.3.0 0.2.2"),
+    ("0.0.3", "0.0.3", "0.0.4 0.0.2"),
+    ("^0.0", "0.0.0 0.0.9", "0.1.0"),
+    ("^0.2", "0.2.0 0.2.9", "0.3.0 0.1.0"),
+    ("0", "0.0.0 0.9.0", "1.0.0"),
+    ("~1.2.3", "1.2.3 1.2.9", "1.3.0 1.2.2"),
+    ("~1.2", "1.2.0 1.2.9", "1.3.0"),
+    ("~1", "1.0.0 1.9.0", "2.0.0"),
+    ("=1.2.3", "1.2.3 1.2.3+build", "1.2.4"),
+    ("=1.2", "1.2.0 1.2.7", "1.3.0"),
+    ("=1", "1.0.0 1.9.9", "2.0.0"),
+    (">=1.2", "1.2.0 9.0.0", "1.1.9"),
+    (">1.2", "1.3.0", "1.2.9"),
+    (">1.2.3", "1.2.4", "1.2.3"),
+    ("<2", "1.9.9", "2.0.0 2.0.0-beta"),
+    ("<1.2.3", "1.2.2", "1.2.3"),
+    ("<=1.2", "1.2.9", "1.3.0"),
+    ("<=1.2.3", "1.2.3", "1.2.4"),
+    ("*", "0.0.1 9.9.9", ""),
+    ("x", "0.0.1", ""),
+    ("1.*", "1.0.0 1.9.0", "2.0.0"),
+    ("1.x.X", "1.0.0 1.9.0", "2.0.0 0.9.0"),
+    ("1.2.*", "1.2.0 1.2.9", "1.3.0"),
+    (">=1.2, <1.5", "1.2.0 1.4.9", "1.5.0 1.1.0"),
+    (" >= 1.2 ,< 1.5 ", "1.2.0", "1.5.0"),
+    (">2, <1", "", "0.5.0 1.5.0 2.5.0"),
+    ("^2.0.0-beta.1", "2.0.0-beta.1 2.0.0-beta.2 2.0.0 2.1.0", "2.0.0-alpha 3.0.0-rc.1"),
+    ("<2.0.0-beta", "2.0.0-alpha 1.0.0", "2.0.0-beta 2.0.0"),
+    ("^1.0", "1.0.0", "1.1.0-beta"),
+    ("1.0.0+b-2", "1.0.0 1.0.1", "1.0.0-b 2.0.0"),
+])
+fn aRequirementMatchesItsVersions(_ text: String, _ matching: String, _ notMatching: String) {
+    let req = requirement(text)
+    for version in versions(matching) {
+        expect(req.matches(version), "'\(text)' should match \(version)")
+    }
+    for version in versions(notMatching) {
+        expect(!req.matches(version), "'\(text)' should not match \(version)")
+    }
+}
+
+@test(arguments: ["", " ", "abc", ">=1.2.*", "1.*.3", "1.2,", ",1.2", "1.2,,1.3", "^1.2-beta", "1+27X-.a>8", "1.2.3.4", ">=", "^*", "1.", "1..2", "01.2", "1.2.3-01",
+    "1.2.3+", "1.2.3-", "=x", "1.2.3 1.2.4", "-1"])
+fn textThatIsNoRequirementIsRefused(_ text: String) {
+    expectThrows { _ = try VersionRequirement.parse(text) }
+}
+
+@test(arguments: ["^9223372036854775807", "~1.9223372036854775807.0", "0.0.9223372036854775807", "<=1.9223372036854775807", "9223372036854775807.*", "=1.9223372036854775807",
+    ">1.9223372036854775807"])
+fn aRangePastTheLargestNumberIsRefused(_ text: String) {
+    expectThrows(ParseError.Overflow) { _ = try VersionRequirement.parse(text) }
+}
+
+@test
+fn theLargestNumberIsFineWhereNoRangeEndsPastIt() {
+    expect(requirement(">=9223372036854775807.0.0").matches(try! Version.parse("9223372036854775807.0.0")))
+    expect(requirement("=1.2.9223372036854775807").matches(try! Version.parse("1.2.9223372036854775807")))
+    expect(requirement(">=9223372036854775807").matches(try! Version.parse("9223372036854775807.0.0")))
+}
+
+@test
+fn aRefusalSaysWhere() {
+    expectThrows(ParseError.Empty) { _ = try VersionRequirement.parse("  ") }
+    expectThrows(ParseError.Invalid(at: 4)) { _ = try VersionRequirement.parse("1.2,") }
+    expectThrows(ParseError.InvalidDigit(at: 1)) { _ = try VersionRequirement.parse("^a") }
+    expectThrows(ParseError.Invalid(at: 2)) { _ = try VersionRequirement.parse(">=") }
+}
+
+@test
+fn aPreReleaseMatchesOnlyWhenOneIsNamed() {
+    expect(!requirement("^1.0").mentionsPreRelease)
+    expect(requirement(">=1.0.0-rc.1").mentionsPreRelease)
+    expect(!requirement("1.0.0+b-2").mentionsPreRelease)
+    expect(requirement(">=1.0.0-0, <2").matches(try! Version.parse("1.5.0-alpha")))
+}
+
+@test
+fn theBestIsTheHighestMatch() {
+    let available = versions("1.0.0 1.2.0 1.4.2 1.5.0-rc.1 2.0.0")
+    expect(requirement("^1").best(of: available) == Version(1, 4, 2))
+    expect(requirement("^1.5.0-rc.1").best(of: available) == (try! Version.parse("1.5.0-rc.1")))
+    expect(requirement("<1.1").best(of: available) == Version(1, 0, 0))
+    expect(requirement("^3").best(of: available) == none)
+    expect(VersionRequirement.anyVersion.best(of: available) == Version(2, 0, 0))
+}
+
+@test
+fn requirementsIntersect() {
+    let both = requirement(">=1.2").intersection(requirement("<1.5")).intersection(requirement(">1.2.0"))
+    expect(both.toString() == ">=1.2, <1.5, >1.2.0")
+    expect(!both.matches(Version(1, 2, 0)) && both.matches(Version(1, 2, 1)) && !both.matches(Version(1, 5, 0)))
+    let exact = requirement("<=1.4").intersection(requirement("<1.4.0")).intersection(VersionRequirement.exactly(Version(1, 3, 0)))
+    expect(exact.matches(Version(1, 3, 0)) && !exact.matches(Version(1, 3, 1)))
+    expect(requirement(">=1.2, <1.5").intersection(VersionRequirement.anyVersion).matches(Version(1, 3, 0)))
+    expect(VersionRequirement.anyVersion.intersection(requirement(">1.0.0, >=1.0.0")).matches(Version(1, 0, 1)))
+    expect(!requirement(">=1.0.0").intersection(requirement(">1.0.0")).matches(Version(1, 0, 0)))
+    expect(!requirement("<=1.0.0").intersection(requirement("<1.0.0")).matches(Version(1, 0, 0)))
+    expect(requirement(">2").intersection(requirement("<1")).isEmpty)
+    expect(requirement(">1.0.0, <1.0.0").isEmpty)
+    expect(!requirement("=1.0.0").isEmpty && !requirement("^1").isEmpty && !VersionRequirement.anyVersion.isEmpty)
+}
+
+@test
+fn aRequirementIsWrittenAsItWasRead() {
+    expect(requirement(" ^1.2 , <1.5 ").toString() == "^1.2 , <1.5")
+    expect("[\(requirement("~1"):>4)]" == "[  ~1]")
+    expect(requirement("=1.0").debugDescription() == "=1.0")
+    expect(VersionRequirement.exactly(try! Version.parse("1.0.0-rc.1")).mentionsPreRelease)
+    expect(VersionRequirement.anyVersion.toString() == "*")
+}
+
+let numbers: Gen<Int> = Gen.number(in: 0...4)
+
+let releases: Gen<Version> = numbers.array(count: 3...3).map { (n: Int[>..]) in Version(n[0], n[1], n[2]) }
+
+@test
+fn aCaretAllowsWhatDoesNotBreak() {
+    forAll(releases, releases) { (low: Version, v: Version) in
+        let breaks = low.major > 0 ? v.major != low.major : low.minor > 0 ? v.major != 0 || v.minor != low.minor : v != low
+        expect(requirement("^\(low)").matches(v) == (v >= low && !breaks))
+    }
+}
+
+@test
+fn aTildeAllowsPatches() {
+    forAll(releases, releases) { (low: Version, v: Version) in
+        expect(requirement("~\(low)").matches(v) == (v >= low && v.major == low.major && v.minor == low.minor))
+    }
+}
+
+@test
+fn comparisonsCompare() {
+    forAll(releases, releases) { (a: Version, v: Version) in
+        expect(requirement(">=\(a)").matches(v) == (v >= a))
+        expect(requirement(">\(a)").matches(v) == (v > a))
+        expect(requirement("<\(a)").matches(v) == (v < a))
+        expect(requirement("<=\(a)").matches(v) == (v <= a))
+        expect(requirement("=\(a)").matches(v) == (v == a))
+        expect(requirement(">=\(a), <=\(a)").matches(v) == (v == a))
+    }
+}
+
+@test
+fn anIntersectionMatchesWhatBothMatch() {
+    let texts: Gen<String> = Gen.element(of: ["^1", "~1.2", ">=1.3", "<2", ">0.4.1", "<=1.2.3", "=1.2", "1.*", "*", "^0.2", "~0"])
+    forAll(texts, texts, releases) { (a: String, b: String, v: Version) in
+        let both = requirement(a).intersection(requirement(b))
+        expect(both.matches(v) == (requirement(a).matches(v) && requirement(b).matches(v)))
+        expect(requirement(both.toString()).matches(v) == both.matches(v))
+    }
+}

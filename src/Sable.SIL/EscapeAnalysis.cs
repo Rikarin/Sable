@@ -15,10 +15,11 @@ namespace Sable.SIL;
 ///         summary root inference keeps (docs/04 §3.3), so recursion converges.
 ///     </para>
 ///     <para>
-///         The object keeps its header. One nothing copies is not counted
-///         (<see cref="Uncount" />); one copied keeps its count, and its last
-///         release runs the deinit and the fields' releases as before, but
-///         frees nothing. Nor is one a weak reference could outlive promoted.
+///         One nothing copies is not counted (<see cref="Uncount" />), and
+///         one of those nothing reads the header of is made without it
+///         (<see cref="StackHeaders" />); one copied keeps its count, and its
+///         last release runs the deinit and the fields' releases as before,
+///         but frees nothing. Nor is one a weak reference could outlive promoted.
 ///     </para>
 ///     <para>
 ///         One stack slot must never hold two live objects, so an allocation
@@ -84,8 +85,8 @@ public sealed class PromoteToStack : ISilPass {
     ///     An object made in the frame that nothing copies has one reference
     ///     all its life: no retain, so its count is one from start to end, and
     ///     whatever ends that reference is the last release. Each destroy of
-    ///     it — of the value, of what was taken out of a slot it was put in,
-    ///     or of such a slot — is marked <c>[uncounted]</c>: destroyed in
+    ///     it — of the value, of a closure made with it as its context, of
+    ///     what was taken out of a slot it was put in, or of such a slot — is marked <c>[uncounted]</c>: destroyed in
     ///     place, the count neither read nor written. A slot qualifies when
     ///     all that is ever stored in it is such objects, so that it cannot
     ///     hold anything counted instead. Nothing here may be held weakly or
@@ -101,9 +102,17 @@ public sealed class PromoteToStack : ISilPass {
             }
         }
 
-        // What holds such objects and nothing else: the objects; a slot
-        // every store into which is of such a value; what is taken out of
-        // one. A value merged with others at a join is not.
+        // A closure made with such an object as its context, never copied
+        // (a copy is one of the object's holders, which it would then not
+        // be among), holds it alone: its destroy is the context's, as it
+        // was made.
+        foreach (var closure in holders.OfType<PartialApplyInst>().Where(c => c.Context is { } context && only.Contains(context)).ToList()) {
+            only.Add(closure);
+        }
+
+        // What holds such objects and nothing else: the objects and their
+        // closures; a slot every store into which is of such a value; what
+        // is taken out of one. A value merged with others at a join is not.
         var slots = new HashSet<AllocStackInst>();
         for (var changed = true; changed;) {
             changed = false;
@@ -117,18 +126,6 @@ public sealed class PromoteToStack : ISilPass {
 
                 if (holder is LoadInst { Kind: LoadKind.Take, Address: AllocStackInst from } taken && slots.Contains(from) && only.Add(taken)) {
                     changed = true;
-                }
-            }
-        }
-
-        // A closure made with such an object as its context, never copied
-        // (a copy is one of the object's holders, which it would then not
-        // be among): its destroy is the context's, as it was made.
-        var closures = holders.OfType<PartialApplyInst>().Where(c => c.Context is { } context && only.Contains(context)).ToList();
-        foreach (var closure in closures) {
-            foreach (var user in uses.Of(closure)) {
-                if (user is DestroyValueInst destroy) {
-                    destroy.Uncounted = true;
                 }
             }
         }

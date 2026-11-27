@@ -354,6 +354,89 @@ public sealed class StackPromotionTests {
     }
 
     /// <summary>
+    ///     An object in the frame that nothing counts and nothing reads the
+    ///     header of — a callee only reaching its fields, a closure's code
+    ///     only its context's — is made with no header (#188): the runtime
+    ///     neither makes nor destroys it, and its deinit and its fields'
+    ///     releases still run where they did. One handed to a callee that
+    ///     copies it, which counts it, or built with debug information,
+    ///     which the debugger reads, keeps its header.
+    /// </summary>
+    [Fact]
+    public void AnObjectNothingReadsTheHeaderOfIsMadeWithNone() {
+        var source = Program(
+            """
+            class Noisy {
+                var value: Int
+                var name: String
+                init(_ value: Int, _ name: String) {
+                    self.value = value
+                    self.name = name
+                }
+                deinit {
+                    if value % 250 == 0 {
+                        print("bye \(name) \(value)")
+                    }
+                }
+            }
+
+            @inline(never)
+            fn read(_ n: Noisy) -> Int {
+                return n.value + n.name.count
+            }
+
+            @inline(never)
+            fn apply(_ x: Int, _ body: (Int) -> Int) -> Int {
+                return body(x)
+            }
+
+            @inline(never)
+            fn copied(_ n: Noisy) -> Int {
+                var kept = n
+                if n.value > 1000000 {
+                    kept = Noisy(0, "z")
+                }
+                return kept.name.count
+            }
+
+            @inline(never)
+            fn dispatched(_ i: Int) -> Int {
+                let n = Noisy(i, "d")
+                return copied(n)
+            }
+            """,
+            """
+                var sum = 0
+                for i in 0..<1000 {
+                    let n = Noisy(i, "n")
+                    let label = "k\(i % 10)"
+                    sum = sum + read(n) + apply(i) { $0 + i + label.count } + dispatched(i)
+                }
+                print(sum)
+            """
+        );
+        const string expected = "bye d 0\nbye n 0\nbye d 250\nbye n 250\nbye d 500\nbye n 500\nbye d 750\nbye n 750\n1502500\n";
+        Assert.Equal(expected, AssertAgree(source, stepLimit: 50_000_000).Stdout);
+
+        static string Body(string ir, string function) {
+            var start = ir.IndexOf($"@\"sable.Test.{function}\"(", StringComparison.Ordinal);
+            start = ir.LastIndexOf("define", start, StringComparison.Ordinal);
+            return ir[start..ir.IndexOf("\n}\n", start, StringComparison.Ordinal)];
+        }
+
+        var compiled = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true);
+        var ir = compiled.LlvmIr!;
+        Assert.DoesNotContain("@sable_stack_object(", Body(ir, "main"), StringComparison.Ordinal);
+        Assert.DoesNotContain("@sable_destroy_uncounted(", Body(ir, "main"), StringComparison.Ordinal);
+        Assert.Contains("@sable_stack_object(", Body(ir, "dispatched"), StringComparison.Ordinal);
+        Assert.Contains("@sable_stack_object(", Body(LlvmEmitter.EmitWithDebugInfo(compiled.Sil!, "."), "main"), StringComparison.Ordinal);
+        if (CanBuild) {
+            // Optimised, and held to leaking nothing.
+            Assert.Equal(expected, BuildAndRun(source).Stdout);
+        }
+    }
+
+    /// <summary>
     ///     A local function captures a 'let' that has its value where the
     ///     function is declared by value, as a closure does, with no box
     ///     (#188); its context, made each turn, is then in the frame.

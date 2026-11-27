@@ -1,0 +1,216 @@
+module Sable.CommandLine
+
+import Sable.IO
+
+/// What a program takes on its command line, and the parser of it:
+/// swift-argument-parser's `ParsableCommand`, .NET's
+/// `System.CommandLine.Command`, Rust's clap `Command`. A value: each call
+/// gives a parser that is this one with more said.
+///
+/// It takes options (`--output site`, `--output=site`, `-o site`,
+/// `-osite`), flags (`--verbose`, `-v`, `-vv`, bundled as `-vq`),
+/// arguments by position, and subcommands, each a parser of its own whose
+/// options are added to its parents'. `--` ends the options. An option may
+/// fall back to an environment variable, then to a default. `--help` and
+/// `-h` give the help text, `--version` the version, and a mistake an
+/// error that suggests what was meant (`ArgumentParseError`).
+///
+/// ```sable
+/// let parser = ArgumentParser("ssg", about: "Builds a static site.")
+///     .option("output", short: 'o', help: "Where the site is written", valueName: "dir", defaultValue: "out")
+///     .flag("verbose", short: 'v', help: "Say what is written")
+///     .argument("site", help: "The site's directory")
+/// let parsed = try! parser.parse(["-v", "blog", "--output=public"])
+/// assert(parsed.value("site") == "blog" && parsed.value("output") == "public")
+/// assert(parsed.flag("verbose"))
+/// assert(try! parser.parse(["blog"]).value("output") == "out")
+/// ```
+public struct ArgumentParser {
+    /// The command's name, as it is typed.
+    public let name: String
+    /// What it does, in a sentence, for its help.
+    public let about: String
+    var versionText: String?
+    var readsResponseFiles: Bool
+    var options: OptionSpec[>..]
+    var positionals: PositionalSpec[>..]
+    var commands: ArgumentParser[>..]
+
+    /// A command that takes nothing yet.
+    public init(_ name: String, about: String = "") {
+        self.name = name
+        self.about = about
+        versionText = none
+        readsResponseFiles = false
+        options = []
+        positionals = []
+        commands = []
+    }
+
+    /// With `--version`, which gives the text.
+    public fn version(_ text: String) -> ArgumentParser {
+        var parser = self
+        parser.versionText = text
+        return parser
+    }
+
+    /// With an option that takes a value: `--name value`, `--name=value`,
+    /// or `-s value` and `-svalue` with a short name. Given more than once,
+    /// the last is its value, unless it `repeats`, when each is kept. One
+    /// not given is read from the environment variable, if it names one
+    /// that is set, and is otherwise the default; with neither, `isRequired`
+    /// makes it an error. With `choices`, a value must be one of them.
+    ///
+    /// ```sable
+    /// let parser = ArgumentParser("cc")
+    ///     .option("include", short: 'I', repeats: true)
+    ///     .option("level", choices: ["0", "1", "2"], environment: "CC_LEVEL", defaultValue: "0")
+    /// let parsed = try! parser.parse(["-Iinclude", "-I", "vendor"], environment: ["CC_LEVEL": "2"])
+    /// assert(parsed.values("include") == ["include", "vendor"])
+    /// assert(parsed.value("level") == "2")
+    /// ```
+    public fn option(
+        _ name: String,
+        short: Char? = none,
+        help: String = "",
+        valueName: String = "",
+        choices: String[>..] = [],
+        environment: String? = none,
+        defaultValue: String? = none,
+        isRequired: Bool = false,
+        repeats: Bool = false
+    ) -> ArgumentParser {
+        var parser = self
+        parser.options.append(OptionSpec(
+            name: name,
+            short: short,
+            help: help,
+            valueName: valueName.isEmpty ? name : valueName,
+            choices: choices,
+            environment: environment,
+            defaultValue: defaultValue,
+            isRequired: isRequired,
+            repeats: repeats,
+            isFlag: false
+        ))
+        return parser
+    }
+
+    /// With a flag, which takes no value: `--name`, or `-s` with a short
+    /// name, given any number of times (`ParsedArguments.count`). One not
+    /// given is set by the environment variable, if it names one set to
+    /// `1`, `true` or `yes`.
+    public fn flag(_ name: String, short: Char? = none, help: String = "", environment: String? = none) -> ArgumentParser {
+        var parser = self
+        parser.options.append(OptionSpec(
+            name: name,
+            short: short,
+            help: help,
+            valueName: "",
+            choices: [],
+            environment: environment,
+            defaultValue: none,
+            isRequired: false,
+            repeats: true,
+            isFlag: true
+        ))
+        return parser
+    }
+
+    /// With an argument by position, after those it has: one value, or,
+    /// when it `repeats`, every value left. One that is not `isRequired` may
+    /// be missing, and is then its default, if it has one.
+    public fn argument(_ name: String, help: String = "", defaultValue: String? = none, isRequired: Bool = true, repeats: Bool = false) -> ArgumentParser {
+        var parser = self
+        parser.positionals.append(PositionalSpec(name: name, help: help, defaultValue: defaultValue, isRequired: isRequired && defaultValue == none, repeats: repeats))
+        return parser
+    }
+
+    /// With a subcommand, which the first argument by position names. A
+    /// command with subcommands needs one, and takes no arguments by
+    /// position of its own.
+    ///
+    /// ```sable
+    /// let git = ArgumentParser("git")
+    ///     .flag("quiet", short: 'q')
+    ///     .subcommand(ArgumentParser("commit", about: "Records changes").option("message", short: 'm'))
+    /// let parsed = try! git.parse(["-q", "commit", "-m", "First"])
+    /// assert(parsed.command == ["git", "commit"] && parsed.subcommand == "commit")
+    /// assert(parsed.flag("quiet") && parsed.value("message") == "First")
+    /// ```
+    public fn subcommand(_ command: ArgumentParser) -> ArgumentParser {
+        var parser = self
+        parser.commands.append(command)
+        return parser
+    }
+
+    /// Whether an argument `@path` stands for the arguments in the file at
+    /// the path, as .NET's response files: each line's words, split at
+    /// spaces outside quotes, with lines that start with `#` left out. A
+    /// file may name another.
+    public fn responseFiles(_ reads: Bool = true) -> ArgumentParser {
+        var parser = self
+        parser.readsResponseFiles = reads
+        return parser
+    }
+
+    /// The arguments parsed, the program's own and its environment
+    /// variables unless others are given. With `--help` or `--version`,
+    /// what they give is written to the standard output and the program
+    /// ends with 0; with a mistake, the error, the usage and a pointer to
+    /// `--help` are written to the standard error and it ends with 2.
+    ///
+    /// ```sable
+    /// let parsed = ArgumentParser("ssg").argument("site").parseOrExit(["blog"])
+    /// assert(parsed.value("site") == "blog")
+    /// ```
+    public fn parseOrExit(_ arguments: String[>..] = Environment.arguments(), environment: [String: String] = Environment.variables()) -> ParsedArguments {
+        do {
+            return try parse(arguments, environment: environment)
+        } catch {
+            if error.exitCode == 0 {
+                Console.write(error.description())
+            } else {
+                Console.writeErrorLine("error: " + error.description())
+                Console.writeErrorLine("")
+                Console.writeErrorLine(usage())
+                Console.writeErrorLine("")
+                Console.writeErrorLine("For more information, try '--help'.")
+            }
+            Runtime.exit(error.exitCode)
+        }
+    }
+
+    // The subcommand by its name.
+    fn command(named name: String) -> ArgumentParser? {
+        for command in commands {
+            if command.name == name {
+                return command
+            }
+        }
+        return none
+    }
+}
+
+// An option or a flag.
+struct OptionSpec {
+    let name: String
+    let short: Char?
+    let help: String
+    let valueName: String
+    let choices: String[>..]
+    let environment: String?
+    let defaultValue: String?
+    let isRequired: Bool
+    let repeats: Bool
+    let isFlag: Bool
+}
+
+// An argument by position.
+struct PositionalSpec {
+    let name: String
+    let help: String
+    let defaultValue: String?
+    let isRequired: Bool
+    let repeats: Bool
+}

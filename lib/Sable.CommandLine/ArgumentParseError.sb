@@ -1,0 +1,73 @@
+module Sable.CommandLine
+
+/// Why a command line was not parsed, with what was meant where it can be
+/// guessed; and `--help` and `--version`, which end parsing too, with the
+/// text to show. A program ends with `exitCode`: 0 for those two, 2 for a
+/// mistake, as clap and swift-argument-parser end.
+///
+/// ```sable
+/// let parser = ArgumentParser("tool").flag("verbose")
+/// do {
+///     _ = try parser.parse(["--verbos"])
+/// } catch {
+///     assert(error == .UnknownOption(option: "--verbos", suggestion: "--verbose"))
+///     assert(error.description() == "unknown option '--verbos'; did you mean '--verbose'?")
+///     assert(error.exitCode == 2)
+/// }
+/// ```
+@derive(Equatable, Debug)
+public union ArgumentParseError: Error {
+    /// A switch no option is: what was written, and the nearest there is.
+    UnknownOption(option: String, suggestion: String?)
+    /// A subcommand there is not, and the nearest there is.
+    UnknownCommand(command: String, suggestion: String?)
+    /// An option given with no value after it.
+    MissingValue(option: String)
+    /// A required option, given neither on the command line nor by its
+    /// environment variable.
+    MissingOption(option: String)
+    /// A required argument by position, not given.
+    MissingArgument(argument: String)
+    /// A command with subcommands, given none.
+    MissingCommand(command: String)
+    /// An argument by position after those the command takes.
+    UnexpectedArgument(argument: String)
+    /// A value an option or argument cannot have: what was given, and why.
+    InvalidValue(option: String, value: String, reason: String)
+    /// A response file that could not be read, and why.
+    UnreadableResponseFile(path: String, reason: String)
+    /// `--help` or `-h`: the help of the command it was given to.
+    HelpRequested(text: String)
+    /// `--version`: the version.
+    VersionRequested(text: String)
+
+    /// The status a program ends with: 0 for help and the version, 2
+    /// otherwise.
+    public var exitCode: Int => match self {
+        case .HelpRequested(_), .VersionRequested(_) => 0
+        case _                                       => 2
+    }
+
+    public fn description() -> String {
+        return match self {
+            case .UnknownOption(let option, let suggestion)       => "unknown option '\(option)'" + ArgumentParseError.meant(suggestion)
+            case .UnknownCommand(let command, let suggestion)     => "unknown command '\(command)'" + ArgumentParseError.meant(suggestion)
+            case .MissingValue(let option)                        => "'\(option)' needs a value"
+            case .MissingOption(let option)                       => "'\(option)' is required"
+            case .MissingArgument(let argument)                   => "'\(argument)' is required"
+            case .MissingCommand(let command)                     => "'\(command)' needs a command"
+            case .UnexpectedArgument(let argument)                => "unexpected argument '\(argument)'"
+            case .InvalidValue(let option, let value, let reason) => "'\(value)' is not a value of '\(option)': \(reason)"
+            case .UnreadableResponseFile(let path, let reason)    => "response file '\(path)' not read: \(reason)"
+            case .HelpRequested(let text)                         => text
+            case .VersionRequested(let text)                      => text
+        }
+    }
+
+    static fn meant(_ suggestion: String?) -> String {
+        if let suggestion = suggestion {
+            return "; did you mean '\(suggestion)'?"
+        }
+        return ""
+    }
+}

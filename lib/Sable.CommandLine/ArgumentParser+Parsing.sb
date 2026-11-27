@@ -1,0 +1,349 @@
+module Sable.CommandLine
+
+import Sable.IO
+
+extension ArgumentParser {
+    /// The arguments parsed, after the program's own name; `environment`
+    /// is what options fall back to (`Environment.variables()` for this
+    /// program's).
+    ///
+    /// ```sable
+    /// let parser = ArgumentParser("tool").option("output", short: 'o', isRequired: true).argument("input")
+    /// assert(try! parser.parse(["-o", "a", "--", "-b"]).value("input") == "-b")
+    /// do {
+    ///     _ = try parser.parse(["in"])
+    /// } catch {
+    ///     assert(error == .MissingOption(option: "--output"))
+    /// }
+    /// ```
+    public fn parse(_ arguments: String[>..], environment: [String: String] = [:]) throws(ArgumentParseError) -> ParsedArguments {
+        let expanded = readsResponseFiles ? try ArgumentParser.expand(arguments, depth: 0) : arguments
+        let tokens = ArgumentToken.read(expanded)
+        var levels: ArgumentParser[>..] = [self]
+        var parsed = ParsedArguments(command: [name])
+        var position = 0
+        var i = 0
+        while i < tokens.count {
+            let token = tokens[i]
+            i += 1
+            let level = levels.last!
+            match token {
+                case .Separator => continue
+                case .Value(let text) => {
+                    if !level.commands.isEmpty && position == 0 {
+                        guard let command = level.command(named: text) else {
+                            throw .UnknownCommand(command: text, suggestion: ArgumentParser.nearest(text, among: level.commands.map { $0.name }))
+                        }
+                        levels.append(command)
+                        var path = parsed.command
+                        path.append(command.name)
+                        parsed = ParsedArguments(command: path, from: parsed)
+                    } else {
+                        try ArgumentParser.place(text, in: level, at: &position, into: &parsed)
+                    }
+                }
+                case .Switch(let dashes, let name, let value) => {
+                    if dashes == "--" {
+                        try readLong(name, value, levels, tokens, &i, &parsed)
+                    } else if ArgumentParser.isNumber(name) && ArgumentParser.find(short: name.first!, in: levels) == none {
+                        try ArgumentParser.place(token.text, in: level, at: &position, into: &parsed)
+                    } else {
+                        try readShort(name, value, levels, tokens, &i, &parsed)
+                    }
+                }
+            }
+        }
+        let last = levels.last!
+        if !last.commands.isEmpty {
+            throw .MissingCommand(command: parsed.command.joined(separator: " "))
+        }
+        for level in levels {
+            for option in level.options {
+                try ArgumentParser.complete(option, environment, &parsed)
+            }
+        }
+        for (k, positional) in last.positionals.enumerated() {
+            if k >= position && !parsed.contains(positional.name) {
+                if let fallback = positional.defaultValue {
+                    parsed.set(positional.name, fallback)
+                } else if positional.isRequired {
+                    throw .MissingArgument(argument: "<\(positional.name)>")
+                }
+            }
+        }
+        return parsed
+    }
+
+    // `--name` or `--name=value`.
+    fn readLong(_ name: String, _ inline: String?, _ levels: ArgumentParser[>..], _ tokens: ArgumentToken[>..], _ i: inout Int, _ parsed: inout ParsedArguments) throws(ArgumentParseError) {
+        let level = levels.last!
+        if name == "help" {
+            throw .HelpRequested(text: level.help(path: parsed.command))
+        }
+        if name == "version" && versionText != none {
+            throw .VersionRequested(text: versionText! + "\n")
+        }
+        guard let option = ArgumentParser.find(long: name, in: levels) else {
+            var names: String[>..] = ["--help"]
+            for each in levels {
+                for option in each.options {
+                    names.append("--" + option.name)
+                }
+            }
+            throw .UnknownOption(option: "--" + name, suggestion: ArgumentParser.nearest("--" + name, among: names))
+        }
+        if option.isFlag {
+            if inline != none {
+                throw .InvalidValue(option: "--" + name, value: inline, reason: "a flag takes no value")
+            }
+            parsed.count(flag: option.name)
+            return
+        }
+        let value = try inline ?? ArgumentParser.next(for: "--" + name, tokens, &i)
+        try ArgumentParser.store(value, of: option, into: &parsed)
+    }
+
+    // `-s`, `-svalue`, `-s=value`, and flags bundled: `-abc`.
+    fn readShort(_ name: String, _ inline: String?, _ levels: ArgumentParser[>..], _ tokens: ArgumentToken[>..], _ i: inout Int, _ parsed: inout ParsedArguments) throws(ArgumentParseError) {
+        let letters = name.toArray()
+        var k = 0
+        while k < letters.count {
+            let letter = letters[k]
+            k += 1
+            if letter == 'h' && ArgumentParser.find(short: 'h', in: levels) == none {
+                throw .HelpRequested(text: levels.last!.help(path: parsed.command))
+            }
+            guard let option = ArgumentParser.find(short: letter, in: levels) else {
+                throw .UnknownOption(option: "-\(letter)", suggestion: none)
+            }
+            if option.isFlag {
+                parsed.count(flag: option.name)
+                continue
+            }
+            var value = ""
+            if k < letters.count {
+                while k < letters.count {
+                    value += "\(letters[k])"
+                    k += 1
+                }
+                if inline != none {
+                    value += "=" + inline
+                }
+            } else if let given = inline {
+                value = given
+            } else {
+                value = try ArgumentParser.next(for: "-\(letter)", tokens, &i)
+            }
+            try ArgumentParser.store(value, of: option, into: &parsed)
+            return
+        }
+        if inline != none {
+            throw .InvalidValue(option: "-" + name, value: inline, reason: "a flag takes no value")
+        }
+    }
+
+    // The argument after an option, as its value: a value, or what looks
+    // like a negative number.
+    static fn next(for option: String, _ tokens: ArgumentToken[>..], _ i: inout Int) throws(ArgumentParseError) -> String {
+        if i < tokens.count {
+            let token = tokens[i]
+            var taken: String? = none
+            match token {
+                case .Value(let text)                 => taken = text
+                case .Switch(let dashes, let name, _) => taken = dashes == "-" && isNumber(name) ? token.text : none
+                case .Separator                       => taken = none
+            }
+            if let text = taken {
+                i += 1
+                return text
+            }
+        }
+        throw .MissingValue(option: option)
+    }
+
+    // Whether a switch's name is a number's digits, as in "-5": a value,
+    // unless an option is named by its first digit.
+    static fn isNumber(_ name: String) -> Bool {
+        return name.first?.isAsciiDigit ?? false
+    }
+
+    static fn store(_ value: String, of option: OptionSpec, into parsed: inout ParsedArguments) throws(ArgumentParseError) {
+        if !option.choices.isEmpty && !option.choices.contains(value) {
+            throw .InvalidValue(option: "--" + option.name, value: value, reason: "it is one of " + option.choices.joined(separator: ", "))
+        }
+        if option.repeats {
+            parsed.add(option.name, value)
+        } else {
+            parsed.set(option.name, value)
+        }
+    }
+
+    // An argument by position: the next of the command's, or the last again
+    // when it repeats.
+    static fn place(_ text: String, in level: ArgumentParser, at position: inout Int, into parsed: inout ParsedArguments) throws(ArgumentParseError) {
+        if position < level.positionals.count {
+            let positional = level.positionals[position]
+            parsed.add(positional.name, text)
+            if !positional.repeats {
+                position += 1
+            }
+            return
+        }
+        throw .UnexpectedArgument(argument: text)
+    }
+
+    // An option not given: from its environment variable, or its default.
+    static fn complete(_ option: OptionSpec, _ environment: [String: String], _ parsed: inout ParsedArguments) throws(ArgumentParseError) {
+        if parsed.contains(option.name) {
+            return
+        }
+        if let variable = option.environment, let value = environment[variable] {
+            if option.isFlag {
+                let lower = value.lowercased()
+                if lower == "1" || lower == "true" || lower == "yes" {
+                    parsed.count(flag: option.name)
+                }
+                return
+            }
+            try store(value, of: option, into: &parsed)
+            return
+        }
+        if let fallback = option.defaultValue {
+            parsed.set(option.name, fallback)
+        } else if option.isRequired {
+            throw .MissingOption(option: "--" + option.name)
+        }
+    }
+
+    // The option with the name, the innermost command's first.
+    static fn find(long name: String, in levels: ArgumentParser[>..]) -> OptionSpec? {
+        var k = levels.count - 1
+        while k >= 0 {
+            for option in levels[k].options {
+                if option.name == name {
+                    return option
+                }
+            }
+            k -= 1
+        }
+        return none
+    }
+
+    static fn find(short letter: Char, in levels: ArgumentParser[>..]) -> OptionSpec? {
+        var k = levels.count - 1
+        while k >= 0 {
+            for option in levels[k].options {
+                if option.short == letter {
+                    return option
+                }
+            }
+            k -= 1
+        }
+        return none
+    }
+
+    // The candidate nearest the text by edits, if it is near enough to be
+    // what was meant: within a third of its length.
+    static fn nearest(_ text: String, among candidates: String[>..]) -> String? {
+        var best: String? = none
+        var bestDistance = 0
+        for candidate in candidates {
+            let distance = editDistance(text, candidate)
+            if distance * 3 <= candidate.count && (best == none || distance < bestDistance) {
+                best = candidate
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
+    // Levenshtein's distance, by characters.
+    static fn editDistance(_ a: String, _ b: String) -> Int {
+        let x = a.toArray()
+        let y = b.toArray()
+        var previous: Int[>..] = []
+        var j = 0
+        while j <= y.count {
+            previous.append(j)
+            j += 1
+        }
+        var i = 1
+        while i <= x.count {
+            var current: Int[>..] = [i]
+            j = 1
+            while j <= y.count {
+                let substitution = previous[j - 1] + (x[i - 1] == y[j - 1] ? 0 : 1)
+                let deletion = previous[j] + 1
+                let insertion = current[j - 1] + 1
+                current.append(substitution < deletion ? (substitution < insertion ? substitution : insertion) : (deletion < insertion ? deletion : insertion))
+                j += 1
+            }
+            previous = current
+            i += 1
+        }
+        return previous[y.count]
+    }
+
+    // The arguments with each `@path` replaced by the file's.
+    static fn expand(_ arguments: String[>..], depth: Int) throws(ArgumentParseError) -> String[>..] {
+        var all: String[>..] = []
+        for argument in arguments {
+            if !argument.hasPrefix("@") || argument == "@" {
+                all.append(argument)
+                continue
+            }
+            let path = argument.trimmingPrefix("@")
+            if depth >= 16 {
+                throw .UnreadableResponseFile(path: path, reason: "response files nested too deep")
+            }
+            var text = ""
+            do {
+                text = try File.read(path)
+            } catch {
+                throw .UnreadableResponseFile(path: path, reason: error.description())
+            }
+            all.append(contentsOf: try expand(ArgumentParser.words(of: text), depth: depth + 1))
+        }
+        return all
+    }
+
+    // A response file's words: split at spaces outside quotes, lines that
+    // start with '#' left out.
+    static fn words(of text: String) -> String[>..] {
+        var words: String[>..] = []
+        for line in text.split(separator: '\n') {
+            let trimmed = line.trimmed()
+            if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                continue
+            }
+            var word = ""
+            var inWord = false
+            var quote: Char? = none
+            for c in trimmed {
+                if let opening = quote {
+                    if c == opening {
+                        quote = none
+                    } else {
+                        word += "\(c)"
+                    }
+                } else if c == '"' || c == '\'' {
+                    quote = c
+                    inWord = true
+                } else if c == ' ' || c == '\t' || c == '\r' {
+                    if inWord {
+                        words.append(word)
+                        word = ""
+                        inWord = false
+                    }
+                } else {
+                    word += "\(c)"
+                    inWord = true
+                }
+            }
+            if inWord {
+                words.append(word)
+            }
+        }
+        return words
+    }
+}

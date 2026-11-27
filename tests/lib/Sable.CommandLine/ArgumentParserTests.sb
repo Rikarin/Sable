@@ -1,0 +1,274 @@
+module ArgumentParserTests
+
+// ArgumentParser (Sable.CommandLine): options, flags, arguments by
+// position and subcommands; the environment and defaults they fall back
+// to; help and usage; the errors and what they suggest; response files.
+
+import Sable.CommandLine
+import Sable.IO
+import Sable.Testing
+
+fn tool() -> ArgumentParser {
+    return ArgumentParser("tool", about: "Does things.")
+        .version("tool 1.2.3")
+        .option("output", short: 'o', help: "Where to write", valueName: "dir", environment: "TOOL_OUTPUT", defaultValue: "out")
+        .option("level", short: 'l', choices: ["low", "high"])
+        .option("include", short: 'I', repeats: true)
+        .option("offset")
+        .flag("verbose", short: 'v', help: "Say more", environment: "TOOL_VERBOSE")
+        .flag("quiet", short: 'q')
+        .argument("inputs", help: "What to read", isRequired: false, repeats: true)
+}
+
+// The arguments parsed by tool(), as "name=value" for each that has one,
+// sorted; or the error's description.
+fn shown(_ arguments: String[>..], environment: [String: String] = [:]) -> String {
+    do {
+        let parsed = try tool().parse(arguments, environment: environment)
+        var parts: String[>..] = []
+        for name in ["output", "level", "include", "offset", "inputs"] {
+            if parsed.contains(name) {
+                parts.append("\(name)=\(parsed.values(name).joined(separator: ","))")
+            }
+        }
+        for name in ["verbose", "quiet"] {
+            if parsed.flag(name) {
+                parts.append("\(name)x\(parsed.count(name))")
+            }
+        }
+        return parts.joined(separator: " ")
+    } catch {
+        return "error: " + error.description()
+    }
+}
+
+@test(arguments: [
+    ([], "output=out"),
+    (["a", "b"], "output=out inputs=a,b"),
+    (["--output", "site"], "output=site"),
+    (["--output=site"], "output=site"),
+    (["-o", "site"], "output=site"),
+    (["-osite"], "output=site"),
+    (["-o=site"], "output=site"),
+    (["-o", "a", "-o", "b"], "output=b"),
+    (["-I", "a", "--include=b", "-Ic"], "output=out include=a,b,c"),
+    (["-vvq"], "output=out verbosex2 quietx1"),
+    (["-v", "--verbose", "x"], "output=out inputs=x verbosex2"),
+    (["--offset", "-5"], "output=out offset=-5"),
+    (["-5", "-"], "output=out inputs=-5,-"),
+    (["--", "-v", "--output"], "output=out inputs=-v,--output"),
+    (["-vosite"], "output=site verbosex1"),
+    (["--level", "high"], "output=out level=high"),
+])
+fn optionsFlagsAndArgumentsAreRead(_ arguments: String[>..], _ expected: String) {
+    expect(shown(arguments) == expected)
+}
+
+@test(arguments: [
+    (["--verbos"], "error: unknown option '--verbos'; did you mean '--verbose'?"),
+    (["--outptu", "x"], "error: unknown option '--outptu'; did you mean '--output'?"),
+    (["--zzzzzz"], "error: unknown option '--zzzzzz'"),
+    (["-x"], "error: unknown option '-x'"),
+    (["--output"], "error: '--output' needs a value"),
+    (["-o"], "error: '-o' needs a value"),
+    (["-o", "--", "x"], "error: '-o' needs a value"),
+    (["--verbose=yes"], "error: 'yes' is not a value of '--verbose': a flag takes no value"),
+    (["-v=yes"], "error: 'yes' is not a value of '-v': a flag takes no value"),
+    (["--level", "mid"], "error: 'mid' is not a value of '--level': it is one of low, high"),
+])
+fn mistakesAreErrors(_ arguments: String[>..], _ expected: String) {
+    expect(shown(arguments) == expected)
+}
+
+@test
+fn optionsFallBackToTheEnvironment() {
+    expect(shown([], environment: ["TOOL_OUTPUT": "env", "TOOL_VERBOSE": "true"]) == "output=env verbosex1")
+    expect(shown(["-o", "given"], environment: ["TOOL_OUTPUT": "env", "TOOL_VERBOSE": "0"]) == "output=given")
+    expect(shown([], environment: ["TOOL_VERBOSE": "Yes"]) == "output=out verbosex1")
+    expect(shown([], environment: ["TOOL_VERBOSE": "1"]) == "output=out verbosex1")
+}
+
+@test
+fn requiredOptionsAndArgumentsMustBeGiven() {
+    let parser = ArgumentParser("cp").option("mode", isRequired: true).argument("from").argument("to").argument("extra", isRequired: false)
+    expectThrows(ArgumentParseError.MissingOption(option: "--mode")) {
+        _ = try parser.parse(["a", "b"])
+    }
+    expectThrows(ArgumentParseError.MissingArgument(argument: "<to>")) {
+        _ = try parser.parse(["--mode", "x", "a"])
+    }
+    expectThrows(ArgumentParseError.UnexpectedArgument(argument: "d")) {
+        _ = try parser.parse(["--mode", "x", "a", "b", "c", "d"])
+    }
+    let parsed = try! parser.parse(["--mode", "x", "a", "b"])
+    expect(parsed.value("from") == "a" && parsed.value("to") == "b" && parsed.value("extra") == none)
+    let defaulted = ArgumentParser("cat").argument("file", defaultValue: "-")
+    expect(try! defaulted.parse([]).value("file") == "-")
+    expect(try! defaulted.parse(["x"]).value("file") == "x")
+}
+
+@test
+fn valuesAreReadAsTheirTypes() {
+    let parser = ArgumentParser("serve").option("port")
+    expect(try! parser.parse(["--port", "80"]).value("port", as: Int.self) == 80)
+    expect(try! parser.parse([]).value("port", as: Int.self) == none)
+    expectThrows(ArgumentParseError.InvalidValue(option: "port", value: "x", reason: "not a digit at 0")) {
+        _ = try parser.parse(["--port", "x"]).value("port", as: Int.self)
+    }
+}
+
+fn git() -> ArgumentParser {
+    return ArgumentParser("git", about: "The stupid content tracker.")
+        .flag("quiet", short: 'q')
+        .subcommand(ArgumentParser("commit", about: "Record changes").option("message", short: 'm', isRequired: true))
+        .subcommand(ArgumentParser("remote", about: "Manage remotes").subcommand(ArgumentParser("add").argument("name").argument("url")))
+}
+
+@test
+fn subcommandsHaveTheirOwnOptionsAndTheirParents() {
+    let parsed = try! git().parse(["commit", "-qm", "First"])
+    expect(parsed.command == ["git", "commit"] && parsed.subcommand == "commit")
+    expect(parsed.flag("quiet") && parsed.value("message") == "First")
+    let nested = try! git().parse(["remote", "add", "origin", "https://example.com"])
+    expect(nested.command == ["git", "remote", "add"] && nested.subcommand == "add")
+    expect(nested.value("name") == "origin" && nested.value("url") == "https://example.com")
+}
+
+@test
+fn subcommandMistakesAreErrors() {
+    expectThrows(ArgumentParseError.UnknownCommand(command: "comit", suggestion: "commit")) {
+        _ = try git().parse(["comit"])
+    }
+    expectThrows(ArgumentParseError.UnknownCommand(command: "xyz", suggestion: none)) {
+        _ = try git().parse(["xyz"])
+    }
+    expectThrows(ArgumentParseError.MissingCommand(command: "git")) {
+        _ = try git().parse(["-q"])
+    }
+    expectThrows(ArgumentParseError.MissingCommand(command: "git remote")) {
+        _ = try git().parse(["remote"])
+    }
+    expectThrows(ArgumentParseError.UnknownOption(option: "-m", suggestion: none)) {
+        _ = try git().parse(["-m", "x", "commit"])
+    }
+}
+
+@test
+fn helpAndVersionEndParsing() {
+    expectThrows(ArgumentParseError.VersionRequested(text: "tool 1.2.3\n")) {
+        _ = try tool().parse(["a", "--version"])
+    }
+    expectThrows(ArgumentParseError.HelpRequested(text: tool().help())) {
+        _ = try tool().parse(["-h"])
+    }
+    expectThrows(ArgumentParseError.UnknownOption(option: "--version", suggestion: none)) {
+        _ = try ArgumentParser("plain").parse(["--version"])
+    }
+    let help = ArgumentParseError.HelpRequested(text: "x")
+    expect(help.exitCode == 0 && ArgumentParseError.VersionRequested(text: "v").exitCode == 0)
+    expect(ArgumentParseError.MissingCommand(command: "git").exitCode == 2)
+}
+
+@test
+fn helpListsEverything() {
+    expect(tool().help() == """
+        Does things.
+
+        Usage: tool [options] [<inputs>...]
+
+        Arguments:
+          <inputs>                 What to read
+
+        Options:
+          -o, --output <dir>       Where to write [default: out] [env: TOOL_OUTPUT]
+          -l, --level <level>      [possible values: low, high]
+          -I, --include <include>
+              --offset <offset>
+          -v, --verbose            Say more [env: TOOL_VERBOSE]
+          -q, --quiet
+          -h, --help               Show this help
+              --version            Show the version
+
+        """)
+}
+
+@test
+fn subcommandsHaveTheirOwnHelp() {
+    expect(git().help() == """
+        The stupid content tracker.
+
+        Usage: git [options] <command>
+
+        Commands:
+          commit       Record changes
+          remote       Manage remotes
+
+        Options:
+          -q, --quiet
+          -h, --help   Show this help
+
+        """)
+    expectThrows(ArgumentParseError.HelpRequested(text: """
+        Record changes
+
+        Usage: git commit [options] --message <message>
+
+        Options:
+          -m, --message <message>
+          -h, --help               Show this help
+
+        """)) {
+        _ = try git().parse(["commit", "--help"])
+    }
+}
+
+@test
+fn errorsAreDescribed() {
+    expect(ArgumentParseError.MissingValue(option: "-o").description() == "'-o' needs a value")
+    expect(ArgumentParseError.MissingOption(option: "--mode").description() == "'--mode' is required")
+    expect(ArgumentParseError.MissingArgument(argument: "<to>").description() == "'<to>' is required")
+    expect(ArgumentParseError.MissingCommand(command: "git").description() == "'git' needs a command")
+    expect(ArgumentParseError.UnexpectedArgument(argument: "x").description() == "unexpected argument 'x'")
+    expect(ArgumentParseError.UnknownCommand(command: "x", suggestion: none).description() == "unknown command 'x'")
+    expect(ArgumentParseError.UnreadableResponseFile(path: "a", reason: "b").description() == "response file 'a' not read: b")
+    expect(ArgumentParseError.HelpRequested(text: "help").description() == "help")
+    expect(ArgumentParseError.VersionRequested(text: "1").description() == "1")
+}
+
+@test
+fn responseFilesStandForTheirArguments() throws {
+    let temp = try Temp.directory()
+    let directory = "\(temp.path)"
+    let path = Path.join(directory, "args.rsp")
+    let nested = Path.join(directory, "more.rsp")
+    try File.write(path, "# the options\n-o site\n\"a b\" 'c d'  e\n@\(nested)\n")
+    try File.write(nested, "-v\n")
+    let parser = tool().responseFiles()
+    let parsed = try parser.parse(["@" + path, "f", "@"])
+    expect(parsed.value("output") == "site" && parsed.flag("verbose"))
+    expect(parsed.values("inputs") == ["a b", "c d", "e", "f", "@"])
+    expect(try tool().parse(["@" + path]).values("inputs") == ["@" + path])
+    let missing = Path.join(directory, "none.rsp")
+    expectThrows(ArgumentParseError.UnreadableResponseFile(path: missing, reason: "nothing is at '\(missing)'")) {
+        _ = try parser.parse(["@" + missing])
+    }
+    try File.write(path, "@\(path)\n")
+    expectThrows(ArgumentParseError.UnreadableResponseFile(path: path, reason: "response files nested too deep")) {
+        _ = try parser.parse(["@" + path])
+    }
+}
+
+@test
+fn parseOrExitEndsTheProgramWithTheStatus() {
+    let parser = ArgumentParser("ssg").version("ssg 2").argument("site")
+    let unset: [String: String] = [:]
+    expect(parser.parseOrExit(["blog"], environment: unset).value("site") == "blog")
+    let failed = expectExit(2) {
+        _ = parser.parseOrExit([], environment: unset)
+    }
+    expect(failed?.errors == "error: '<site>' is required\n\nUsage: ssg [options] <site>\n\nFor more information, try '--help'.\n")
+    let shown = expectExit(0) {
+        _ = parser.parseOrExit(["--version"], environment: unset)
+    }
+    expect(shown?.output == "ssg 2\n" && shown?.errors == "")
+}

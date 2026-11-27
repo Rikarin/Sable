@@ -3,7 +3,7 @@ module Ssg
 // A static site generator: the "real program" of docs/04 §4.4, and the
 // first one written in Sable rather than about it.
 //
-//     ssg <site> <output>
+//     ssg <site> <output>      (ssg --help says so)
 //
 // The site directory holds:
 //
@@ -26,6 +26,7 @@ module Ssg
 // with an optional language, and backslash escapes. Everything else is
 // text, escaped.
 
+import Sable.CommandLine
 import Sable.IO
 import Sable.Text
 import Sable.Collections
@@ -614,16 +615,15 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
 }
 
 /// Exits with 0 when the site is built, 1 when it could not be, 2 when
-/// the arguments are wrong.
+/// the arguments are wrong (ArgumentParser says how).
 @main
 fn main() -> Int {
-    let arguments = Environment.arguments()
-    if arguments.count != 2 {
-        Console.writeErrorLine("usage: ssg <site> <output>")
-        return 2
-    }
+    let arguments = ArgumentParser("ssg", about: "Builds a static site: a page for each of its pages, an index and the tags.")
+        .argument("site", help: "The site's directory")
+        .argument("output", help: "Where the site is written")
+        .parseOrExit()
     do {
-        _ = try build(arguments[0], arguments[1])
+        _ = try build(arguments.value("site")!, arguments.value("output")!)
         return 0
     } catch .NotFound(let path) {
         Console.writeErrorLine("ssg: no such file or directory: " + path)

@@ -100,7 +100,11 @@ public sealed class StaticSiteTests {
     public void AMissingSiteIsReported() {
         var missing = Path.Combine(Path.GetTempPath(), $"sable-ssg-missing-{Guid.NewGuid():N}");
         var source = File.ReadAllText(Path.Combine(Root, "examples/ssg/ssg.sb"));
-        Assert.Equal("usage: ssg <site> <output>\n", Programs.InterpretWithArguments(source, []).Errors);
+        Assert.Equal(
+            "error: '<site>' is required\n\nUsage: ssg [options] <site> <output>\n\nFor more information, try '--help'.\n",
+            Programs.InterpretWithArguments(source, []).Errors
+        );
+        Assert.Contains("Usage: ssg [options] <site> <output>\n", Programs.InterpretWithArguments(source, ["--help"]).Output, StringComparison.Ordinal);
         Assert.Equal(
             $"ssg: no such file or directory: {Path.Combine(missing, "site.txt")}\n",
             Programs.InterpretWithArguments(source, [missing, missing + "-out"]).Errors

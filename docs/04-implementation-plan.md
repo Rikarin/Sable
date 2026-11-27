@@ -1027,6 +1027,7 @@ Sable.Net          Url, sockets, Dns; Http client to come
 Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
 Sable.Hosting      host, lifetime, services, cron jobs, systemd, Windows services
+Sable.CommandLine  options, flags, arguments, subcommands, help
 Sable.Configuration  providers, sections bound, options, reload
 Sable.DependencyInjection  services, scopes, open generics
 Sable.Validation   validators, rules, @derive(Validatable)

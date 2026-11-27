@@ -1,0 +1,115 @@
+module Sable.CommandLine
+
+extension ArgumentParser {
+    /// The usage line: the command, `[options]`, its required
+    /// options, then its arguments or `<command>`.
+    ///
+    /// ```sable
+    /// let parser = ArgumentParser("cp").flag("force", short: 'f').argument("from", repeats: true).argument("to")
+    /// assert(parser.usage() == "Usage: cp [options] <from>... <to>")
+    /// ```
+    public fn usage() -> String {
+        return usage(path: [name])
+    }
+
+    /// The help `--help` gives: what the command does, its usage, then its
+    /// subcommands, arguments and options, each with its help, the
+    /// options' defaults, environment variables and choices.
+    ///
+    /// ```sable
+    /// let parser = ArgumentParser("ssg", about: "Builds a static site.").version("1.0").option("output", short: 'o', help: "Where to write", defaultValue: "out").argument("site", help: "The site")
+    /// assert(parser.help() == """
+    ///     Builds a static site.
+    ///
+    ///     Usage: ssg [options] <site>
+    ///
+    ///     Arguments:
+    ///       <site>                 The site
+    ///
+    ///     Options:
+    ///       -o, --output <output>  Where to write [default: out]
+    ///       -h, --help             Show this help
+    ///           --version          Show the version
+    ///
+    ///     """)
+    /// ```
+    public fn help() -> String {
+        return help(path: [name])
+    }
+
+    fn usage(path: String[>..]) -> String {
+        // There is always --help.
+        var parts: String[>..] = ["Usage:", path.joined(separator: " "), "[options]"]
+        for option in options {
+            if option.isRequired {
+                parts.append("--\(option.name) <\(option.valueName)>")
+            }
+        }
+        if !commands.isEmpty {
+            parts.append("<command>")
+        }
+        for positional in positionals {
+            let shown = positional.repeats ? "<\(positional.name)>..." : "<\(positional.name)>"
+            parts.append(positional.isRequired ? shown : "[\(shown)]")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    fn help(path: String[>..]) -> String {
+        var rows: (String, String)[>..][>..] = [[], [], []]
+        for command in commands {
+            rows[0].append((command.name, command.about))
+        }
+        for positional in positionals {
+            var text = positional.help
+            if let fallback = positional.defaultValue {
+                text = ArgumentParser.joined(text, "[default: \(fallback)]")
+            }
+            rows[1].append(("<\(positional.name)>", text))
+        }
+        for option in options {
+            let short = option.short == none ? "    " : "-\(option.short!), "
+            let written = option.isFlag ? "\(short)--\(option.name)" : "\(short)--\(option.name) <\(option.valueName)>"
+            var text = option.help
+            if !option.choices.isEmpty {
+                text = ArgumentParser.joined(text, "[possible values: \(option.choices.joined(separator: ", "))]")
+            }
+            if let fallback = option.defaultValue {
+                text = ArgumentParser.joined(text, "[default: \(fallback)]")
+            }
+            if let variable = option.environment {
+                text = ArgumentParser.joined(text, "[env: \(variable)]")
+            }
+            rows[2].append((written, text))
+        }
+        rows[2].append(("-h, --help", "Show this help"))
+        if versionText != none && path.count == 1 {
+            rows[2].append(("    --version", "Show the version"))
+        }
+        var width = 0
+        for section in rows {
+            for (left, _) in section {
+                if left.count > width {
+                    width = left.count
+                }
+            }
+        }
+        var text = about.isEmpty ? "" : about + "\n\n"
+        text += usage(path: path) + "\n"
+        let titles = ["Commands:", "Arguments:", "Options:"]
+        for (k, section) in rows.enumerated() {
+            if section.isEmpty {
+                continue
+            }
+            text += "\n" + titles[k] + "\n"
+            for (left, right) in section {
+                text += right.isEmpty ? "  \(left)\n" : "  " + left.paddedEnd(toWidth: width) + "  " + right + "\n"
+            }
+        }
+        return text
+    }
+
+    static fn joined(_ text: String, _ more: String) -> String {
+        return text.isEmpty ? more : text + " " + more
+    }
+}

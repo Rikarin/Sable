@@ -1,0 +1,87 @@
+module Sable.CommandLine
+
+/// What `ArgumentParser.parse` read: the command and subcommands given, and
+/// each option's, flag's and argument's values by name, with those from
+/// the environment and the defaults filled in.
+///
+/// ```sable
+/// let parser = ArgumentParser("serve").option("port", short: 'p', defaultValue: "8080").flag("verbose", short: 'v').argument("roots", repeats: true)
+/// let parsed = try! parser.parse(["-vv", "-p", "9000", "site", "docs"])
+/// assert(try! parsed.value("port", as: Int.self) == 9000)
+/// assert(parsed.count("verbose") == 2)
+/// assert(parsed.values("roots") == ["site", "docs"])
+/// assert(parsed.subcommand == none && !parsed.contains("missing"))
+/// ```
+public struct ParsedArguments {
+    /// The command's name, then each subcommand's given.
+    public let command: String[>..]
+    var given: [String: String[>..]]
+    var counts: [String: Int]
+
+    init(command: String[>..]) {
+        self.command = command
+        given = [:]
+        counts = [:]
+    }
+
+    // The same values, for a subcommand's longer command.
+    init(command: String[>..], from parent: ParsedArguments) {
+        self.command = command
+        given = parent.given
+        counts = parent.counts
+    }
+
+    /// The last subcommand given, or none.
+    public var subcommand: String? => command.count > 1 ? command.last : none
+
+    /// Whether the option or argument has a value, or the flag was given.
+    public fn contains(_ name: String) -> Bool {
+        return given[name] != none || counts[name] != none
+    }
+
+    /// The option's or argument's value: the last given, if it repeats.
+    public fn value(_ name: String) -> String? {
+        return given[name]?.last
+    }
+
+    /// Each value of the option or argument, in the order given.
+    public fn values(_ name: String) -> String[>..] {
+        return given[name] ?? []
+    }
+
+    /// The value, read as the type reads text, or none if there is none.
+    public fn value<T: Parsable>(_ name: String, as type: T.Type) throws(ArgumentParseError) -> T? {
+        guard let text = value(name) else {
+            return none
+        }
+        do {
+            return try T.parse(text)
+        } catch {
+            throw .InvalidValue(option: name, value: text, reason: error.description())
+        }
+    }
+
+    /// Whether the flag was given.
+    public fn flag(_ name: String) -> Bool {
+        return count(name) > 0
+    }
+
+    /// How many times the flag was given: `-vvv` is three.
+    public fn count(_ name: String) -> Int {
+        return counts[name] ?? 0
+    }
+
+    mutating fn add(_ name: String, _ value: String) {
+        var values = given[name] ?? []
+        values.append(value)
+        given[name] = values
+    }
+
+    mutating fn set(_ name: String, _ value: String) {
+        given[name] = [value]
+    }
+
+    mutating fn count(flag name: String) {
+        counts[name] = count(name) + 1
+    }
+}

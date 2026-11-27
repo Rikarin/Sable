@@ -1304,6 +1304,10 @@ Sable.Hosting       ApplicationBuilder and Host (services started in order,
                     ApplicationLifetime, recurring jobs (CronExpression,
                     intervals, overlap policies), HostClock (any Clock),
                     Systemd (sd_notify), WindowsService
+Sable.CommandLine   ArgumentParser (options, flags, arguments by position,
+                    subcommands; environment fallbacks, defaults, choices,
+                    response files; help, usage, --version; errors that
+                    suggest what was meant), ParsedArguments, ArgumentToken
 Sable.Configuration ConfigurationBuilder and Configuration (providers layered,
                     case-insensitive keys, reload, changes, watch, debugView),
                     ConfigurationSection.bind (Serializable), providers of
@@ -2571,6 +2575,32 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
   the path of a program the manager did not start is tested; a service's
   own needs an installed service, which CI does not have.
 
+### Command line
+
+`Sable.CommandLine` is swift-argument-parser's, System.CommandLine's and
+clap's parsing, built as a value: `ArgumentParser("tool")` with
+`.option`, `.flag`, `.argument` and `.subcommand`, each giving a parser with
+more said. `parse` gives `ParsedArguments` (values by name, typed through
+`Parsable`, flags counted) or an `ArgumentParseError`; `parseOrExit` is the
+program's: help and the version to the standard output with 0, a mistake,
+the usage and a pointer to `--help` to the standard error with 2.
+
+- **Syntax.** `--name value`, `--name=value`, `-n value`, `-nvalue`,
+  flags bundled (`-vq`, `-vv` counted), `--` ending the options, and a
+  negative number taken as a value. A subcommand's options are added to
+  its parents'. `ArgumentToken.read` is the reading before any option is
+  known, which Sable.Configuration's provider shares.
+- **Fallbacks.** An option not given is its environment variable's value,
+  then its default; `isRequired` makes it an error to have neither.
+  `choices` limits its values.
+- **Errors.** An unknown option or command suggests the nearest by edits,
+  within a third of its length.
+- **Response files.** With `responseFiles()`, `@path` is the file's words,
+  split at spaces outside quotes, `#` lines left out, as .NET reads them.
+- **Not yet.** A declarative form (a generator over a struct's fields, as
+  the issue sketches with `@derive(CommandLine)`), shell completion
+  scripts, and styling the help when it is written to a terminal.
+
 ### Configuration
 
 `Sable.Configuration` is .NET's configuration and options over what the
@@ -2587,8 +2617,8 @@ into a `Configuration`.
 - **Providers.** Files (`ConfigurationFormat`: TOML, JSON with comments,
   YAML, `.env`), read through Sable.Serialize's decoders and flattened by a
   walk of `Decoder` that knows no format; the environment's variables, by
-  prefix, `__` a ':'; the command line, as .NET's provider reads it (#76's
-  argument parser does not exist yet, so there is none to share);
+  prefix, `__` a ':'; the command line, as .NET's provider reads it, its
+  arguments read by Sable.CommandLine's `ArgumentToken`;
   memory; and `UserSecrets`, a JSON file under the user's settings
   folder (`KnownFolder.Config`), outside any repository. A package's
   provider — a cloud secret store — is a conformance of its own.

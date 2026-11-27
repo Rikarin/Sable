@@ -1,0 +1,63 @@
+module Sable.CommandLine
+
+/// One of a program's arguments, as the command line's conventions read it
+/// before anything knows which options there are: a switch (`--name`,
+/// `--name=value`, `-n`, `-abc`), a value, or the `--` after which every
+/// argument is a value. `ArgumentParser` parses through these, and so does
+/// Sable.Configuration's command-line provider.
+///
+/// ```sable
+/// let tokens = ArgumentToken.read(["--out=site", "-v", "page.md", "--", "-x"])
+/// assert(tokens == [
+///     .Switch(dashes: "--", name: "out", value: "site"),
+///     .Switch(dashes: "-", name: "v", value: none),
+///     .Value("page.md"),
+///     .Separator,
+///     .Value("-x"),
+/// ])
+/// assert(tokens[0].text == "--out=site")
+/// ```
+@derive(Equatable, Debug)
+public union ArgumentToken {
+    /// A switch: its dashes (`--` or `-`), its name, and what follows an
+    /// `=` in it. `-abc` is one switch named "abc", which a parser may read
+    /// as three.
+    Switch(dashes: String, name: String, value: String?)
+    /// An argument that is not a switch: `-` alone among them.
+    Value(String)
+    /// `--`, the end of the switches.
+    Separator
+
+    /// The argument as it was written.
+    public var text: String => match self {
+        case .Switch(let dashes, let name, let value) => value == none ? dashes + name : dashes + name + "=" + value!
+        case .Value(let value)                        => value
+        case .Separator                               => "--"
+    }
+
+    /// The arguments read, in their order: those after `--` are values
+    /// whatever they look like.
+    public static fn read(_ arguments: String[>..]) -> ArgumentToken[>..] {
+        var tokens: ArgumentToken[>..] = []
+        var separated = false
+        for argument in arguments {
+            if separated {
+                tokens.append(.Value(argument))
+            } else if argument == "--" {
+                tokens.append(.Separator)
+                separated = true
+            } else if argument.hasPrefix("-") && argument != "-" {
+                let dashes = argument.hasPrefix("--") ? "--" : "-"
+                let written = argument.trimmingPrefix(dashes)
+                if let (name, value) = written.splitOnce("=") {
+                    tokens.append(.Switch(dashes: dashes, name: name, value: value))
+                } else {
+                    tokens.append(.Switch(dashes: dashes, name: written, value: none))
+                }
+            } else {
+                tokens.append(.Value(argument))
+            }
+        }
+        return tokens
+    }
+}

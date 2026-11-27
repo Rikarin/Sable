@@ -603,8 +603,16 @@ closure called with a region gives back what may be rooted there, so
 `fn withRegion<R>(_ body: (Region) -> R) -> R` instantiated with `R = Node&`
 is rejected in its body naming the instance; compiled once, its body is
 summarised as giving back a value rooted in its region, and each call with
-a reference among its types is rejected instead. An array of references
-holds what is appended, set or lent to it. Non-escape now deletes allocations rather than
+a reference among its types is rejected instead; a generic caller compiled
+once that passes its own metadata on is summarised the same, so the call
+is checked where the metadata becomes concrete. An array of references
+holds what is appended, set or lent to it, in a variable or a part of one.
+A closure given to a callee not known — a closure value, a protocol
+requirement, a method an override may change — is taken to be kept: a
+closure's type cannot say `@escaping`, and a conformance or an override
+may add it. A closure made of an `inout` parameter holds what the caller's
+variable held, and one that took a reference before its region's
+`reset()` may not be called after it. Non-escape now deletes allocations rather than
 ARC traffic (§3.7), from summaries of the same shape. Deferred: references
 in arrays, summaries serialised into a `.sbi` (the `.sbi` itself is
 Phase 5's), secondary diagnostic labels, and rule 5's specialisation by

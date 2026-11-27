@@ -336,6 +336,143 @@ public sealed class RegionTests {
         );
     }
 
+    // What a closure, a generic passed on, an array in a part of a variable
+    // or a reset leaves a closure holding is followed too (#312).
+    const string Routes = """
+                          fn passOn<T>(_ body: (Region) -> T) -> T {
+                              let x = withRegion(body)
+                              return x
+                          }
+
+                          class Holder2 {
+                              var kept: () -> Int = { 0 }
+                              fn keep(_ f: @escaping () -> Int) {
+                                  kept = f
+                              }
+                          }
+
+                          protocol Taker {
+                              fn take(_ f: () -> Int)
+                          }
+
+                          class KeepingTaker: Taker {
+                              var kept: () -> Int = { 0 }
+                              fn take(_ f: @escaping () -> Int) {
+                                  kept = f
+                              }
+                          }
+
+                          struct Bag {
+                              var items: Node&[>..]
+                          }
+
+                          struct Calls {
+                              var fs: (() -> Int)[>..]
+                          }
+
+                          fn put(_ list: inout Node&[>..], _ n: Node&) {
+                              list.append(n)
+                          }
+
+                          fn first(_ fs: inout (() -> Int)[>..]) -> () -> Int {
+                              return fs[0]
+                          }
+
+                          fn keepFirst(_ keeper: Keeper, _ fs: inout (() -> Int)[>..]) {
+                              keeper.kept = fs[0]
+                          }
+
+                          fn wrap(_ f: inout () -> Int) -> () -> Int {
+                              return { f() + 1 }
+                          }
+                          """;
+
+    const string InRegion = "region a {\n    let n = a.alloc(Node { value: 5, label: \"x\" })\n";
+
+    [Theory]
+    // A generic caller compiled once passes on the metadata it is given.
+    [InlineData(GenericsMode.Specialised, "let n = passOn { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(n.value)", "cannot return a reference rooted in region 'a' (as Test.withRegion<Node&>)")]
+    [InlineData(GenericsMode.Unspecialised, "let n = passOn { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(n.value)", "'Test.passOn<T>' would return a reference rooted in region 'a' (in 'Test.withRegion<R>')")]
+    // A closure given to a closure value, a protocol requirement or a method an override may change, may be kept.
+    [InlineData(GenericsMode.Specialised, "let h = Holder2()\nlet k: (() -> Int) -> () = h.keep\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept())", "and the closure called here may keep it past the call")]
+    [InlineData(GenericsMode.Unspecialised, "let h = Holder2()\nlet k: (() -> Int) -> () = h.keep\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept())", "and the closure called here may keep it past the call")]
+    [InlineData(GenericsMode.Specialised, "let t = KeepingTaker()\nlet taker: any Taker = t\n" + InRegion + "    taker.take({ n.value })\n}\nprint(t.kept())", "and the protocol requirement called here may keep it past the call")]
+    // An array in a field of a variable, appended to there or through 'inout'.
+    [InlineData(GenericsMode.Specialised, "var s = Bag(items: [])\n" + InRegion + "    s.items.append(n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Unspecialised, "var s = Bag(items: [])\n" + InRegion + "    s.items.append(n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Specialised, "var s = Bag(items: [])\n" + InRegion + "    put(&s.items, n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Specialised, "var c = Calls(fs: [])\n" + InRegion + "    c.fs.append({ n.value })\n}\nprint(c.fs[0]())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    // Closures in a variable given by address: given back, or kept.
+    [InlineData(GenericsMode.Specialised, "var fs: (() -> Int)[>..] = []\nvar g: () -> Int = { 0 }\n" + InRegion + "    fs.append({ n.value })\n    g = first(&fs)\n}\nprint(g())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Specialised, "let keeper = Keeper()\nvar fs: (() -> Int)[>..] = []\n" + InRegion + "    fs.append({ n.value })\n    keepFirst(keeper, &fs)\n}\nprint(keeper.kept())", "and 'Test.keepFirst' keeps it past the call")]
+    // A closure made of an 'inout' closure parameter, by a function or a closure.
+    [InlineData(GenericsMode.Specialised, "var h: () -> Int = { 0 }\nvar c: () -> Int = { 0 }\n" + InRegion + "    c = { n.value }\n    h = wrap(&c)\n}\nc = { 2 }\nprint(h())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Unspecialised, "var h: () -> Int = { 0 }\nvar c: () -> Int = { 0 }\n" + InRegion + "    c = { n.value }\n    h = wrap(&c)\n}\nc = { 2 }\nprint(h())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Specialised, "let g: (inout () -> Int) -> () -> Int = { (f: inout () -> Int) in return { f() + 1 } }\nvar h: () -> Int = { 0 }\nvar c: () -> Int = { 0 }\n" + InRegion + "    c = { n.value }\n    h = g(&c)\n}\nc = { 2 }\nprint(h())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    // A closure that took a reference before a reset.
+    [InlineData(GenericsMode.Specialised, "region pool {\n    let n = pool.alloc(Node { value: 1, label: \"x\" })\n    let f = { n.value }\n    pool.reset()\n    print(f())\n}", "this closure captured a reference into region 'pool', which is gone — the region was reset at line")]
+    [InlineData(GenericsMode.Unspecialised, "region pool {\n    let n = pool.alloc(Node { value: 1, label: \"x\" })\n    let f = { n.value }\n    pool.reset()\n    print(f())\n}", "this closure captured a reference into region 'pool', which is gone — the region was reset at line")]
+    public void NoRouteCarriesAReferenceOutOfItsRegion(GenericsMode mode, string body, string message) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Contains(message, Errors(Escapes + "\n" + Routes, body), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void WhatTheRoutesUseInsideTheRegionIsAllowed(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal(
+            "5\n6\n7\n1 5\n2\n6\n7\n9\n0 2\n1 2\n",
+            AssertAgree(
+                Program(
+                    Declarations + "\n" + Escapes + "\n" + Routes,
+                    """
+                        print(passOn { r in r.alloc(Node { value: 5, label: "x" }).value })
+                        print(passOn { r in r.alloc(Node { value: 6, label: "y" }).toOwned() }.value)
+                        let h = Holder2()
+                        let k: (() -> Int) -> () = h.keep
+                        let t = KeepingTaker()
+                        let taker: any Taker = t
+                        region a {
+                            let n = a.alloc(Node { value: 5, label: "x" })
+                            let seven = 7
+                            k({ seven })
+                            print(h.kept())
+                            var s = Bag(items: [])
+                            s.items.append(n)
+                            put(&s.items, n)
+                            taker.take({ 1 })
+                            print("\(t.kept()) \(s.items[1].value)")
+                            var fs: (() -> Int)[>..] = []
+                            fs.append({ n.value - 3 })
+                            print(first(&fs)())
+                            var c: () -> Int = { n.value }
+                            print(wrap(&c)() - 0)
+                            var calls = Calls(fs: [])
+                            calls.fs.append({ n.value + 2 })
+                            print(calls.fs[0]())
+                        }
+                        let keeper = Keeper()
+                        var heap: (() -> Int)[>..] = [{ 9 }]
+                        keepFirst(keeper, &heap)
+                        print(keeper.kept())
+                        region pool {
+                            let mk = { pool.alloc(Node { value: 2, label: "y" }).value }
+                            var f = { 0 }
+                            for i in 0..<2 {
+                                pool.reset()
+                                let n = pool.alloc(Node { value: i, label: "x" })
+                                f = { n.value }
+                                print("\(f()) \(mk())")
+                            }
+                        }
+                    """
+                )
+            ).Stdout
+        );
+    }
+
     // With SABLE_CHECK_REGIONS (runtime/references.c): what a reset gives
     // back is poisoned, and a value's guard bytes are checked as it goes.
     // Native only: the interpreter's region has no bytes to poison, and

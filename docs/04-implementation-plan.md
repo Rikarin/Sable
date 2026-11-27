@@ -1842,8 +1842,9 @@ the await it is at.
 **Measured** — the fourth stage, on an M1 Max (8+2 cores, 64 GB), loaded
 by other work as these ran, with `tools/bench/concurrency.sh` and
 `benchmarks/concurrency/compare/` (.NET 11's tasks, `dotnet run -c
-Release`; Swift 6.4's, `swiftc -O`; Go is not installed here, so no
-goroutines). A million tasks each sleeping a second (`sleepers.sb`) take
+Release`; Swift 6.4's, `swiftc -O`; Go is not installed here: its
+port, `compare/bench.go`, and the Go column of the library's
+`task-spawn` and `channel-bounded`, are the Benchmarks workflow's). A million tasks each sleeping a second (`sleepers.sb`) take
 1.46 s with no pool and 1.93 s on ten workers — the time is spawning
 them — and 1.07 GB at the peak, 1.04 KB a task: the task, its slab's first
 576-byte chunk inside it (896 bytes together), its `Task` object and its

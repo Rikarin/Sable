@@ -1,4 +1,4 @@
-# Sable against .NET, Rust and C (tools/bench/compare.py), the tables in the
+# Sable against .NET, Rust, C and Go (tools/bench/compare.py), the tables in the
 # run's summary and artifact (benchmarks/README.md says what their columns
 # are). What fails it is a benchmark that does not build or run, or a port
 # that computes something else; never a time: a shared runner's are too
@@ -34,7 +34,7 @@ env:
 
 jobs:
   compare:
-    name: Sable against .NET, Rust and C
+    name: Sable against .NET, Rust, C and Go
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -43,6 +43,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "11.0.x"
+
+      # A version named, so that one run's Go column compares with another's.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.4"
+          cache: false
 
       # rustc is in the runner's image.
       - name: Install clang
@@ -58,7 +64,7 @@ jobs:
         env:
           SABLE: src/Sable.Driver/bin/Release/net11.0/sable
           SAMPLES: ${{ inputs.samples || '15' }}
-        run: tools/bench/compare.py --samples "$SAMPLES" --require dotnet,rust,c --markdown benchmarks.md
+        run: tools/bench/compare.py --samples "$SAMPLES" --require dotnet,rust,c,go --markdown benchmarks.md
 
       - name: Report
         if: ${{ !cancelled() && steps.compare.outcome != 'skipped' }}

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Sable against .NET, Rust and C, where each has an equal.
+"""Sable against .NET, Rust, C and Go, where each has an equal.
 
     tools/bench/compare.py [--samples N] [--warm-up-ms N] [--sample-ms N] [--budget-ms N]
                            [--markdown FILE] [--require LANGUAGES] [name ...]
 
 A benchmark is a folder, benchmarks/<set>/<name>, with <name>.sb and the
-ports there are of it: <name>.cs, <name>.rs and <name>.c. The sets are
+ports there are of it: <name>.cs, <name>.rs, <name>.c and <name>.go. The sets are
 'library', the standard library's types and functions, each ported where a
 language's own standard library has an equal, and 'programs', the language.
 
@@ -23,7 +23,8 @@ collector's and its JIT's threads' in it, as they are its cost.)
 
 What an operation allocates is a table of its own: of every thread, the bytes
 and how many allocations, of which .NET says the bytes alone. Rust's and C's are
-counted by a build of the port apart, so that no time has the counting in it.
+counted by a build of the port apart, so that no time has the counting in it;
+Go's by its runtime (runtime.ReadMemStats), in a run of its own.
 
 A program's whole process is a table of its own: its start-up (programs/startup,
 which does nothing), and each of 'programs' run once, start to end, cold.
@@ -36,12 +37,12 @@ A benchmark without a port in a language is a dash in its column: one of
 the Sable program does; one that computes something else, or does not build
 or run, is reported in the tables and fails the script, after the rest have
 run. Being slower never does. Rust and C trap on integer overflow and check
-bounds, as Sable does.
+bounds, as Sable does; Go checks bounds but wraps on overflow.
 
 A name is 'map-int', or 'library/sort' where two sets have one. SABLE names
-the `sable` to use (else src/Sable.Driver is built); RUSTC and CC the other
+the `sable` to use (else src/Sable.Driver is built); RUSTC, CC and GO the other
 compilers. A compiler that is not there leaves its column empty, unless
---require (a comma-separated list: dotnet,rust,c) has it. --markdown appends
+--require (a comma-separated list: dotnet,rust,c,go) has it. --markdown appends
 the tables to a file, as for $GITHUB_STEP_SUMMARY.
 """
 
@@ -62,7 +63,8 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BENCHMARKS = ROOT / "benchmarks"
 DOTNET = BENCHMARKS / "support" / "dotnet"
-LANGUAGES = {"dotnet": ".NET", "rust": "Rust", "c": "C"}
+GO_SUPPORT = BENCHMARKS / "support" / "go" / "bench.go"
+LANGUAGES = {"dotnet": ".NET", "rust": "Rust", "c": "C", "go": "Go"}
 SETS = {"library": "Standard library", "programs": "Programs"}
 WHOLE_RUNS = 7
 # Under this, an allocated size is mostly the line a benchmark returns.
@@ -95,7 +97,7 @@ class Benchmark:
         # 'aes-gcm(64, 100000)', as the harness names a case.
         self.name = folder.name + case
         self.ports = {}
-        for language, extension in (("dotnet", "cs"), ("rust", "rs"), ("c", "c")):
+        for language, extension in (("dotnet", "cs"), ("rust", "rs"), ("c", "c"), ("go", "go")):
             port = folder / f"{folder.name}.{extension}"
             self.ports[language] = port if port.exists() else None
         self.ns = {}  # language -> processor nanoseconds an operation
@@ -162,11 +164,16 @@ class Runner:
         """The port's command, or that of it which counts: built the first time, as every case of it is one executable."""
         if language == "dotnet":
             return [self.tools["dotnet"], benchmark.key]
+        # Go's runtime counts what it allocates: the one build does both.
+        counting = counting and language != "go"
         path = self.scratch / f"{benchmark.group}-{benchmark.folder.name}-{language}{'-counting' if counting else ''}"
         if language == "sable":
             command = [self.tools["sable"], "build", benchmark.folder / f"{benchmark.folder.name}.sb", "-o", path]
         elif language == "rust":
             command = [self.tools["rust"], "--edition", "2021", "-C", "opt-level=3", "-C", "overflow-checks=on", "-A", "warnings", *(["--cfg", "bench_count"] if counting else []), benchmark.ports["rust"], "-o", path]
+        elif language == "go":
+            # The port and its harness, as files: no module is needed.
+            command = [self.tools["go"], "build", "-o", path, benchmark.ports["go"], GO_SUPPORT]
         else:
             command = [self.tools["c"], "-O2", "-pthread", *(["-DBENCH_COUNT"] if counting else []), benchmark.ports["c"], "-o", path, "-lm"]
         if path not in self.built:
@@ -189,7 +196,7 @@ class Runner:
                 check = fields[0].replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
         if not samples or check is None:
             raise Failure("measured nothing")
-        if language in ("rust", "c"):
+        if language in ("rust", "c", "go"):
             output = run_command([*self.executable(benchmark, language, counting=True), "--allocations"], cwd=self.scratch).stdout
             allocated = next((tuple(map(float, line.split("\t")[1:])) for line in output.splitlines() if line.startswith("allocated\t")), None)
             if allocated is None:
@@ -341,6 +348,7 @@ def main():
         "dotnet": shutil.which("dotnet"),
         "rust": shutil.which(os.environ.get("RUSTC", "rustc")),
         "c": shutil.which(os.environ.get("CC", "clang")),
+        "go": shutil.which(os.environ.get("GO", "go")),
     }
     for language, path in found.items():
         if path is None:
@@ -401,6 +409,7 @@ def main():
         "dotnet": lambda: ".NET SDK " + version([found["dotnet"], "--version"]),
         "rust": lambda: version([found["rust"], "--version"]),
         "c": lambda: version([found["c"], "--version"]),
+        "go": lambda: version([found["go"], "version"]),
     }
     about = [machine(), *(versions[x]() for x in languages)]
     notes = (
@@ -410,7 +419,7 @@ def main():
         "A dash is a benchmark with no port in that language."
     )
     print("; ".join(about) + f"\n{notes}")
-    page = ["## Sable against .NET, Rust and C", "", "; ".join(about), "", notes]
+    page = ["## Sable against .NET, Rust, C and Go", "", "; ".join(about), "", notes]
 
     for group, title in SETS.items():
         if chosen := [b for b in benchmarks if b.group == group]:
@@ -425,11 +434,11 @@ def main():
     def allocations(language):
         return lambda b: count(b.allocations[language]) if language in b.allocations else "—"
 
-    counted = [(title, allocations(language)) for language, title in (("sable", "Sable objects"), ("rust", "Rust allocations"), ("c", "C allocations")) if language in ["sable", *languages]]
+    counted = [(title, allocations(language)) for language, title in (("sable", "Sable objects"), ("rust", "Rust allocations"), ("c", "C allocations"), ("go", "Go allocations")) if language in ["sable", *languages]]
     note = (
         "What an operation allocates, of every thread: bytes, and how many objects or allocations, which .NET does not say. 'vs' is Sable's bytes over the other's, "
         f"so under 1 Sable allocates less; a dash where the other allocates nothing. The means are of those where both allocate more than {size(LEAST_BYTES)}. "
-        "Sable's and .NET's bytes have an object's header in them; Rust's and C's are those asked for, and C's without what its library allocates for itself. Sable's objects are without their buffers, which are in the bytes alone."
+        "Sable's and .NET's bytes have an object's header in them; Rust's and C's are those asked for, and C's without what its library allocates for itself; Go's are its runtime's count, goroutines' stacks not among them. Sable's objects are without their buffers, which are in the bytes alone."
     )
     for group, title in SETS.items():
         if chosen := [b for b in benchmarks if b.group == group and b.bytes]:

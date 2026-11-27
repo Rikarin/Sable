@@ -720,8 +720,9 @@ The pass that makes idiomatic code fast: a `class` that does not escape its
 frame becomes a stack value with no header and no refcount. Driven by the same
 summaries as 3.3.
 
-Status: done, keeping the header (`src/Sable.SIL/EscapeAnalysis.cs`); the
-count goes where nothing copies the object.
+Status: done (`src/Sable.SIL/EscapeAnalysis.cs`, `src/Sable.SIL/StackHeaders.cs`);
+the count goes where nothing copies the object, and the header where
+nothing reads it.
 A value escapes if it, or a copy, may be returned, thrown, stored anywhere
 but a local slot, put inside another value, captured, held weakly, or
 passed to a parameter that escapes or to a callee not known here; which
@@ -750,9 +751,24 @@ releases where it is, in order, freeing nothing, with no release counted
 (`sable_destroy_uncounted`, which traps if the count is not one). One
 copied is counted as any object is, and its last release does the same.
 An inline block that outgrows its room in the frame moves to the heap,
-where an uncounted destroy releases it as any. The header stays: the
-runtime's operations on arrays and inline blocks, a deinit and a method
-call read it. The JSON program loses
+where an uncounted destroy releases it as any. A closure made with such
+an object as its context, and a slot only ever holding such closures, are
+destroyed uncounted too. A class's object that nothing counts and nothing
+reads the header of is made with no header (`StackHeaders`): what reads
+it is a counted retain or release (a copy, a store over it), a call
+through the vtable, the runtime's destroy, a deinit that asks whether the
+initialiser finished, a debugger (a build with debug information keeps
+every header), and a callee that does any of these to a parameter — a
+summary per function, to a fixed point, of which parameters' headers it
+may read; a closure's code is such a callee of its context, and a closure
+passed on is followed into the callee. With no callee handed it, it is
+its fields alone, the header's bytes left out of the frame (all 16 on a
+64-bit target; on wasm32, whose header is 12, only when the first field
+is at 16, so that every field stays aligned as on the heap); handed to
+one, it is laid out whole, the header never written. Its destroy is its
+deinits and its fields' releases, inline, with no call to the runtime.
+Arrays and inline blocks keep their headers: the runtime's operations on
+them read the count and whether the block is still in the frame. The JSON program loses
 187 allocations; the order record of §3.8 loses all of them. A loop of
 100,000 turns that calls a closure capturing its counter, makes an object,
 and reads an array literal made 500,001 allocations and makes 1. Orders' four
@@ -1486,8 +1502,8 @@ in the frame. Not yet: hoisting a release out of a loop when the value it
 releases is not a `let` the loop borrows (the general case of docs/02
 §2.2's release hoisting and sinking); updating an entry in place rather
 than copying it out and back (words' remaining 400,000); the header of an
-uncounted object, which the runtime's operations on arrays and blocks, a
-deinit and a method call still read; a copy of an upcast of an object made
+array or inline block in the frame, which the runtime's operations on them
+read; a copy of an upcast of an object made
 in the function (shapes' boxes); and devirtualising a speculative call by
 profile rather than by class shape.
 

@@ -180,6 +180,19 @@ public static class TypeLayout {
     /// <summary>Where a field of an object is, from its start, the header's bytes among them.</summary>
     public static int FieldOffset(ClassType type, int field) => Object(type).Offsets[field + 3];
 
+    /// <summary>
+    ///     The bytes an object made in the frame with no header leaves out
+    ///     (<see cref="StackHeaders" />): the header's, as far as a multiple
+    ///     of the heap's alignment, so that every field stays as aligned as
+    ///     on the heap — all 16 of a 64-bit target's header; of wasm32's 12,
+    ///     16 when the first field is at 16, and otherwise none.
+    /// </summary>
+    public static int HeaderlessDropped(ClassType type) {
+        var layout = Object(type);
+        var first = type.Fields.Count > 0 ? layout.Offsets[3] : layout.Size;
+        return first / HeapAlign * HeapAlign;
+    }
+
     /// <summary>Where a field of a struct is, from its start.</summary>
     public static int FieldOffset(StructType type, int field) => Of(type).Offsets[PartIndex(type, field)];
 

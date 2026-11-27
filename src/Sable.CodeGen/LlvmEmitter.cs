@@ -128,6 +128,11 @@ public sealed partial class LlvmEmitter {
     HashSet<string>? _reachable;
     HashSet<ClassType>? _inherited;
 
+    /// <summary>Which parameters' headers each function may read (<see cref="StackHeaders" />), once a function makes an object in its frame.</summary>
+    IReadOnlyDictionary<string, bool[]>? _headerReaders;
+
+    IReadOnlyDictionary<string, bool[]> HeaderReaders => _headerReaders ??= StackHeaders.Summarise(_module!);
+
     /// <summary>
     ///     True for a class no other class inherits from, in a whole program;
     ///     one unit of a program compiled separately cannot know the others'.
@@ -148,6 +153,7 @@ public sealed partial class LlvmEmitter {
         // A specialised build that opens a Type has code compiled once too, which may make a generic class's object.
         module.UnspecialisedGenerics |= module.Functions.Exists(static f => f.IsUnspecialised);
         _inherited = null;
+        _headerReaders = null;
         TypeLayout.PointerBytes = _arch == "wasm32" ? 4 : 8;
         _checkExclusivity = module.CheckExclusivity;
         _debug?.Begin(module);
@@ -1609,6 +1615,50 @@ public sealed partial class LlvmEmitter {
     }
 
     /// <summary>
+    ///     What destroys an object made in the frame with no header
+    ///     (<see cref="StackHeaders" />), <paramref name="dropped" /> bytes of
+    ///     the header left out: as the class's destroy does, its deinits and
+    ///     then its fields, last first — its initialiser finished, as only
+    ///     one that cannot throw makes an object in the frame. Null when that
+    ///     is nothing.
+    /// </summary>
+    string? HeaderlessDestroy(ClassType type, int dropped) {
+        var deinits = new List<string>();
+        for (var level = type; level is not null; level = level.Superclass) {
+            if (level.Deinit is { } deinit) {
+                deinits.Add(deinit);
+            }
+        }
+
+        if (deinits.Count == 0 && type.Fields.TrueForAll(static f => f.Type.IsTrivial)) {
+            return null;
+        }
+
+        var name = $"@\"sable.headerless.{type.Name}.{dropped}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var body = new StringBuilder($"define internal void {name}(ptr %o) {{\nentry:\n");
+        foreach (var deinit in deinits) {
+            body.Append($"  call void @{Global(deinit)}(ptr %o)\n");
+        }
+
+        var layout = ObjectLayout(type);
+        for (var i = type.Fields.Count - 1; i >= 0; i--) {
+            if (type.Fields[i].Type.IsTrivial) {
+                continue;
+            }
+
+            body.Append($"  %a{i} = getelementptr inbounds i8, ptr %o, i64 {layout.Offsets[i + 3] - dropped}\n");
+            OwnershipAt(body, Witnessing.Destroy, type.Fields[i].Type, $"%a{i}", $"%f{i}");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return name;
+    }
+
+    /// <summary>
     ///     A class's metadata: the function that destroys an object — its
     ///     <c>deinit</c>, then its fields, last first (docs/02 §2.2).
     /// </summary>
@@ -2106,6 +2156,40 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>Instructions an earlier one has written already, as part of its own.</summary>
         readonly HashSet<SilInstruction> _folded = [];
+
+        /// <summary>
+        ///     The objects this function makes in its frame with no header. A
+        ///     debugger reads an object's header for its type and count, so a
+        ///     build with debug information keeps every one.
+        /// </summary>
+        HeaderlessObjects Headerless => _headerless ??= module._debug is null ? StackHeaders.Find(function, () => module.HeaderReaders) : HeaderlessObjects.None;
+
+        HeaderlessObjects? _headerless;
+
+        /// <summary>The bytes of its header an object made with none leaves out of the frame: none when a callee is handed it, which expects the object whole.</summary>
+        int Dropped(AllocRefInst alloc) => Headerless.Objects.TryGetValue(alloc, out var lent) && !lent ? TypeLayout.HeaderlessDropped(alloc.ClassType) : 0;
+
+        /// <summary>The uncounted destroy of a closure: of the object its context is, which nothing else holds.</summary>
+        void DestroyContext(SilInstruction destroy, string closure) {
+            var context = Fresh();
+            Line($"{context} = extractvalue {{ ptr, ptr }} {closure}, 1");
+            if (!DestroyHeaderless(destroy, context)) {
+                Line($"call void @sable_destroy_uncounted(ptr {context})");
+            }
+        }
+
+        /// <summary>The uncounted destroy of an object with no header: its deinits and its fields', in place.</summary>
+        bool DestroyHeaderless(SilInstruction destroy, string pointer) {
+            if (!Headerless.Destroys.TryGetValue(destroy, out var alloc)) {
+                return false;
+            }
+
+            if (module.HeaderlessDestroy(alloc.ClassType, Dropped(alloc)) is { } helper) {
+                Line($"call void {helper}(ptr {pointer})");
+            }
+
+            return true;
+        }
 
         /// <summary>
         ///     The <c>share_into_at</c> that follows a change to an array in an
@@ -3853,16 +3937,16 @@ public sealed partial class LlvmEmitter {
 
                 // The only reference to an object made in the frame: destroyed where it is, uncounted.
                 case DestroyValueInst { Uncounted: true } destroy when Type(destroy.Value.Type) == "ptr":
-                    Line($"call void @sable_destroy_uncounted(ptr {Name(destroy.Value)})");
+                    if (!DestroyHeaderless(destroy, Name(destroy.Value))) {
+                        Line($"call void @sable_destroy_uncounted(ptr {Name(destroy.Value)})");
+                    }
+
                     return;
 
                 // A closure whose context is such an object: the context so destroyed.
-                case DestroyValueInst { Uncounted: true, Value.Type: ThickFunctionType } destroy: {
-                    var context = Fresh();
-                    Line($"{context} = extractvalue {{ ptr, ptr }} {Name(destroy.Value)}, 1");
-                    Line($"call void @sable_destroy_uncounted(ptr {context})");
+                case DestroyValueInst { Uncounted: true, Value.Type: ThickFunctionType } destroy:
+                    DestroyContext(destroy, Name(destroy.Value));
                     return;
-                }
 
                 case DestroyValueInst destroy:
                     Own(false, destroy.Value.Type, Name(destroy.Value));
@@ -3877,8 +3961,12 @@ public sealed partial class LlvmEmitter {
                     var old = Fresh();
                     Line($"{old} = load {Type(type)}, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}{TbaaAt(destroy.Address, type)}");
                     Line($"store {Type(type)} zeroinitializer, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}{TbaaAt(destroy.Address, type)}");
-                    if (destroy.Uncounted && Type(type) == "ptr") {
-                        Line($"call void @sable_destroy_uncounted(ptr {old})");
+                    if (destroy.Uncounted && type is ThickFunctionType) {
+                        DestroyContext(destroy, old);
+                    } else if (destroy.Uncounted && Type(type) == "ptr") {
+                        if (!DestroyHeaderless(destroy, old)) {
+                            Line($"call void @sable_destroy_uncounted(ptr {old})");
+                        }
                     } else {
                         Own(false, type, old);
                     }
@@ -3951,6 +4039,23 @@ public sealed partial class LlvmEmitter {
                         return;
                     }
 
+                    // In the frame with no header: its fields alone where no
+                    // callee is handed it, else the object whole, the header
+                    // never written. Its fields start empty.
+                    if (alloc.OnStack && Headerless.Objects.ContainsKey(alloc)) {
+                        var dropped = Dropped(alloc);
+                        var whole = ObjectLayout(alloc.ClassType).Size;
+                        var start = dropped > 0 ? 0 : TypeLayout.ObjectHeaderSize;
+                        _names[alloc] = Scratch(dropped > 0 ? $"[{Math.Max(1, whole - dropped)} x i8]" : ObjectType(alloc.ClassType), HeapAlign);
+                        if (whole - dropped - start > 0) {
+                            var empty = Fresh();
+                            Line($"{empty} = getelementptr inbounds i8, ptr {_names[alloc]}, i64 {start}");
+                            Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {empty}, i8 0, i64 {whole - dropped - start}, i1 false)");
+                        }
+
+                        return;
+                    }
+
                     if (alloc.OnStack) {
                         // In the frame: the header made there, freed with it.
                         // Aligned as the heap's blocks are, which the layout assumes.
@@ -3977,6 +4082,12 @@ public sealed partial class LlvmEmitter {
                     // Where its metadata, made at run time, says (#297).
                     if (classType.IsLaidOutAtRunTime) {
                         Line($"{name} = call ptr @sable_field_address(ptr {Name(element.Reference)}, i64 {element.Field}, ptr {OpaqueMetadata(classType)})");
+                        return;
+                    }
+
+                    // One with no header, its fields alone: where they are from the first byte kept.
+                    if (Headerless.Holders.TryGetValue(element.Reference, out var headerless) && Dropped(headerless) is > 0 and var dropped) {
+                        Line($"{name} = getelementptr inbounds i8, ptr {Name(element.Reference)}, i64 {ObjectLayout(classType).Offsets[element.Field + 3] - dropped}");
                         return;
                     }
 

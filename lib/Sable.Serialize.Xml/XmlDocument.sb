@@ -1,0 +1,103 @@
+module Sable.Serialize.Xml
+
+/// A whole document: its declaration, if it has one, its DOCTYPE's name
+/// and internal subset, and its children — the root element, with the
+/// comments and processing instructions around it. Text of only white
+/// space outside the root element is not kept.
+///
+/// ```sable
+/// let document = try! Xml.parse("<?xml version='1.0'?>\n<!-- hi --><a/>")
+/// assert(document.hasDeclaration && document.children.count == 2)
+/// assert(document.root.name == "a")
+/// assert(try! Xml.print(document) == "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!-- hi --><a/>")
+/// ```
+public final class XmlDocument {
+    /// Whether it starts with a declaration, and the declaration's parts.
+    public var hasDeclaration: Bool = false
+    public var version: String = "1.0"
+    public var encoding: String = "UTF-8"
+    public var standalone: Bool? = none
+    /// The DOCTYPE's name, if it has one, and its internal subset as written.
+    public var documentType: String? = none
+    public var internalSubset: String = ""
+    /// The DOCTYPE's public and system identifiers; "" for none.
+    public var publicId: String = ""
+    public var systemId: String = ""
+    // How many children come before the DOCTYPE.
+    var documentTypeAt: Int = 0
+    /// The root element, and the comments and processing instructions
+    /// before and after it.
+    public var children: XmlNode[>..] = []
+
+    /// A document of the one element.
+    public init(root: XmlElement) {
+        children = [.Element(root)]
+    }
+
+    init() { }
+
+    /// The root element.
+    public var root: XmlElement {
+        get {
+            for child in children {
+                if let element = child.element {
+                    return element
+                }
+            }
+            fatalError("a document with no root element")
+        }
+    }
+
+    /// The document the reader reads, from where it is to the end.
+    ///
+    /// ```sable
+    /// let document = try! XmlDocument.read(from: XmlReader("<a><b>1</b></a>"))
+    /// assert(document.root.element("b")!.text == "1")
+    /// ```
+    public static fn read(from reader: XmlReader) throws(XmlError) -> XmlDocument {
+        let document = XmlDocument()
+        var openNames: XmlElement[>..] = []
+        while let kind = try reader.next() {
+            var node: XmlNode? = none
+            match kind {
+                case .Declaration => {
+                    document.hasDeclaration = true
+                    document.version = reader.version
+                    document.encoding = reader.encoding
+                    document.standalone = reader.standalone
+                }
+                case .DocumentType => {
+                    document.documentType = reader.name
+                    document.internalSubset = reader.value
+                    document.publicId = reader.publicId
+                    document.systemId = reader.systemId
+                    document.documentTypeAt = document.children.count
+                }
+                case .StartElement => {
+                    let element = XmlElement(reader.name, namespace: reader.namespace)
+                    element.attributes = reader.attributes
+                    if openNames.isEmpty {
+                        document.children.append(.Element(element))
+                    } else {
+                        openNames[openNames.count - 1].children.append(.Element(element))
+                    }
+                    openNames.append(element)
+                }
+                case .EndElement            => { _ = openNames.removeLast() }
+                case .Text                  => { node = .Text(reader.value) }
+                case .CData                 => { node = .CData(reader.value) }
+                case .Comment               => { node = .Comment(reader.value) }
+                case .ProcessingInstruction => { node = .ProcessingInstruction(target: reader.name, data: reader.value) }
+                case .EntityReference       => { node = .EntityReference(reader.name) }
+            }
+            if let node = node {
+                if openNames.isEmpty {
+                    document.children.append(node)
+                } else {
+                    openNames[openNames.count - 1].children.append(node)
+                }
+            }
+        }
+        return document
+    }
+}

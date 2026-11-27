@@ -1,0 +1,27 @@
+module Sable.Serialize.Xml
+
+/// Why a text is not well-formed XML, or not XML these options take, and
+/// where: the line and column from 1, counted in characters, of the
+/// document's text (an error inside an entity's text is at the reference).
+///
+/// ```sable
+/// do {
+///     _ = try Xml.parse("<a>\n  <b></a>")
+///     assert(false)
+/// } catch {
+///     assert(error.description() == "line 2, column 6: </a> where </b> is wanted")
+/// }
+/// ```
+@derive(Equatable, Debug)
+public struct XmlError: Error {
+    /// Where, from 1; both 0 for an error of no place in the text.
+    public let line: Int
+    public let column: Int
+    /// What is wrong there.
+    public let reason: String
+
+    /// Where, and what is wrong there.
+    public fn description() -> String {
+        return line == 0 ? reason : "line \(line), column \(column): \(reason)"
+    }
+}

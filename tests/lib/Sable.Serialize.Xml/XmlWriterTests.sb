@@ -1,0 +1,157 @@
+module XmlWriterTests
+
+// XmlWriter (Sable.Serialize.Xml): run with
+//     tools/stdlib-coverage.sh Sable.Serialize.Xml
+
+import Sable.Serialize.Xml
+import Sable.Testing
+
+fn written(_ write: (XmlWriter) throws(XmlError) -> Void, _ options: XmlPrintOptions = XmlPrintOptions()) -> String {
+    let writer = XmlWriter(options)
+    do {
+        try write(writer)
+        return try writer.finish()
+    } catch {
+        return "error " + error.description()
+    }
+}
+
+@test
+fn textAndAttributesAreEscaped() {
+    let text = written({ w in
+        try w.startElement("a")
+        try w.attribute("v", "<\"&'>\t\n\r")
+        try w.text("<&>\"'\r")
+        try w.endElement()
+    })
+    expect(text == "<a v=\"&lt;&quot;&amp;'>&#x9;&#xA;&#xD;\">&lt;&amp;&gt;\"'&#xD;</a>", text)
+    let reader = XmlReader(text)
+    _ = try! reader.next()
+    expect(reader.attribute("v") == "<\"&'>\t\n\r")
+    _ = try! reader.next()
+    expect(reader.value == "<&>\"'\r")
+}
+
+@test
+fn everyKindOfNodeIsWritten() {
+    let text = written({ w in
+        try w.declaration(standalone: true)
+        try w.documentType("a", internalSubset: "<!ENTITY e 'x'>")
+        try w.comment(" c ")
+        try w.processingInstruction("pi", "d")
+        try w.startElement("a")
+        try w.cdata("x]]>y")
+        try w.entityReference("e")
+        try w.processingInstruction("q")
+        try w.endElement()
+    })
+    expect(text == "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><!DOCTYPE a [<!ENTITY e 'x'>]><!-- c --><?pi d?><a><![CDATA[x]]]]><![CDATA[>y]]>&e;<?q?></a>", text)
+    let document = try! Xml.parse(text)
+    expect(document.root.text == "x]]>yx")
+}
+
+@test
+fn namespacesAreDeclaredWhereTheyAreNotBound() {
+    let text = written({ w in
+        try w.startElement("a", namespace: "urn:a")
+        try w.startElement("b", namespace: "urn:a")
+        try w.attribute("p:x", "1", namespace: "urn:p")
+        try w.attribute("p:y", "2", namespace: "urn:p")
+        try w.endElement()
+        try w.startElement("c")
+        try w.endElement()
+        try w.endElement()
+    })
+    expect(text == "<a xmlns=\"urn:a\"><b xmlns:p=\"urn:p\" p:x=\"1\" p:y=\"2\"/><c/></a>", text)
+}
+
+@test
+fn indentationLeavesTextAsItIs() {
+    let text = written({ w in
+        try w.startElement("a")
+        try w.startElement("b")
+        try w.text("t")
+        try w.startElement("i")
+        try w.endElement()
+        try w.endElement()
+        try w.comment("c")
+        try w.startElement("d")
+        try w.endElement()
+        try w.endElement()
+    }, XmlPrintOptions(indent: "\t"))
+    expect(text == "<a>\n\t<b>t<i/></b>\n\t<!--c-->\n\t<d/>\n</a>", text)
+}
+
+@test(arguments: [
+    (0, "error '1a' is not a name"),
+    (1, "error a second root element, <b>"),
+    (2, "error the attribute x twice"),
+    (3, "error the attribute x after the start tag"),
+    (4, "error a comment that holds '--' or ends with '-'"),
+    (5, "error 'xml' is not a processing instruction's target"),
+    (6, "error a processing instruction's data that holds '?>'"),
+    (7, "error text outside the root element"),
+    (8, "error <a> is not ended"),
+    (9, "error an end with no element open"),
+    (10, "error the control character 1, which XML does not have"),
+    (11, "error the attribute x in a namespace with no prefix"),
+    (12, "error the prefix 'p' cannot be bound to ''"),
+    (13, "error a declaration after the start"),
+    (14, "error a DOCTYPE after the root element"),
+    (15, "error CDATA outside the root element"),
+    (16, "error a reference outside the root element"),
+    (17, "error the control character 2, which XML does not have"),
+])
+fn whatIsNotWellFormedIsNotWritten(_ which: Int, _ message: String) {
+    let text = written({ w in
+        match which {
+            case 0 => try w.startElement("1a")
+            case 1 => {
+                try w.startElement("a")
+                try w.endElement()
+                try w.startElement("b")
+            }
+            case 2 => {
+                try w.startElement("a")
+                try w.attribute("x", "1")
+                try w.attribute("x", "2")
+            }
+            case 3 => {
+                try w.startElement("a")
+                try w.text("t")
+                try w.attribute("x", "1")
+            }
+            case 4 => try w.comment("a--b")
+            case 5 => try w.processingInstruction("xml", "")
+            case 6 => try w.processingInstruction("p", "?>")
+            case 7 => try w.text("t")
+            case 8 => try w.startElement("a")
+            case 9 => try w.endElement()
+            case 10 => {
+                try w.startElement("a")
+                try w.text("\u{1}")
+            }
+            case 11 => {
+                try w.startElement("a")
+                try w.attribute("x", "1", namespace: "urn:x")
+            }
+            case 12 => {
+                try w.startElement("a")
+                try w.declareNamespace("p", "")
+            }
+            case 13 => {
+                try w.startElement("a")
+                try w.declaration()
+            }
+            case 14 => {
+                try w.startElement("a")
+                try w.endElement()
+                try w.documentType("a")
+            }
+            case 15 => try w.cdata("x")
+            case 16 => try w.entityReference("e")
+            default => try w.comment("\u{2}")
+        }
+    })
+    expect(text == message, text)
+}

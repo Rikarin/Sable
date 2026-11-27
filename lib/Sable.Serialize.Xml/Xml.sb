@@ -1,0 +1,124 @@
+module Sable.Serialize.Xml
+
+import Sable.Serialize
+
+/// XML 1.0 with Namespaces (docs/06 §6.4): a document read as nodes
+/// (XmlReader) or as a tree (XmlDocument, XmlElement), written by an
+/// XmlWriter, and Serializable values to XML and back. .NET's `System.Xml`,
+/// Swift's `XMLParser`, Rust's `quick-xml`.
+///
+/// It is safe to read what anyone wrote: an external entity is never
+/// fetched, and XmlOptions bounds how deep elements and entities nest and
+/// how much text entities stand for.
+///
+/// How a Serializable value is written (XmlEncoder): a struct is an
+/// element of its type's name, each field a child element of the field's
+/// name — or an attribute, for a field renamed `@name`, or the element's
+/// text, for one renamed `#text`. A scalar is text; a sequence an element
+/// of `item`s; a map an element of `entry`s, each with its `key`; a case
+/// that carries nothing its name as text, and one that does an element of
+/// its name around its payload; an optional's none no element at all.
+///
+/// ```sable
+/// @derive(Serializable)
+/// struct Server {
+///     @serialize(rename: "@name")
+///     var name: String
+///     var ports: Int[>..]
+/// }
+/// let text = try! Xml.encode(Server { name: "on", ports: [80, 443] })
+/// assert(text == "<Server name=\"on\"><ports><item>80</item><item>443</item></ports></Server>")
+/// assert(try! Xml.decode(Server.self, from: text).ports[1] == 443)
+/// ```
+public struct Xml {
+    // ---- Serializable values ---------------------------------------------
+
+    /// The value as an XML document, its root element named `root` or, for
+    /// a struct, after its type.
+    public static fn encode<T: Serializable>(_ value: T, root: String? = none, _ options: XmlPrintOptions = XmlPrintOptions()) throws(SerializeError) -> String {
+        let encoder = XmlEncoder(root: root, options)
+        try value.encode(to: encoder)
+        return try encoder.text()
+    }
+
+    /// The value of the type the document's root element holds.
+    public static fn decode<T: Serializable>(_ type: T.Type, from text: String, _ options: XmlOptions = XmlOptions()) throws(SerializeError) -> T {
+        return try T.decode(from: try XmlDecoder.parse(text, options))
+    }
+
+    // ---- Documents -------------------------------------------------------
+
+    /// The document the text is.
+    public static fn parse(_ text: String, _ options: XmlOptions = XmlOptions()) throws(XmlError) -> XmlDocument {
+        return try XmlDocument.read(from: XmlReader(text, options))
+    }
+
+    /// The document the bytes are, in UTF-8, UTF-16, US-ASCII or ISO-8859-1.
+    public static fn parse(bytes: U8[>..], _ options: XmlOptions = XmlOptions()) throws(XmlError) -> XmlDocument {
+        return try XmlDocument.read(from: try XmlReader(bytes: bytes, options))
+    }
+
+    /// The document as XML.
+    public static fn print(_ document: XmlDocument, _ options: XmlPrintOptions = XmlPrintOptions()) throws(XmlError) -> String {
+        let writer = XmlWriter(options)
+        if document.hasDeclaration || options.declaration {
+            try writer.declaration(standalone: document.standalone)
+        }
+        var at = 0
+        for child in document.children {
+            if at == document.documentTypeAt {
+                if let name = document.documentType {
+                    try writer.documentType(name, publicId: document.publicId, systemId: document.systemId, internalSubset: document.internalSubset)
+                }
+            }
+            try Xml.write(child, to: writer)
+            at += 1
+        }
+        return try writer.finish()
+    }
+
+    /// The element as XML.
+    public static fn print(_ element: XmlElement, _ options: XmlPrintOptions = XmlPrintOptions()) throws(XmlError) -> String {
+        let writer = XmlWriter(options)
+        if options.declaration {
+            try writer.declaration()
+        }
+        try Xml.write(element, to: writer)
+        return try writer.finish()
+    }
+
+    static fn write(_ node: XmlNode, to writer: XmlWriter) throws(XmlError) {
+        match node {
+            case .Element(let element)                        => try Xml.write(element, to: writer)
+            case .Text(let text)                              => try writer.text(text)
+            case .CData(let text)                             => try writer.cdata(text)
+            case .Comment(let text)                           => try writer.comment(text)
+            case .ProcessingInstruction(let target, let data) => try writer.processingInstruction(target, data)
+            case .EntityReference(let name)                   => try writer.entityReference(name)
+        }
+    }
+
+    /// The element written, its namespace declared where its attributes
+    /// do not declare it.
+    static fn write(_ element: XmlElement, to writer: XmlWriter) throws(XmlError) {
+        try writer.startElement(element.name)
+        for attribute in element.attributes {
+            if attribute.isNamespaceDeclaration && attribute.namespace == xmlNamespaceXmlns {
+                try writer.declareNamespace(attribute.name == "xmlns" ? "" : attribute.localName, attribute.value)
+            }
+        }
+        let bound = writer.lookup(element.prefix)
+        if element.namespace.isEmpty ? bound != none && bound != "" : bound != element.namespace {
+            try writer.declareNamespace(element.prefix, element.namespace)
+        }
+        for attribute in element.attributes {
+            if !(attribute.isNamespaceDeclaration && attribute.namespace == xmlNamespaceXmlns) {
+                try writer.attribute(attribute.name, attribute.value, namespace: attribute.namespace.isEmpty ? none : attribute.namespace)
+            }
+        }
+        for child in element.children {
+            try Xml.write(child, to: writer)
+        }
+        try writer.endElement()
+    }
+}

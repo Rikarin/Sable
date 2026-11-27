@@ -1,0 +1,44 @@
+module Sable.Serialize.Xml
+
+/// What a document may ask of its XmlReader: whether names are read with
+/// namespaces, and the bounds that make it safe to read what anyone wrote.
+/// An entity's text is read where it is referred to, so the bounds on
+/// entities are what stop a "billion laughs"; an external entity is never
+/// fetched.
+///
+/// ```sable
+/// let laughs = "<!DOCTYPE a [<!ENTITY l 'ha'><!ENTITY l2 '&l;&l;&l;&l;'><!ENTITY l3 '&l2;&l2;&l2;&l2;'>]><a>&l3;</a>"
+/// assert((try? Xml.parse(laughs, XmlOptions(maxEntityExpansion: 20))) == none)
+/// assert(try! Xml.parse(laughs).root.text.utf8Count == 32)
+/// ```
+public struct XmlOptions {
+    /// Whether names are read as Namespaces in XML 1.0 has them: a prefix
+    /// bound by `xmlns:p`, its namespace each element's and attribute's.
+    public var namespaces: Bool
+    /// Whether text of nothing but white space is left out.
+    public var ignoresWhitespace: Bool
+    /// Whether a document may have a DOCTYPE at all.
+    public var allowsDocumentType: Bool
+    /// How deep elements may nest.
+    public var maxDepth: Int
+    /// How deep entities' references may nest, each in another's text.
+    public var maxEntityDepth: Int
+    /// How many bytes of entities' text the document may read in all.
+    public var maxEntityExpansion: Int
+
+    public init(
+        namespaces: Bool = true,
+        ignoresWhitespace: Bool = false,
+        allowsDocumentType: Bool = true,
+        maxDepth: Int = 1024,
+        maxEntityDepth: Int = 16,
+        maxEntityExpansion: Int = 1000000
+    ) {
+        self.namespaces = namespaces
+        self.ignoresWhitespace = ignoresWhitespace
+        self.allowsDocumentType = allowsDocumentType
+        self.maxDepth = maxDepth
+        self.maxEntityDepth = maxEntityDepth
+        self.maxEntityExpansion = maxEntityExpansion
+    }
+}

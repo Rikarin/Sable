@@ -1,0 +1,30 @@
+module Sable.Serialize.Xml
+
+/// A child of an XmlElement or an XmlDocument: an element, text, a CDATA
+/// section, a comment, a processing instruction or a reference to an
+/// entity not read.
+///
+/// ```sable
+/// let root = try! Xml.parse("<a>x<!--c--><b/></a>").root
+/// assert(root.children.count == 3)
+/// assert(root.children[2].element!.name == "b")
+/// ```
+public union XmlNode {
+    Element(XmlElement)
+    Text(String)
+    CData(String)
+    Comment(String)
+    ProcessingInstruction(target: String, data: String)
+    /// A reference to an entity the reader did not read.
+    EntityReference(String)
+
+    /// The element, if it is one.
+    public var element: XmlElement? {
+        get {
+            return match self {
+                case .Element(let element) => element
+                default                    => none
+            }
+        }
+    }
+}

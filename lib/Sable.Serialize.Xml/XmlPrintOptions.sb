@@ -1,0 +1,23 @@
+module Sable.Serialize.Xml
+
+/// How an XmlWriter writes: what it indents with, if anything, and whether
+/// `Xml.encode` starts with a declaration.
+///
+/// ```sable
+/// let root = XmlElement("a")
+/// root.append(XmlElement("b"))
+/// assert(try! Xml.print(root, XmlPrintOptions(indent: "  ")) == "<a>\n  <b/>\n</a>")
+/// ```
+public struct XmlPrintOptions {
+    /// What each level of elements is indented with, on a line of its own;
+    /// "" writes no line breaks. An element that holds text is written as
+    /// it is, so the text stays the same.
+    public var indent: String
+    /// Whether a document starts with `<?xml version="1.0" encoding="UTF-8"?>`.
+    public var declaration: Bool
+
+    public init(indent: String = "", declaration: Bool = false) {
+        self.indent = indent
+        self.declaration = declaration
+    }
+}

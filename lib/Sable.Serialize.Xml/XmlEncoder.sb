@@ -1,0 +1,232 @@
+module Sable.Serialize.Xml
+
+import Sable.Serialize
+import Sable.Text
+
+let xmlNamespaceXsi = "http://www.w3.org/2001/XMLSchema-instance"
+
+/// The Encoder that writes XML, as `Xml` says: a struct as an element of
+/// its fields, a field renamed `@name` as an attribute and one renamed
+/// `#text` as the element's text, a sequence as `item`s, a map as
+/// `entry`s with their `key`s, bytes as base64, a float as XML Schema has
+/// it (`INF`, `-INF`, `NaN`), an optional's none as nothing, and null
+/// elsewhere as `xsi:nil="true"`. What `Xml.encode` uses.
+///
+/// ```sable
+/// let encoder = XmlEncoder(root: "point")
+/// try! encoder.beginStruct("Point", count: 2)
+/// try! encoder.encodeField("@x")
+/// try! encoder.encodeInt(1)
+/// try! encoder.encodeField("label")
+/// try! encoder.encodeString("a < b")
+/// try! encoder.endStruct()
+/// assert(try! encoder.text() == "<point x=\"1\"><label>a &lt; b</label></point>")
+/// ```
+public final class XmlEncoder: Encoder {
+    let options: XmlPrintOptions
+    let rootName: String?
+    var root: XmlElement? = none
+    var stack: XmlElement[>..] = []
+    // For each element enter: whether it is a sequence's, and whether it is
+    // the one around it, flattened into it.
+    var sequences: Bool[>..] = []
+    var flattened: Bool[>..] = []
+    var flattening: Bool = false
+    var pendingName: String? = none
+    var pendingKey: String? = none
+    var pendingAttribute: String? = none
+    var pendingText: Bool = false
+
+    /// An encoder whose root element is named `root`, or after the struct
+    /// it writes (`value` for anything else).
+    public init(root: String? = none, _ options: XmlPrintOptions = XmlPrintOptions()) {
+        self.rootName = root
+        self.options = options
+    }
+
+    /// The XML written.
+    public fn text() throws(SerializeError) -> String {
+        guard let root = root else {
+            throw SerializeError.InvalidValue(path: "$", reason: "nothing was written")
+        }
+        do {
+            return try Xml.print(root, options)
+        } catch {
+            throw SerializeError.InvalidValue(path: "$", reason: error.description())
+        }
+    }
+
+    // A new element for the value written next.
+    fn element(_ fallback: String) throws(SerializeError) -> XmlElement {
+        if flattening {
+            throw SerializeError.InvalidValue(path: "$", reason: "only a struct or a map can be flattened")
+        }
+        if pendingAttribute != none || pendingText {
+            throw SerializeError.InvalidValue(path: "$", reason: "an attribute or text that is not a scalar")
+        }
+        var name = fallback
+        if let pending = pendingName {
+            name = pending
+        } else if stack.isEmpty {
+            name = rootName ?? fallback
+        } else if sequences[sequences.count - 1] {
+            name = "item"
+        }
+        pendingName = none
+        let made = XmlElement(name)
+        if let key = pendingKey {
+            made.setAttribute("key", key)
+            pendingKey = none
+        }
+        if stack.isEmpty {
+            if root != none {
+                throw SerializeError.InvalidValue(path: "$", reason: "a second root value")
+            }
+            root = made
+        } else {
+            stack[stack.count - 1].append(made)
+        }
+        return made
+    }
+
+    fn scalar(_ text: String) throws(SerializeError) {
+        if let attribute = pendingAttribute {
+            stack[stack.count - 1].setAttribute(attribute, text)
+            pendingAttribute = none
+            return
+        }
+        if pendingText {
+            stack[stack.count - 1].append(text: text)
+            pendingText = false
+            return
+        }
+        let made = try element("value")
+        if !text.isEmpty {
+            made.append(text: text)
+        }
+    }
+
+    fn enter(_ fallback: String, sequence: Bool) throws(SerializeError) {
+        if flattening && !sequence {
+            flattening = false
+            stack.append(stack[stack.count - 1])
+            flattened.append(true)
+        } else {
+            stack.append(try element(fallback))
+            flattened.append(false)
+        }
+        sequences.append(sequence)
+    }
+
+    fn close() {
+        _ = stack.removeLast()
+        _ = sequences.removeLast()
+        _ = flattened.removeLast()
+    }
+
+    /// Nothing, for a field; an element of `xsi:nil="true"` elsewhere.
+    public fn encodeNull() throws(SerializeError) {
+        if pendingName != none && pendingKey == none || pendingAttribute != none || pendingText {
+            pendingName = none
+            pendingAttribute = none
+            pendingText = false
+            return
+        }
+        let made = try element("value")
+        made.setAttribute("xmlns:xsi", xmlNamespaceXsi, namespace: xmlNamespaceXmlns)
+        made.setAttribute("xsi:nil", "true", namespace: xmlNamespaceXsi)
+    }
+
+    public fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try scalar(value ? "true" : "false")
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        try scalar("\(value)")
+    }
+
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        try scalar("\(value)")
+    }
+
+    /// A number, `INF`, `-INF` or `NaN`.
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        if value.isNaN {
+            try scalar("NaN")
+        } else if !value.isFinite {
+            try scalar(value < 0.0 ? "-INF" : "INF")
+        } else {
+            try scalar("\(value)")
+        }
+    }
+
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        try scalar(value)
+    }
+
+    /// Bytes, as base64.
+    public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        try scalar(Base64.encode(value))
+    }
+
+    public fn beginSequence(count: Int?) throws(SerializeError) {
+        try enter("value", sequence: true)
+    }
+
+    public fn endSequence() throws(SerializeError) {
+        close()
+    }
+
+    public fn beginMap(count: Int?) throws(SerializeError) {
+        try enter("value", sequence: false)
+    }
+
+    /// The entry's key, as its `key` attribute.
+    public fn encodeKey(_ key: String) throws(SerializeError) {
+        pendingName = "entry"
+        pendingKey = key
+    }
+
+    public fn endMap() throws(SerializeError) {
+        close()
+    }
+
+    public fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try enter(name, sequence: false)
+    }
+
+    /// The field's name: an element's, an attribute's after `@`, or the
+    /// element's text for `#text`.
+    public fn encodeField(_ key: String) throws(SerializeError) {
+        if key.hasPrefix("@") {
+            pendingAttribute = xmlSlice(key, 1, key.utf8Count)
+        } else if key == "#text" {
+            pendingText = true
+        } else {
+            pendingName = key
+        }
+    }
+
+    public fn endStruct() throws(SerializeError) {
+        close()
+    }
+
+    public fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+
+    /// The case's name, as text.
+    public fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try scalar(name)
+    }
+
+    /// An element around one of the case's name, which holds the payload.
+    public fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try enter(type, sequence: false)
+        pendingName = name
+    }
+
+    public fn endCase() throws(SerializeError) {
+        close()
+    }
+}

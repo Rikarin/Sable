@@ -1,0 +1,26 @@
+module Sable.Serialize.Xml
+
+/// What an XmlReader is at: the part of the document it read last.
+@derive(Equatable, Debug)
+public enum XmlNodeKind {
+    /// `<?xml version="1.0"?>`, the document's first thing if it has one.
+    Declaration
+    /// `<!DOCTYPE name [...]>`: its name, and its internal subset as written.
+    DocumentType
+    /// A start tag, or an empty element's tag: `<a b="c">`, `<a/>`.
+    StartElement
+    /// An end tag, or the end of an empty element.
+    EndElement
+    /// Character data, its references replaced.
+    Text
+    /// A CDATA section's content.
+    CData
+    /// A comment's content.
+    Comment
+    /// A processing instruction: its target and its data.
+    ProcessingInstruction
+    /// A reference to an entity the reader does not read: an external
+    /// one, which is never fetched, or one an unread external subset may
+    /// declare.
+    EntityReference
+}

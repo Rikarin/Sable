@@ -1,0 +1,185 @@
+module XmlSerializableTests
+
+// XmlEncoder and XmlDecoder (Sable.Serialize.Xml): run with
+//     tools/stdlib-coverage.sh Sable.Serialize.Xml
+
+import Sable.Serialize
+import Sable.Serialize.Xml
+import Sable.Testing
+
+@derive(Serializable, Equatable, Debug)
+enum Level {
+    Low
+    High
+}
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Point(Int, Int)
+    Label(String)
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(tag: "type")
+union Event {
+    Key(code: Int)
+    Idle
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Meta {
+    var version: U64
+    var level: Level
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Record {
+    @serialize(rename: "@id")
+    var id: Int
+    @serialize(rename: "#text")
+    var body: String
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Everything {
+    var name: String
+    @serialize(flatten)
+    var meta: Meta
+    var shapes: Shape[>..]
+    var event: Event
+    var note: String?
+    var missing: String?
+    var ratio: F64
+    var flags: Bool[>..]
+    var bytes: U8[>..]
+    var records: Record[>..]
+    var holes: Int?[>..]
+    var floats: F64[>..]
+}
+
+fn everything() -> Everything {
+    return Everything {
+        name: "a < b",
+        meta: Meta { version: 18446744073709551615, level: .High },
+        shapes: [.Circle(radius: 1.5), .Point(1, -2), .Label("x"), .Empty],
+        event: .Key(code: 7),
+        note: "n",
+        missing: none,
+        ratio: 0.25,
+        flags: [true, false],
+        bytes: [0, 255, 7],
+        records: [Record { id: 3, body: "hi" }],
+        holes: [1, none],
+        floats: [F64.infinity, -F64.infinity],
+    }
+}
+
+@test
+fn everyKindOfValueRoundTrips() {
+    let value = everything()
+    let text = try! Xml.encode(value, root: "all", XmlPrintOptions(indent: "  "))
+    let back = try! Xml.decode(Everything.self, from: text)
+    expect(back == value, "\(text)")
+}
+
+@test
+fn fieldsAreElementsAttributesOrText() {
+    let text = try! Xml.encode(Record { id: 3, body: "a & b" })
+    expect(text == "<Record id=\"3\">a &amp; b</Record>", text)
+    expect(try! Xml.decode(Record.self, from: text) == Record { id: 3, body: "a & b" })
+}
+
+@test
+fn casesAreNamesOrElementsOfTheirNames() {
+    expect(try! Xml.encode(Shape.Empty) == "<value>Empty</value>")
+    expect(try! Xml.encode(Shape.Circle(radius: 2.0)) == "<Shape><Circle><radius>2.0</radius></Circle></Shape>")
+    expect(try! Xml.decode(Shape.self, from: "<s><Label>z</Label></s>") == Shape.Label("z"))
+    expect(try! Xml.decode(Event.self, from: "<e><type>Idle</type></e>") == Event.Idle)
+}
+
+@test
+fn aNilElementIsNoneAndNaNReadsBack() {
+    let nan: F64[>..] = [F64.nan]
+    let text = try! Xml.encode(nan)
+    expect(text == "<value><item>NaN</item></value>")
+    expect(try! Xml.decode(F64[>..].self, from: text)[0].isNaN)
+    let holes: Int?[>..] = [none]
+    let nil = try! Xml.encode(holes)
+    expect(nil == "<value><item xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:nil=\"true\"/></value>", nil)
+    expect(try! Xml.decode(Int?[>..].self, from: nil) == [none])
+}
+
+@test
+fn scalarsAreReadFromTheirText() {
+    expect(try! Xml.decode(Bool.self, from: "<b> 1 </b>"))
+    expect(!(try! Xml.decode(Bool.self, from: "<b>0</b>")))
+    expect(try! Xml.decode(Int.self, from: "<i>\n -12\n</i>") == -12)
+    expect(try! Xml.decode(F64.self, from: "<f>-INF</f>") == -F64.infinity)
+    expect(try! Xml.decode(String.self, from: "<s> x </s>") == " x ")
+    let map = try! Xml.decode([String: Int].self, from: "<m><a>1</a><entry key='b c'>2</entry></m>")
+    expect(map["a"] == 1 && map["b c"] == 2)
+    let table: [String: Int] = ["one key": 1]
+    let written = try! Xml.encode(table)
+    expect(written == "<value><entry key=\"one key\">1</entry></value>", written)
+}
+
+@test(arguments: [
+    ("<b>yes</b>", "$: 'yes' is not a Bool"),
+    ("<i>x</i>", "$: 'x' is not an Int"),
+    ("<i><j/></i>", "$: expected an integer, found elements"),
+])
+fn whatIsNotTheTypeIsAnError(_ text: String, _ message: String) {
+    var got = ""
+    do {
+        if text.hasPrefix("<b>") {
+            _ = try Xml.decode(Bool.self, from: text)
+        } else {
+            _ = try Xml.decode(Int.self, from: text)
+        }
+    } catch {
+        got = error.description()
+    }
+    expect(got == message, got)
+}
+
+@test
+fn errorsSayWhere() {
+    var got = ""
+    do {
+        _ = try Xml.decode(Meta.self, from: "<m><version>x</version></m>")
+    } catch {
+        got = error.description()
+    }
+    expect(got == "$.version: 'x' is not a U64", got)
+    do {
+        _ = try Xml.decode(Meta.self, from: "<m><version>1</version></m>")
+    } catch {
+        got = error.description()
+    }
+    expect(got == "$.level: missing", got)
+    do {
+        _ = try Xml.decode(Meta.self, from: "<m>")
+    } catch {
+        got = error.description()
+    }
+    expect(got.hasPrefix("not XML: "), got)
+    do {
+        _ = try Xml.decode(Record.self, from: "<r><x/></r>")
+    } catch {
+        got = error.description()
+    }
+    expect(got == "$['@id']: missing", got)
+}
+
+@test
+fn nameThatIsNotXmlIsAnErrorToEncode() {
+    var got = ""
+    do {
+        _ = try Xml.encode(1, root: "1x")
+    } catch {
+        got = error.description()
+    }
+    expect(got == "$: '1x' is not a name", got)
+}

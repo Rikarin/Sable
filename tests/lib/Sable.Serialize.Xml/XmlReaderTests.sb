@@ -1,0 +1,324 @@
+module XmlReaderTests
+
+// XmlReader (Sable.Serialize.Xml): run with
+//     tools/stdlib-coverage.sh Sable.Serialize.Xml
+
+import Sable.Serialize.Xml
+import Sable.Testing
+
+// Every node, a line each: its kind, name, namespace and value.
+fn nodes(_ text: String, _ options: XmlOptions = XmlOptions()) throws(XmlError) -> String[>..] {
+    let reader = XmlReader(text, options)
+    var all: String[>..] = []
+    while let kind = try reader.next() {
+        var line = "\(kind) \(reader.name)"
+        if !reader.namespace.isEmpty {
+            line += " {\(reader.namespace)}"
+        }
+        if !reader.value.isEmpty {
+            line += " '\(reader.value)'"
+        }
+        for attribute in reader.attributes {
+            line += " \(attribute.name)=\(attribute.value)"
+        }
+        all.append(line)
+    }
+    return all
+}
+
+fn error(_ text: String, _ options: XmlOptions = XmlOptions()) -> String {
+    do {
+        _ = try nodes(text, options)
+        return "none"
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn everyKindOfNodeIsRead() {
+    let read = try! nodes("<?xml version='1.0' encoding='UTF-8' standalone='yes'?><!DOCTYPE a><?pi data?><a x='1'><!--c--><![CDATA[<b>]]>t<e/></a>")
+    expect(read == [
+        "Declaration ",
+        "DocumentType a",
+        "ProcessingInstruction pi 'data'",
+        "StartElement a x=1",
+        "Comment  'c'",
+        "CData  '<b>'",
+        "Text  't'",
+        "StartElement e",
+        "EndElement e",
+        "EndElement a",
+    ], "\(read)")
+}
+
+@test
+fn theDeclarationIsReadIntoItsParts() {
+    let reader = XmlReader("<?xml version=\"1.1\" encoding=\"latin1\" standalone=\"no\"?><a/>")
+    require(try! reader.next() == .Declaration)
+    expect(reader.version == "1.1" && reader.encoding == "latin1" && reader.standalone == false)
+}
+
+@test
+fn anEmptyElementIsAStartAndAnEnd() {
+    let reader = XmlReader("<a><b/></a>")
+    _ = try! reader.next()
+    require(try! reader.next() == .StartElement)
+    expect(reader.isEmptyElement && reader.depth == 1)
+    require(try! reader.next() == .EndElement)
+    expect(reader.name == "b" && reader.depth == 1)
+}
+
+@test
+fn namesAreResolvedToTheirNamespaces() {
+    let read = try! nodes("<p:a xmlns:p='urn:p' xmlns='urn:d'><b p:x='1' y='2'/></p:a>")
+    expect(read[0] == "StartElement p:a {urn:p} xmlns:p=urn:p xmlns=urn:d")
+    expect(read[1] == "StartElement b {urn:d} p:x=1 y=2")
+    let reader = XmlReader("<a xmlns:p='urn:p' p:x='1' x='2'/>")
+    _ = try! reader.next()
+    expect(reader.attribute("x", namespace: "urn:p") == "1")
+    expect(reader.attribute("x") == "2" && reader.attribute("z") == none)
+    expect(reader.attributes[1].namespace == "urn:p" && reader.attributes[2].namespace == "")
+}
+
+@test
+fn theXmlPrefixIsAlwaysBound() {
+    let reader = XmlReader("<a xml:lang='en'/>")
+    _ = try! reader.next()
+    expect(reader.attribute("lang", namespace: "http://www.w3.org/XML/1998/namespace") == "en")
+}
+
+@test
+fn namespacesCanBeLeftUnread() {
+    let read = try! nodes("<p:a q:b='1'/>", XmlOptions(namespaces: false))
+    expect(read[0] == "StartElement p:a q:b=1")
+}
+
+@test(arguments: [
+    ("<a>&lt;&gt;&amp;&apos;&quot;</a>", "<>&'\""),
+    ("<a>&#65;&#x42;&#x1F600;</a>", "AB😀"),
+    ("<a>x\r\ny\rz</a>", "x\ny\nz"),
+    ("<a>]]</a>", "]]"),
+])
+fn referencesAndLineEndsAreReplaced(_ text: String, _ value: String) {
+    let read = try! nodes(text)
+    expect(read[1] == "Text  '\(value)'", "\(read)")
+}
+
+@test
+fn attributeValuesAreNormalised() {
+    let read = try! nodes("<a x='1\t2\n3&#10;4 &amp;'/>")
+    expect(read[0] == "StartElement a x=1 2 3\n4 &")
+}
+
+@test
+fn internalEntitiesAreExpandedMarkupAndAll() {
+    let read = try! nodes("<!DOCTYPE a [<!ENTITY e 'x<b>&f;</b>'><!ENTITY f 'y'><!ENTITY g '&#38;#60;'>]><a v='&f;'>&e;&g;</a>")
+    expect(read == [
+        "DocumentType a '<!ENTITY e 'x<b>&f;</b>'><!ENTITY f 'y'><!ENTITY g '&#38;#60;'>'",
+        "StartElement a v=y",
+        "Text  'x'",
+        "StartElement b",
+        "Text  'y'",
+        "EndElement b",
+        "Text  '<'",
+        "EndElement a",
+    ], "\(read)")
+}
+
+@test
+fn parameterEntitiesDeclareEntities() {
+    let read = try! nodes("<!DOCTYPE a [<!ENTITY % d '<!ENTITY e \"z\">'>%d;]><a>&e;</a>")
+    expect(read[2] == "Text  'z'", "\(read)")
+}
+
+@test
+fn attributeListDefaultsAndTokensAreApplied() {
+    let read = try! nodes("<!DOCTYPE a [<!ATTLIST a t NMTOKENS '  x   y ' c CDATA #IMPLIED d CDATA 'q'>]><a c=' 1 '/>")
+    expect(read[1] == "StartElement a c= 1  t=x y d=q", "\(read)")
+}
+
+@test
+fn externalEntitiesAreNeverFetched() {
+    let read = try! nodes("<!DOCTYPE a [<!ENTITY e SYSTEM 'file:///etc/passwd'>]><a>x&e;y</a>")
+    expect(read == ["DocumentType a '<!ENTITY e SYSTEM 'file:///etc/passwd'>'", "StartElement a", "Text  'x'", "EntityReference e", "Text  'y'", "EndElement a"], "\(read)")
+    expect(error("<!DOCTYPE a [<!ENTITY e SYSTEM 'x'>]><a v='&e;'/>").hasSuffix("a reference to the external entity e in an attribute's value"))
+}
+
+@test
+fn anUndeclaredEntityIsOnlyAReferenceWhereAnExternalSubsetMayDeclareIt() {
+    let read = try! nodes("<!DOCTYPE a SYSTEM 'a.dtd'><a>&e;</a>")
+    expect(read[2] == "EntityReference e")
+    expect(error("<a>&e;</a>") == "line 1, column 4: the entity e, which is not declared")
+}
+
+@test
+fn aBillionLaughsIsStopped() {
+    var text = "<!DOCTYPE a [<!ENTITY l0 'ha'>"
+    for i in 1..<10 {
+        let previous = "&l\(i - 1);"
+        text += "<!ENTITY l\(i) '\(previous)\(previous)\(previous)\(previous)\(previous)\(previous)\(previous)\(previous)\(previous)\(previous)'>"
+    }
+    text += "]><a>&l9;</a>"
+    expect(error(text).hasSuffix("entities that stand for more than 1000000 bytes"), error(text))
+    expect(error(text, XmlOptions(maxEntityDepth: 4)).hasSuffix("entities nested deeper than 4"))
+    expect(error("<!DOCTYPE a [<!ENTITY e '&f;'><!ENTITY f '&e;'>]><a>&e;</a>").hasSuffix("the entity e refers to itself"))
+}
+
+@test
+fn elementsNestOnlySoDeep() {
+    expect(error("<a><a><a></a></a></a>", XmlOptions(maxDepth: 2)).hasSuffix("elements nested deeper than 2"))
+}
+
+@test
+fn aDocumentTypeCanBeRefused() {
+    expect(error("<!DOCTYPE a><a/>", XmlOptions(allowsDocumentType: false)).hasSuffix("a DOCTYPE, which these options do not allow"))
+}
+
+@test
+fn whiteSpaceCanBeLeftOut() {
+    expect(try! nodes("<a>\n  <b/>\n</a>", XmlOptions(ignoresWhitespace: true)).count == 4)
+    expect(try! nodes("<a>\n  <b/>\n</a>").count == 6)
+}
+
+@test(arguments: [
+    ("", "line 1, column 1: no root element"),
+    ("<a>", "line 1, column 4: the text ends inside <a>"),
+    ("<a></b>", "line 1, column 4: </b> where </a> is wanted"),
+    ("<a/><b/>", "line 1, column 5: a second root element"),
+    ("x<a/>", "line 1, column 1: text before the root element"),
+    ("<a/>x", "line 1, column 5: text after the root element"),
+    ("<a x='1' x='2'/>", "line 1, column 15: the attribute x twice"),
+    ("<a x='<'/>", "line 1, column 7: '<' in an attribute's value"),
+    ("<a>]]></a>", "line 1, column 4: ']]>' in text"),
+    ("<a><!-- a -- b --></a>", "line 1, column 11: '--' inside a comment"),
+    ("<a>\u{1}</a>", "line 1, column 4: the control character 1, which XML does not have"),
+    ("<a>&#0;</a>", "line 1, column 8: a reference to a character XML does not have"),
+    ("<a>&#;</a>", "line 1, column 6: a character reference is not &#digits; or &#xdigits;"),
+    ("<p:a/>", "line 1, column 1: the prefix p, which is not bound to a namespace"),
+    ("<a xmlns:p=''/>", "line 1, column 16: the prefix p bound to no namespace"),
+    ("<a xmlns:xmlns='u'/>", "line 1, column 21: the prefix xmlns declared"),
+    ("<a xmlns:p='u' xmlns:q='u' p:x='1' q:x='2'/>", "line 1, column 45: the attribute {u}x twice"),
+    ("<a/><?xml version='1.0'?>", "line 1, column 5: an XML declaration that is not at the start"),
+    ("<?xml version='2.0'?><a/>", "line 1, column 20: the version 2.0, where 1.0 is wanted"),
+    ("<?XML version='1.0'?><a/>", "line 1, column 1: the target XML, which is reserved"),
+    ("<a><![CDATA[x</a>", "line 1, column 18: the text ends inside a CDATA section"),
+    ("<![CDATA[x]]><a/>", "line 1, column 1: a CDATA section outside the root element"),
+    ("<a/><!DOCTYPE a>", "line 1, column 5: a DOCTYPE after the root element or another DOCTYPE"),
+    ("<!DOCTYPE a [<!ENTITY e '<b>'>]><a>&e;</a>", "line 1, column 39: the entity e's text ends inside an element it starts"),
+    ("<!DOCTYPE a [<!ELEMENT a (b|c,d)>]><a/>", "line 1, column 30: '|' and ',' in one group"),
+    ("<!DOCTYPE a [<!ENTITY e '%p;'>]><a/>", "line 1, column 26: a parameter entity's reference inside a declaration of the internal subset"),
+    ("<!DOCTYPE a [<!FOO>]><a/>", "line 1, column 14: a markup declaration is wanted here"),
+])
+fn whatIsNotWellFormedIsAnErrorWhereItIs(_ text: String, _ message: String) {
+    expect(error(text) == message, error(text))
+}
+
+@test
+fn linesAndColumnsCountCharacters() {
+    let reader = XmlReader("<a>\r\n  é<b/></a>")
+    _ = try! reader.next()
+    _ = try! reader.next()
+    _ = try! reader.next()
+    expect(reader.line == 2 && reader.column == 4, "\(reader.line):\(reader.column)")
+    _ = try! reader.next()
+    expect(reader.line == 2 && reader.column == 4)
+}
+
+@test
+fn theDocumentTypesDeclarationsAreReadAndChecked() {
+    let text = "<!DOCTYPE a PUBLIC '-//A//DTD A//EN' 'a.dtd' [<!ELEMENT a (#PCDATA|b)*><!ELEMENT b EMPTY><!ELEMENT c ANY><!ELEMENT d ((b,c)?|(c+))><!ATTLIST a i ID #REQUIRED n NOTATION (x|y) #IMPLIED e (p|q) 'p' f CDATA #FIXED 'z'><!NOTATION x SYSTEM 'x'><!NOTATION y PUBLIC 'y'><!-- c --><?pi?><!ENTITY u SYSTEM 'u' NDATA x>]><a i='1'/>"
+    let read = try! nodes(text)
+    expect(read[1] == "StartElement a i=1 e=p f=z", "\(read)")
+    expect(error("<!DOCTYPE a [<!ENTITY u SYSTEM 'u' NDATA x>]><a>&u;</a>").hasSuffix("a reference to the unparsed entity u"))
+}
+
+@test
+fn bytesAreReadInTheirEncoding() {
+    var latin: U8[>..] = []
+    latin.append(utf8: "<?xml version='1.0' encoding='ISO-8859-1'?><a>")
+    latin.append(0xE9)
+    latin.append(utf8: "</a>")
+    let reader = try! XmlReader(bytes: latin)
+    _ = try! reader.next()
+    _ = try! reader.next()
+    _ = try! reader.next()
+    expect(reader.value == "é")
+    let big: U8[>..] = [0xFE, 0xFF, 0, 0x3C, 0, 0x61, 0, 0x2F, 0, 0x3E]
+    let utf16 = try! XmlReader(bytes: big)
+    expect(try! utf16.next() == .StartElement && utf16.encoding == "UTF-16BE")
+    var bom: U8[>..] = [0xEF, 0xBB, 0xBF]
+    bom.append(utf8: "<?xml version='1.0' encoding='UTF-16'?><a/>")
+    expect((try? nodes(try! String.fromUtf8(bom))) != none)
+    let mismatched = try! XmlReader(bytes: bom)
+    expect((try? mismatched.next()) == none)
+}
+
+@test
+fn bytesThatAreNotTextAreAnError() {
+    let bad: U8[>..] = [0x3C, 0x61, 0x3E, 0xFF, 0x3C, 0x2F, 0x61, 0x3E]
+    _ = expectThrows(XmlError.self) { _ = try XmlReader(bytes: bad) }
+    var other: U8[>..] = []
+    other.append(utf8: "<?xml version='1.0' encoding='EBCDIC'?><a/>")
+    _ = expectThrows(XmlError.self) { _ = try XmlReader(bytes: other) }
+    var ascii: U8[>..] = []
+    ascii.append(utf8: "<?xml version='1.0' encoding='US-ASCII'?><a>")
+    ascii.append(0xC3)
+    ascii.append(0xA9)
+    ascii.append(utf8: "</a>")
+    _ = expectThrows(XmlError.self) { _ = try XmlReader(bytes: ascii) }
+    let odd: U8[>..] = [0xFF, 0xFE, 0x3C]
+    _ = expectThrows(XmlError.self) { _ = try XmlReader(bytes: odd) }
+}
+
+@test
+fn anElementCanBeSkipped() {
+    let reader = XmlReader("<a><b><c/>t</b><d/></a>")
+    _ = try! reader.next()
+    _ = try! reader.next()
+    try! reader.skip()
+    expect(reader.kind == .EndElement && reader.name == "b")
+    _ = try! reader.next()
+    expect(reader.name == "d")
+    try! reader.skip()
+}
+
+@test(arguments: [
+    "<é·̀‿ α='1' 中='2' 😀-.0='3' Ωx:y='4'/>",
+    "<a>&#xE9;&#x4E2D;&#x1F600;&#x7FF;&#x800;</a>",
+])
+fn namesAndCharactersOfEveryWidthAreRead(_ text: String) {
+    expect((try? nodes(text, XmlOptions(namespaces: false))) != none, error(text, XmlOptions(namespaces: false)))
+}
+
+@test(arguments: [
+    ("<1a/>", "line 1, column 2: a name is wanted here"),
+    ("<a ·='1'/>", "line 1, column 4: a name is wanted here"),
+    ("<a>&#xFFFE;</a>", "line 1, column 12: a reference to a character XML does not have"),
+    ("<a>&#xD800;</a>", "line 1, column 12: a reference to a character XML does not have"),
+    ("<a>&#x110000;</a>", "line 1, column 14: a reference to a character XML does not have"),
+    ("<a>\u{FFFE}</a>", "line 1, column 4: a noncharacter, which XML does not have"),
+    ("<a:b:c/>", "line 1, column 1: the name a:b:c, which is not a name with at most one colon"),
+    ("<:a/>", "line 1, column 1: the name :a, which is not a name with at most one colon"),
+    ("<a b:='1'/>", "line 1, column 12: the attribute name b:, which is not a name with at most one colon"),
+    ("<a xmlns:1='u'/>", "line 1, column 17: the prefix 1, which is not a name without a colon"),
+])
+fn namesAndCharactersXmlDoesNotHaveAreErrors(_ text: String, _ message: String) {
+    expect(error(text) == message, error(text))
+}
+
+@test
+fn anErrorOfNoPlaceSaysOnlyWhy() {
+    let bad: U8[>..] = [0x3C, 0x61, 0x3E, 0xFF]
+    do {
+        _ = try XmlReader(bytes: bad)
+    } catch {
+        expect(error.line == 0 && error.description() == "ill-formed UTF-8 at byte 3")
+        let first = error
+        do {
+            _ = try XmlReader(bytes: bad)
+        } catch {
+            expect(error == first && "\(error)".contains("ill-formed"))
+        }
+    }
+}

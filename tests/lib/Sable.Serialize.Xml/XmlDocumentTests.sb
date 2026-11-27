@@ -1,0 +1,71 @@
+module XmlDocumentTests
+
+// XmlDocument, XmlElement and XmlNode (Sable.Serialize.Xml): run with
+//     tools/stdlib-coverage.sh Sable.Serialize.Xml
+
+import Sable.Serialize.Xml
+import Sable.Testing
+
+let atom = "http://www.w3.org/2005/Atom"
+
+@test
+fn aDocumentIsReadIntoATree() {
+    let document = try! Xml.parse("<?xml version='1.0' standalone='yes'?><!DOCTYPE feed [<!ENTITY t 'Title'>]><!--a--><feed xmlns='\(atom)' xmlns:x='urn:x'><title x:lang='en'>&t;</title><x:link href='/'/><?pi d?><![CDATA[c]]></feed><!--b-->")
+    expect(document.hasDeclaration && document.standalone == true && document.documentType == "feed")
+    expect(document.internalSubset == "<!ENTITY t 'Title'>")
+    expect(document.children.count == 3)
+    let feed = document.root
+    expect(feed.namespace == atom && feed.prefix == "" && feed.localName == "feed")
+    let title = require(feed.element("title", namespace: atom))
+    expect(title.text == "Title" && title.attribute("lang", namespace: "urn:x") == "en")
+    expect(feed.element("link", namespace: "urn:x")!.attribute("href") == "/")
+    expect(feed.element("x:link")!.prefix == "x")
+    expect(feed.element("link") == none && feed.element("title", namespace: "urn:x") == none)
+    expect(feed.elements.count == 2 && feed.children.count == 4)
+    expect(feed.text == "Titlec")
+}
+
+@test
+fn aTreeIsWrittenAndReadBackTheSame() {
+    let text = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE a><!--x--><a xmlns=\"urn:a\" xmlns:p=\"urn:p\" p:k=\"v\"><p:b>t &amp; u</p:b><![CDATA[<c>]]><?pi d?></a><!--y-->"
+    let printed = try! Xml.print(try! Xml.parse(text))
+    expect(printed == text, printed)
+}
+
+@test
+fn aTreeIsBuiltAndChanged() {
+    let root = XmlElement("list", namespace: "urn:l")
+    let item = XmlElement("item")
+    item.setAttribute("n", "1")
+    item.setAttribute("n", "2")
+    item.setAttribute("m", "3")
+    item.append(text: "one")
+    root.append(item)
+    root.append(.Comment("c"))
+    let other = XmlElement("p:item", namespace: "urn:p")
+    other.setAttribute("p:q", "x", namespace: "urn:p")
+    root.append(other)
+    expect(item.attribute("n") == "2" && item.attributes.count == 2)
+    expect(item.removeAttribute("m") && !item.removeAttribute("m"))
+    let text = try! Xml.print(root)
+    expect(text == "<list xmlns=\"urn:l\"><item xmlns=\"\" n=\"2\">one</item><!--c--><p:item xmlns:p=\"urn:p\" p:q=\"x\"/></list>", text)
+    let document = XmlDocument(root: root)
+    let declared = try! Xml.print(document, XmlPrintOptions(indent: " ", declaration: true))
+    expect(declared.hasPrefix("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<list"), declared)
+    expect(try! Xml.print(root, XmlPrintOptions(declaration: true)).hasPrefix("<?xml"))
+}
+
+@test
+fn bytesAreReadIntoATree() {
+    var bytes: U8[>..] = [0xEF, 0xBB, 0xBF]
+    bytes.append(utf8: "<a>é</a>")
+    expect(try! Xml.parse(bytes: bytes).root.text == "é")
+}
+
+@test
+fn aReferenceNotReadIsKept() {
+    let text = "<!DOCTYPE a SYSTEM \"a.dtd\"><a>&e;</a>"
+    let document = try! Xml.parse(text)
+    expect(document.root.children.count == 1 && document.root.children[0].element == none)
+    expect(try! Xml.print(document) == text)
+}

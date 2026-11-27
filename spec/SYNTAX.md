@@ -2074,7 +2074,10 @@ awaited as the scope ends.
   `nonisolated` member, does not. Actors are reentrant where they wait: a
   call suspended at an `await` inside the actor lets others in, and goes
   on once it has the actor again, so state read before an `await` may
-  have changed after it.
+  have changed after it. An isolated method meets a protocol's `async`
+  requirement, whose callers await it — through a generic or an
+  existential too, the call hops into the actor — but not a synchronous
+  one (S3237).
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
   at compile time. A task's closure — `Task.spawn`'s, `Task.detached`'s, a
   group's `spawn`'s, `Task.blocking`'s, an `async let`'s — crosses one:

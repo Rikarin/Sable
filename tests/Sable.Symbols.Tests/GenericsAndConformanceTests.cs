@@ -126,6 +126,65 @@ public sealed class GenericsAndConformanceTests {
         );
     }
 
+    /// <summary>
+    ///     An async requirement is met by a synchronous function, whose
+    ///     caller awaits what does not wait — and by an actor's isolated
+    ///     method, whose caller hops into the actor — but a synchronous one
+    ///     is met by neither an async function nor an isolated method (S3237).
+    /// </summary>
+    [Fact]
+    public void AnAsyncRequirementIsMetBySynchronousAndIsolatedMethods() {
+        AssertClean(
+            """
+            protocol Counting {
+                fn bump(_ by: Int) async -> Int
+                fn total() async -> Int
+            }
+            struct Plain: Counting {
+                fn bump(_ by: Int) -> Int => by
+                fn total() async -> Int => 0
+            }
+            actor Counter: Counting {
+                var count = 0
+                fn bump(_ by: Int) -> Int {
+                    count += by
+                    return count
+                }
+                fn total() async -> Int => count
+            }
+            """
+        );
+
+        Assert.Contains(
+            Errors(
+                """
+                protocol Counting {
+                    fn total() -> Int
+                }
+                struct Plain: Counting {
+                    fn total() async -> Int => 0
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch
+        );
+
+        Assert.Contains(
+            Errors(
+                """
+                protocol Counting {
+                    fn total() -> Int
+                }
+                actor Counter: Counting {
+                    var count = 0
+                    fn total() -> Int => count
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_IsolatedWitness
+        );
+    }
+
     /// <summary>A requirement's tuple of Self is met by the same tuple of the conforming type.</summary>
     [Fact]
     public void ATupleOfSelfInARequirementIsATupleOfTheConformer() {

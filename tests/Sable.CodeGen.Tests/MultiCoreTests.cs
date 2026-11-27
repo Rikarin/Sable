@@ -201,6 +201,66 @@ public sealed class MultiCoreTests {
         );
 
     /// <summary>
+    ///     An actor's isolated method meets a protocol's async requirement:
+    ///     sixteen tasks reaching it at once through a generic function and
+    ///     through an existential each hop into the actor, so no increment
+    ///     of its read-then-write is lost.
+    /// </summary>
+    [Fact]
+    public void AnActorMeetsAnAsyncRequirementByHopping() =>
+        Assert.Equal(
+            "16000\n16000\n",
+            AssertAgree(AsyncProgram("""
+                    protocol Counting {
+                        fn bump(_ by: Int) async -> Int
+                        fn total() async -> Int
+                    }
+
+                    actor Counter: Counting {
+                        var count = 0
+
+                        fn bump(_ by: Int) -> Int {
+                            let before = count
+                            count = before + by
+                            return count
+                        }
+
+                        fn total() async -> Int {
+                            await Task.yield()
+                            return count
+                        }
+                    }
+
+                    fn viaGeneric<C: Counting>(_ c: C) async -> Int {
+                        var last = 0
+                        for _ in 0..<1000 {
+                            last = await c.bump(1)
+                        }
+                        return last
+                    }
+
+                    fn viaExistential(_ c: any Counting) async -> Int {
+                        var last = 0
+                        for _ in 0..<1000 {
+                            last = await c.bump(1)
+                        }
+                        return last
+                    }
+                    """, """
+                    let counter = Counter()
+                    await withTaskGroup(of: Int.self) { group in
+                        for _ in 0..<8 {
+                            group.spawn { await viaGeneric(counter) }
+                            group.spawn { await viaExistential(counter) }
+                        }
+                    }
+                    print(await counter.total())
+                    let counting: any Counting = counter
+                    print(await counting.total())
+                """), stepLimit: 50_000_000).Stdout
+        );
+
+    /// <summary>
     ///     A task spawned inside an actor's method runs on no actor, but its
     ///     calls into the actor hop onto it: twenty of them, each bumping the
     ///     actor a hundred times, lose nothing.

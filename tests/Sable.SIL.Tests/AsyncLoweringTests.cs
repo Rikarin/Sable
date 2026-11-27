@@ -269,6 +269,54 @@ public sealed class AsyncLoweringTests {
     }
 
     /// <summary>
+    ///     An actor's isolated method meets an async requirement, and what
+    ///     reaches it through the protocol hops into the actor: the witness
+    ///     of the actor's table, which an existential's call goes through,
+    ///     and a generic function specialised for the actor. A struct's
+    ///     witness of the same requirement does not hop.
+    /// </summary>
+    [Fact]
+    public void AnAsyncRequirementMetByAnActorHopsIntoIt() {
+        var module = Lower("""
+                           module M
+                           protocol Counting {
+                               fn bump(_ by: Int) async -> Int
+                           }
+                           actor Counter: Counting {
+                               var count = 0
+                               fn bump(_ by: Int) -> Int {
+                                   count += by
+                                   return count
+                               }
+                           }
+                           struct Plain: Counting {
+                               fn bump(_ by: Int) -> Int => by
+                           }
+
+                           fn viaGeneric<C: Counting>(_ c: C) async -> Int => await c.bump(1)
+                           fn viaExistential(_ c: any Counting) async -> Int => await c.bump(1)
+
+                           @main
+                           fn main() async {
+                               let counter = Counter()
+                               print(await viaGeneric(counter))
+                               print(await viaExistential(counter))
+                               print(await viaGeneric(Plain()))
+                               print(await viaExistential(Plain()))
+                           }
+                           """);
+
+        static int Hops(SilFunction f) => f.Blocks.SelectMany(static b => b.Instructions).Count(static i => i is BuiltinInst { Name: "task_hop" });
+        int HopsIn(string part) => module.Functions.Where(f => f.Name.Contains(part, StringComparison.Ordinal)).Sum(Hops);
+
+        Assert.True(HopsIn("$witness$M.Counter$") >= 2);
+        Assert.True(HopsIn("viaGeneric$of$M.Counter") >= 2);
+        Assert.Equal(0, HopsIn("$witness$M.Plain$"));
+        Assert.Equal(0, HopsIn("viaGeneric$of$M.Plain"));
+        Assert.Equal("1\n2\n1\n1\n", Run(module).Output);
+    }
+
+    /// <summary>
     ///     A 'nonisolated' member of an actor runs wherever its caller does,
     ///     so its calls of the actor's isolated members hop as calls from
     ///     outside do (AsyncMutex.withLock: without the hop, tasks ran 'lock'

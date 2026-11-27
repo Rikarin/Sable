@@ -1,4 +1,4 @@
-# Fuzzes every night, from a new seed each time:
+# Fuzzes every night at 04:00 UTC, from a new seed each time:
 #
 # - sable fuzz: the toolchain's own fuzzing (docs/05 §5.1) of the repository's
 #   @fuzz targets, the library's readers (tools/fuzz/targets) and fromBytes
@@ -37,7 +37,7 @@ name: Nightly fuzz
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       only:

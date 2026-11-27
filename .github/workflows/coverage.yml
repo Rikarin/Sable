@@ -1,13 +1,14 @@
 # The standard library's coverage by its own tests (tests/lib/<Module>/):
 # each file of lib/ must meet its threshold in tools/stdlib-coverage.thresholds.
 # The tables — by module, the files under, every file — are the run's summary.
-# Linux x64 only: the library's code is the same everywhere.
+# Linux x64 only: the library's code is the same everywhere. Runs every night
+# at 04:00 UTC on the default branch, and on request on any branch
+# (gh workflow run coverage.yml --ref <branch>).
 name: Standard library coverage
 
 on:
-  push:
-    branches: [master, main]
-  pull_request:
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 concurrency:

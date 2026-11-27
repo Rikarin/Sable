@@ -122,7 +122,9 @@ others. Mistakes that have broken CI before:
 ## CI
 
 `ci.yml` (every platform, sharded CodeGen tests, WASI, the VS Code extension,
-the NumPy conformance job), `coverage.yml` (the thresholds), `benchmarks.yml`
-(the comparison tables) and `fuzz.yml` (nightly). All can be dispatched on a
-pushed branch (`gh workflow run <file> --ref <branch>`) before merging to
-master.
+the NumPy conformance job) runs on every push to master and every pull
+request. `coverage.yml` (the thresholds), `benchmarks.yml` (the comparison
+tables) and `fuzz.yml` run nightly at 04:00 UTC on master. All can be
+dispatched on a pushed branch (`gh workflow run <file> --ref <branch>`)
+before merging to master: dispatch coverage for library changes and
+benchmarks for changes that can move them, rather than waiting for the night.

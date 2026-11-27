@@ -2,13 +2,14 @@
 # run's summary and artifact (benchmarks/README.md says what their columns
 # are). What fails it is a benchmark that does not build or run, or a port
 # that computes something else; never a time: a shared runner's are too
-# noisy to hold anyone to, and only those of one run compare.
+# noisy to hold anyone to, and only those of one run compare. Runs every
+# night at 04:00 UTC on the default branch, and on request on any branch
+# (gh workflow run benchmarks.yml --ref <branch>).
 name: Benchmarks
 
 on:
-  push:
-    branches: [master, main]
-  pull_request:
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       samples:

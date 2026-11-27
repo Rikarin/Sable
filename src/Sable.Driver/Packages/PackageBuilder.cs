@@ -471,6 +471,11 @@ public static class PackageBuilder {
                     NativeBuild.GatherDebugInfo(executable, request.Target ?? NativeTarget.Host);
                 }
 
+                // On Linux the link keeps the symbols it made local itself.
+                if (profile.Strip == StripMode.Local) {
+                    NativeBuild.DiscardLocalSymbols(executable, request.Target ?? NativeTarget.Host);
+                }
+
                 built.Add(new(member.Name, bin.Name, executable, profile));
             }
         }

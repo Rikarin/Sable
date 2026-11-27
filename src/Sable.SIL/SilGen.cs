@@ -5636,6 +5636,22 @@ public sealed partial class SilGen {
                 : null;
 
         /// <summary>
+        ///     A stored field's index in an object: its place in the class that
+        ///     declares it, as a subclass may declare a field of the name of one
+        ///     of its superclass's that it cannot see (another module's).
+        /// </summary>
+        int ClassFieldIndex(ClassType type, TypeSymbol receiverType, FieldSymbol field) {
+            var declaring = (field.ContainingSymbol as NamedTypeSymbol)?.OriginalDefinition;
+            var symbol = Sub(receiverType) as NamedTypeSymbol;
+            while (symbol is not null && declaring is not null && !ReferenceEquals(symbol.OriginalDefinition, declaring) && type.Superclass is { } superclass) {
+                symbol = SuperclassOf(symbol);
+                type = superclass;
+            }
+
+            return type.Fields.FindLastIndex(f => f.Name == field.Name);
+        }
+
+        /// <summary>
         ///     The address of a stored field inside an object, and the object,
         ///     borrowed, which must outlive any use of the address.
         /// </summary>
@@ -5647,7 +5663,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                var index = classType.FieldIndex(access.Field.Name);
+                var index = ClassFieldIndex(classType, receiver.Type, access.Field);
                 if (index < 0) {
                     End(reference);
                     Missing(expression, $"the member '{access.Field.Name}'");
@@ -8605,7 +8621,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                var index = classType.FieldIndex(field.Name);
+                var index = ClassFieldIndex(classType, receiver.Type, field);
                 if (index < 0) {
                     return Missing(access, $"the member '{field.Name}'");
                 }
@@ -8827,7 +8843,7 @@ public sealed partial class SilGen {
                     }
 
                     borrows.Add(reference);
-                    var index = classType.FieldIndex(field.Name);
+                    var index = ClassFieldIndex(classType, receiver.Type, field);
                     return index < 0
                         ? Missing(target, $"storing to '{field.Name}'")
                         : Emit(new RefElementAddrInst(reference, index));

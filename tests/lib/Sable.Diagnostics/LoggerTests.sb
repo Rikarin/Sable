@@ -1,0 +1,139 @@
+module LoggerTests
+
+// Sable.Diagnostics' Logger: its children, and Logger.Of, a logger whose
+// category is a type's name, as a container gives it. Run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+
+import Sable.DependencyInjection
+import Sable.Diagnostics
+import Sable.IO
+import Sable.Testing
+
+struct Checkout { }
+
+struct Generic<T> { }
+
+@test
+fn aChildAddsItsFieldsAndMayHaveAnotherCategory() {
+    let log = Logger("orders")
+    log.threshold = Level.Debug
+    let request = log.with([field("id", "r-1")])
+    let shipping = request.with([field("step", "ship")], name: "shipping")
+    shipping.keepLines()
+    shipping.debug("packed")
+    expect(request.name == "orders" && shipping.name == "shipping")
+    expect(rank(shipping.threshold) == rank(Level.Debug))
+    expect(shipping.context.map({ $0.key }).toArray() == ["id", "step"])
+    expect(shipping.lines() == ["DEBUG shipping: packed id=r-1 step=ship"])
+    expect(log.context.isEmpty && log.with().context.isEmpty)
+}
+
+@test
+fn theFieldsOfALineAreTheLoggersThenTheCallsThenTheSpans() {
+    let log = Logger("app")
+    log.context = [field("host", "a")]
+    expect(log.fields(of: [field("k", 1)]).map({ $0.key }).toArray() == ["host", "k"])
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    Tracing.withContext(remote) {
+        let keys = log.fields(of: []).map({ $0.key }).toArray()
+        expect(keys == ["host", "trace_id", "span_id"])
+    }
+}
+
+@test
+fn aTypedLoggersCategoryIsItsTypesName() {
+    let log = Logger.Of<Checkout>()
+    expect(log.logger.name == "\(Checkout.self)" && log.logger.name.hasSuffix("Checkout"))
+    expect(Logger.Of<Generic<Int>>().logger.name == "\(Generic<Int>.self)")
+    expect(log.isEnabled(Level.Info) && !log.isEnabled(Level.Debug))
+}
+
+@test
+fn aTypedLoggerWritesThroughAChildOfItsParent() {
+    let parent = Logger("app")
+    parent.threshold = Level.Trace
+    parent.context = [field("host", "a")]
+    let log = Logger.Of<Checkout>(parent)
+    log.logger.keepLines()
+    log.trace("t")
+    log.debug("d")
+    log.info("i")
+    log.info("i", [field("n", 1)])
+    log.warning("w")
+    log.warning("w", [field("n", 2)])
+    log.error("e")
+    log.error("e", [field("n", 3)])
+    log.log(Level.Info, "l", [])
+    let name = log.logger.name
+    expect(log.logger.lines().count == 9)
+    expect(log.logger.lines()[0] == "TRACE \(name): t host=a")
+    expect(log.logger.lines()[7] == "ERROR \(name): e host=a n=3")
+    let child = log.with([field("order", "o-1")])
+    expect(child.name == name && child.context.count == 2)
+    expect(log.with(name: "other").name == "other")
+}
+
+@test
+fn aContainerGivesATypedLoggerMadeWithItsLogger() throws {
+    var services = ServiceCollection()
+    services.addTransient(open: Logger.Of.self, Logger.Of.self)
+    let alone = try services.build()
+    let made = try alone.resolve(Logger.Of<Checkout>.self)
+    expect(made.logger.name == "\(Checkout.self)" && made.logger.context.isEmpty)
+
+    services.addTransient(Logger.self) { _services in
+        let root = Logger("app")
+        root.threshold = Level.Error
+        root.context = [field("host", "a")]
+        return root
+    }
+    let provider = try services.build()
+    let log = try provider.resolve(Logger.Of<Checkout>.self)
+    expect(!log.isEnabled(Level.Warning) && log.logger.context.count == 1)
+    expect(Logger.Of<Checkout>.dependencies().count == 1)
+}
+
+@test(arguments: [
+    ("plain", "k=plain"),
+    ("", "k=\"\""),
+    ("a b", "k=\"a b\""),
+    ("say \"hi\"", "k=\"say \\\"hi\\\"\""),
+    ("a=b", "k=\"a=b\""),
+    ("back\\slash", "k=\"back\\\\slash\""),
+    ("two\nlines", "k=\"two\\nlines\""),
+])
+fn aValueIsQuotedWhereItWouldBeMisread(_ value: String, _ written: String) {
+    let log = Logger("q")
+    log.keepLines()
+    log.error("m", [field("k", value)])
+    expect(log.lines() == ["ERROR q: m \(written)"])
+}
+
+@test
+fn aLineIsStampedWithTheTimeWhenAsked() {
+    let log = Logger("t")
+    log.timestamps = true
+    log.keepLines()
+    log.warning("w")
+    log.info("i", [field("ok", true)])
+    let lines = log.lines()
+    require(lines.count == 2)
+    // The time is the clock's; its shape, "2026-11-27T10:00:00Z ", is not.
+    expect(lines[0].hasSuffix("Z WARN t: w") && lines[0].count == "2026-11-27T10:00:00Z WARN t: w".count)
+    expect(lines[1].hasSuffix("Z INFO t: i ok=true"))
+}
+
+@test
+fn theLevelComesFromTheEnvironmentWhereItNamesOne() {
+    let log = Logger("e")
+    log.threshold = Level.Error
+    log.configureFromEnvironment()
+    // SABLE_LOG is the runner's: unset, a level, or something else.
+    if let wanted = Environment.variable("SABLE_LOG") {
+        if let level = parseLevel(wanted) {
+            expect(rank(log.threshold) == rank(level))
+            return
+        }
+    }
+    expect(rank(log.threshold) == rank(Level.Error))
+}

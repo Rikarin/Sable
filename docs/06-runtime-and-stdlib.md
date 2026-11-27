@@ -1263,7 +1263,8 @@ Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
 Sable.Crypto.X509   Certificate, CertificateVerifier (RFC 5280 paths, name
                     constraints, host names, revocation lists), TrustStore
                     (the system's), CertificateBuilder, CertificateRequest
-Sable.Diagnostics   Logger (structured, with the current span's ids),
+Sable.Diagnostics   Logger (structured, with the current span's ids;
+                    Logger.Of<T>, of T's name, which a container injects),
                     Backtrace, Panic, Debugger; tracing: Tracer (withSpan,
                     startSpan), Span, SpanContext (W3C traceparent),
                     TraceContextPropagator, Tracing (listeners, the current
@@ -1407,9 +1408,10 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
 - Fakes, for what the code under test is given: `TestClock` (Sable.Concurrency);
   `InMemoryFileSystem` (Sable.IO), a `FileSystem` in memory where code takes
   one in place of `DiskFileSystem`, with the disk's errors; `FakeLogger`, a
-  `Logger` that keeps its lines and reads them back as `LogRecord`s (level,
-  name, message, fields; what `logger.with(...)` makes keeps none, and every
-  line is written to standard error as well); `FakeRandom`, a
+  `Logger` (whose `log` and `with` are open) that keeps what it is asked to
+  log as `LogRecord`s (level, name, message, fields) and writes nothing, and
+  keeps what the loggers made `with` it log, and a `Logger.Of<T>` made with
+  it, under T's name; `FakeRandom`, a
   `RandomNumberGenerator` of the run's seed (`--seed` makes it again), another,
   or a script, that keeps what it drew. There is no fake HTTP handler: the
   library has no HttpClient yet.
@@ -2445,7 +2447,8 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
   host is built: by a typed closure from a `HostContext`, or, for a type
   that is `@injectable`, by the builder's `container`
   (`Sable.DependencyInjection`, below), which has the host's environment,
-  configuration, logging, lifetime and clock too. The host disposes the
+  configuration, logging, lifetime and clock too, a `Logger` of the logging's,
+  and `Logger.Of<T>` for every T, made with that one. The host disposes the
   container once its services have stopped.
 - **Seams.** `configuration` is a `ConfigurationBuilder` (below), loaded as
   the host is built, with .NET's sources: `appsettings.toml` and

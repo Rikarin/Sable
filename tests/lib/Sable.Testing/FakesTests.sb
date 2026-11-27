@@ -18,30 +18,75 @@ fn reorder(_ log: Logger, _ left: Int) {
 @test
 fn aFakeLoggerKeepsWhatWasLogged() {
     let log = FakeLogger("orders")
-    reorder(log.logger, 2)
-    reorder(log.logger, 5)
-    log.logger.debug("detail")
-    log.logger.error("quoted", [field("note", "a b=\"c\"\nd"), field("empty", "")])
+    reorder(log, 2)
+    reorder(log, 5)
+    log.debug("detail")
+    log.error("quoted", [field("note", "a b=\"c\"\nd"), field("empty", "")])
     let records = log.records
     require(records.count == 4)
-    expect(records[0].level == "WARN" && records[0].name == "orders" && records[0].message == "low stock")
+    expect(records[0].level == Level.Warning && records[0].name == "orders" && records[0].message == "low stock")
     expect(records[0].field("sku") == "a-1" && records[0].field("left") == "2" && records[0].field("none") == none)
     expect(records[1].message == "enough" && records[1].fields.isEmpty)
-    expect(records[2].level == "DEBUG")
+    expect(records[2].level == Level.Debug)
     expect(records[3].field("note") == "a b=\"c\"\nd" && records[3].field("empty") == "")
-    expect(log.messages(at: "INFO") == ["enough"])
+    expect(log.messages(at: Level.Info) == ["enough"])
     log.clear()
     expect(log.records.isEmpty)
-    log.logger.trace("again a=b")
-    expect(log.records[0].message == "again a=b" || log.records[0].field("a") == "b")
+    log.trace("again a=b")
+    expect(log.records[0].message == "again a=b" && log.records[0].fields.isEmpty)
 }
 
 @test
-fn aLineThatIsNoRecordIsReadAsWellAsItCanBe() {
-    expect(LogRecord.of("lonely").level == "lonely")
-    expect(LogRecord.of("INFO nameless").message == "nameless")
-    expect(LogRecord.of("INFO n: ends with =").message == "ends with =")
-    expect(LogRecord.of("INFO n: x=\"open").message == "x=\"open")
+fn aFakeLoggerKeepsWhatItsChildrenLog() {
+    let log = FakeLogger("orders")
+    let request = log.with([field("id", "r-1")])
+    request.info("paid", [field("amount", 3)])
+    request.with([field("step", "ship")], name: "shipping").warning("late")
+    log.threshold = Level.Error
+    log.with().info("below the threshold")
+    let records = log.records
+    require(records.count == 2)
+    expect(records[0].name == "orders" && records[0].fields.map({ $0.key }).toArray() == ["id", "amount"])
+    expect(records[1].name == "shipping" && records[1].field("id") == "r-1" && records[1].field("step") == "ship")
+    expect(log.messages(at: Level.Warning) == ["late"])
+}
+
+struct Checkout { }
+
+@test
+fn aTypedLoggerMadeWithAFakeLoggerKeepsInItUnderItsCategory() {
+    let log = FakeLogger()
+    let typed = Logger.Of<Checkout>(log)
+    typed.warning("declined", [field("card", "x")])
+    typed.with([field("retry", 1)]).info("again")
+    require(log.records.count == 2)
+    expect(log.records[0].name == "\(Checkout.self)" && log.records[0].field("card") == "x")
+    expect(log.records[1].field("retry") == "1" && log.records[1].name == typed.logger.name)
+    expect(typed.isEnabled(Level.Trace))
+}
+
+@test
+fn aFakeLoggerWritesNothing() {
+    // A logger keeps the lines it writes, when asked to: these write none.
+    let log = FakeLogger()
+    log.keepLines()
+    let child = log.with([field("a", "b")])
+    child.keepLines()
+    child.error("kept")
+    log.error("kept too")
+    expect(log.records.count == 2)
+    expect(log.lines().isEmpty && child.lines().isEmpty)
+}
+
+@test
+fn aFakeLoggerKeepsTheSpanItLoggedIn() {
+    let log = FakeLogger()
+    let remote = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+    Tracing.withContext(remote) {
+        log.info("inside")
+    }
+    expect(log.records[0].field("trace_id") == "4bf92f3577b34da6a3ce929d0e0e4736")
+    expect(log.records[0].field("span_id") == "00f067aa0ba902b7")
 }
 
 @test

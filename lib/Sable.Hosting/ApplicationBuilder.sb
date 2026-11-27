@@ -26,8 +26,10 @@ public final class ApplicationBuilder {
     /// (`HostedServices.add(_:_:)` of a type), and the options they are
     /// configured by (`ServiceCollection.configure`). The host's
     /// environment, configuration, logging, lifetime and clock are
-    /// registered as it is built, unless something else is; it disposes the
-    /// rest as it stops.
+    /// registered as it is built, unless something else is, and a `Logger`
+    /// of the logging's; it disposes the rest as it stops. It starts with
+    /// `Logger.Of` of every type, made with that `Logger`, a new one each
+    /// time.
     public var container: ServiceCollection
     /// What they are configured by, as .NET's host has it: the optional
     /// files `appsettings.toml` and `appsettings.<environment>.toml` of the
@@ -52,6 +54,7 @@ public final class ApplicationBuilder {
     public init(arguments: String[>..] = []) {
         services = HostedServices()
         container = ServiceCollection()
+        container.addTransient(open: Logger.Of.self, Logger.Of.self)
         logging = HostLogging(minimumLevel: ApplicationBuilder.levelFromEnvironment())
         environment = HostEnvironment.current()
         options = HostOptions()
@@ -121,6 +124,8 @@ public final class ApplicationBuilder {
         all.tryAdd(ServiceDescriptor.of(HostEnvironment.self, none, environment))
         all.tryAdd(ServiceDescriptor.of(Configuration.self, none, configured))
         all.tryAdd(ServiceDescriptor.of(HostLogging.self, none, logging))
+        let logging = self.logging
+        all.tryAdd(ServiceDescriptor.of(Logger.self, ServiceLifetime.Transient, none) { _services in logging.logger("app") })
         all.tryAdd(ServiceDescriptor.of(ApplicationLifetime.self, none, lifetime))
         all.tryAdd(ServiceDescriptor.of(HostClock.self, none, clock))
         return all

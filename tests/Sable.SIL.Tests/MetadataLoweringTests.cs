@@ -175,6 +175,28 @@ public sealed class MetadataLoweringTests {
         Assert.DoesNotContain(tag.Entries[0].Function!, reached);
     }
 
+    /// <summary>
+    ///     Code compiled once for every type asks for the table of 'T[]' it
+    ///     makes of a 'T' it is given, which the registry finds by T's
+    ///     metadata: the table an array of a type whose metadata is reached
+    ///     has keeps its witnesses, though nothing names that array type.
+    /// </summary>
+    [Fact]
+    public void AStructuralTypesTableIsReachedWithItsElementInCodeCompiledOnce() {
+        using var unspecialised = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var module = Lower("""
+                           fn listed<T: Comparable>(_ all: T[]) -> T[>..] => all.sorted(by: { $0 < $1 })
+
+                           @main
+                           fn main() {
+                               print(listed([3, 1, 2])[0])
+                           }
+                           """);
+        var reached = SilPassManager.Reachable(module)!;
+        var table = module.WitnessTables.Single(static t => t.Protocol == "Sable.Core.Sequence" && ArrayType.ElementOf(t.Conformer) == SilType.Int && !t.IsTemplate);
+        Assert.Contains(table.Entries.Select(static e => e.Function).OfType<string>(), reached.Contains);
+    }
+
     const string Static = """
                           protocol Zero {
                               static fn zero() -> Self

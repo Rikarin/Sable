@@ -225,8 +225,21 @@ public static class SilPassManager {
 
         // Those of a generic type's arguments are reached by what reads them from its metadata: a template table's entries, a deinit compiled once.
         var readsArguments = module.GenericDeinits.Count > 0 || module.WitnessTables.Any(static t => t.IsTemplate);
+        // Code compiled once for every type makes 'T[]' and 'T?' of a 'T' it
+        // is given, and asks for their tables: the registry finds the one a
+        // structural type of that element has, by the element's metadata.
+        var structuralOf = unspecialised
+            ? module.WitnessTables.Where(static t => !t.IsTemplate && SilModule.StructuralElement(t.Conformer) is not null)
+                .ToLookup(static t => SilModule.StructuralElement(t.Conformer)!.ToString(), static t => t.Conformer, StringComparer.Ordinal)
+            : null;
         void Witnesses(SilType? type) {
             for (; type is not null && tabled.Add(type.ToString()); type = (type as ClassType)?.Superclass) {
+                if (structuralOf is not null) {
+                    foreach (var structural in structuralOf[type.ToString()]) {
+                        Witnesses(structural);
+                    }
+                }
+
                 if (readsArguments && type is NominalType { TypeArguments: { IsDefaultOrEmpty: false } arguments }) {
                     foreach (var argument in arguments) {
                         Witnesses(argument);

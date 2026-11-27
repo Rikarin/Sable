@@ -603,6 +603,13 @@ static bool signal_raise(int signal) {
     return false;
 }
 
+// ---- Service managers ------------------------------------------------------
+
+static int service_control(int call) {
+    (void)call;
+    return 3;
+}
+
 // ---- The terminal ----------------------------------------------------------
 
 // A module is not told whether its streams are a terminal's, and can change

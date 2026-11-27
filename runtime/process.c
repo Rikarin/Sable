@@ -506,6 +506,12 @@ int64_t sable_process_notify(const SableString *socket, const SableString *messa
     return unix_datagram_send(socket->bytes, (size_t)socket->length, message->bytes, (size_t)message->length);
 }
 
+// A Windows service's part with the Service Control Manager
+// (service_control, and what it gives).
+int64_t sable_process_service(int64_t call) {
+    return service_control((int)call);
+}
+
 int64_t sable_process_id(void) {
     return process_id();
 }

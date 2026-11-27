@@ -723,3 +723,98 @@ static bool signal_raise(int number) {
 
     return false;
 }
+
+// ---- Service managers ------------------------------------------------------
+
+// A service's dispatcher takes a thread of its own for the service's life,
+// and runs service_main on another as the Service Control Manager starts
+// it; the controls come to on_service_control on the dispatcher's. A program
+// the manager did not start is told so at once.
+static SERVICE_STATUS_HANDLE service_handle;
+static DWORD service_checkpoint;
+static HANDLE service_connected;
+static volatile LONG service_result = 2;
+static wchar_t service_name[] = L"";
+
+static bool service_report(DWORD state) {
+    if (service_handle == NULL) {
+        return false;
+    }
+
+    bool pending = state == SERVICE_START_PENDING || state == SERVICE_STOP_PENDING;
+    SERVICE_STATUS status;
+    memset(&status, 0, sizeof status);
+    status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    status.dwCurrentState = state;
+    status.dwControlsAccepted = state == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0;
+    status.dwWin32ExitCode = NO_ERROR;
+    status.dwCheckPoint = pending ? ++service_checkpoint : 0;
+    status.dwWaitHint = pending ? 30000 : 0;
+    return SetServiceStatus(service_handle, &status) != FALSE;
+}
+
+static DWORD WINAPI on_service_control(DWORD control, DWORD type, LPVOID data, LPVOID context) {
+    (void)type, (void)data, (void)context;
+    switch (control) {
+    case SERVICE_CONTROL_STOP:
+    case SERVICE_CONTROL_SHUTDOWN:
+        service_report(SERVICE_STOP_PENDING);
+        // The host's SIGTERM; a program that does not catch it ends.
+        signal_raise(WIN_SIGTERM);
+        return NO_ERROR;
+    case SERVICE_CONTROL_INTERROGATE:
+        return NO_ERROR;
+    default:
+        return ERROR_CALL_NOT_IMPLEMENTED;
+    }
+}
+
+static VOID WINAPI service_main(DWORD count, LPWSTR *names) {
+    service_handle = RegisterServiceCtrlHandlerExW(count > 0 && names != NULL ? names[0] : service_name, on_service_control, NULL);
+    if (service_handle != NULL) {
+        service_report(SERVICE_START_PENDING);
+    }
+
+    InterlockedExchange(&service_result, service_handle != NULL ? 0 : 2);
+    SetEvent(service_connected);
+}
+
+static DWORD WINAPI service_dispatch(LPVOID unused) {
+    (void)unused;
+    // An own process's service is not looked up by its name.
+    SERVICE_TABLE_ENTRYW table[] = {{service_name, service_main}, {NULL, NULL}};
+    if (!StartServiceCtrlDispatcherW(table)) {
+        InterlockedExchange(&service_result, GetLastError() == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT ? 1 : 2);
+        SetEvent(service_connected);
+    }
+
+    return 0;
+}
+
+static int service_control(int call) {
+    if (call == 0) {
+        if (service_connected == NULL) {
+            service_connected = CreateEventW(NULL, TRUE, FALSE, NULL);
+            if (service_connected == NULL) {
+                return 2;
+            }
+
+            HANDLE thread = CreateThread(NULL, 0, service_dispatch, NULL, 0, NULL);
+            if (thread == NULL) {
+                SetEvent(service_connected);
+            } else {
+                CloseHandle(thread);
+            }
+        }
+
+        WaitForSingleObject(service_connected, INFINITE);
+        return (int)InterlockedCompareExchange(&service_result, 0, 0);
+    }
+
+    if (service_handle == NULL) {
+        return 1;
+    }
+
+    DWORD state = call == 1 ? SERVICE_RUNNING : call == 2 ? SERVICE_STOP_PENDING : SERVICE_STOPPED;
+    return service_report(state) ? 0 : 2;
+}

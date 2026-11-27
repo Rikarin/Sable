@@ -795,6 +795,15 @@ static void signal_arrived(int signal);
 // The signal sent to this process.
 static bool signal_raise(int signal);
 
+// ---- Service managers ------------------------------------------------------
+
+// A Windows service's part with the Service Control Manager: 0 connects to
+// it, waiting until it has (a stop it asks for is SIGTERM's, signal_raise's);
+// 1, 2 and 3 tell it the service is running, stopping and stopped. 0 done, 1
+// the program is not a service, 2 it failed, 3 there are no Windows services
+// here.
+static int service_control(int call);
+
 // ---- The terminal ----------------------------------------------------------
 
 // Whether a standard stream (0, 1, 2) is a terminal; whether it is one that

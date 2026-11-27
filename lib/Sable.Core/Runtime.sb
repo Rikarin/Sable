@@ -779,6 +779,14 @@ public struct Runtime {
     @builtin("process_notify")
     public static fn notifyService(_ socket: String, _ message: String) -> Int
 
+    /// A Windows service's part with the Service Control Manager: 0
+    /// connects to it, waiting until it has (a stop it asks for comes as
+    /// SIGTERM); 1, 2 and 3 tell it the service is running, stopping and
+    /// stopped. 0 done, 1 the program is not a service, 2 it failed, 3 there
+    /// are no Windows services here.
+    @builtin("process_service")
+    public static fn windowsService(_ call: Int) -> Int
+
     @builtin("process_current_directory")
     public static fn currentDirectory() -> String
 

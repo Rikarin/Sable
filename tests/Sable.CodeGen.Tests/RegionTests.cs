@@ -1,3 +1,4 @@
+using Sable.SIL;
 using static Sable.CodeGen.Tests.Programs;
 
 namespace Sable.CodeGen.Tests;
@@ -248,6 +249,92 @@ public sealed class RegionTests {
     [InlineData("", "var outer: Int[>..] = []\nvar held = &outer\nregion arena {\n    held = arena.alloc(Int[>..]())\n}\nheld.append(1)", "which is gone — the region ended")]
     public void AContainerInARegionCannotOutliveIt(string declarations, string body, string message) =>
         Rejects(Linked + "\n" + declarations, body, message);
+
+    // A closure, a generic result or an array carries what it holds out of
+    // the region no more than a bare reference does (#312).
+    const string Escapes = """
+                           fn withRegion<R>(_ body: (Region) -> R) -> R {
+                               region a {
+                                   return body(a)
+                               }
+                           }
+
+                           struct Box<T> {
+                               var held: T
+                           }
+
+                           class Keeper {
+                               var kept: () -> Int = { 0 }
+                           }
+
+                           fn keep(_ keeper: Keeper, _ f: @escaping () -> Int) {
+                               keeper.kept = f
+                           }
+
+                           fn callNow(_ f: () -> Int) -> Int {
+                               return f()
+                           }
+                           """;
+
+    [Theory]
+    [InlineData(GenericsMode.Specialised, "cannot return a reference rooted in region 'a' (as Test.withRegion<Node&>)")]
+    [InlineData(GenericsMode.Unspecialised, "'Test.withRegion<R>' would return a reference rooted in region 'a', which dies when it returns, as its result here is a reference (Test.Node&)")]
+    public void AGenericResultCannotCarryAReferenceOutOfItsRegion(GenericsMode mode, string message) {
+        using var _ = SilGen.UseGenerics(mode);
+        var errors = Errors(Escapes, "let n = withRegion { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(n.value)");
+        Assert.Contains(message, errors, StringComparison.Ordinal);
+        Assert.Contains("r.toOwned()", errors, StringComparison.Ordinal);
+    }
+
+    static string Errors(string declarations, string body) =>
+        string.Join("\n", Pipeline.Compile(new SourceText(Program(Declarations + "\n" + declarations, body), "test.sb")).Errors);
+
+    [Theory]
+    // A closure kept past the region it captured a reference into.
+    [InlineData("", "var f: () -> Int = { 0 }\nregion a {\n    let n = a.alloc(Node { value: 5, label: \"x\" })\n    f = { n.value }\n}\nprint(f())", "this closure captured a reference into region 'a', which is gone — the region ended at line")]
+    // One that captured the region itself.
+    [InlineData("", "var f: () -> Int = { 0 }\nregion a {\n    f = { a.alloc(Node { value: 5, label: \"x\" }).value }\n}\nprint(f())", "this closure captured a reference into region 'a', which is gone — the region ended at line")]
+    // Given to a function that keeps it.
+    [InlineData("", "let keeper = Keeper()\nregion a {\n    let n = a.alloc(Node { value: 5, label: \"x\" })\n    keep(keeper, { n.value })\n}\nprint(keeper.kept())", "this closure captured a reference into region 'a', and 'Test.keep' keeps it past the call")]
+    // Returned out of the region.
+    [InlineData("fn bad() -> () -> Int {\n    region a {\n        let n = a.alloc(Node { value: 5, label: \"x\" })\n        return { n.value }\n    }\n}", "", "cannot return a reference rooted in region 'a'")]
+    // A generic container of a reference.
+    [InlineData("fn bad() -> Box<Node&> {\n    region a {\n        let box: Box<Node&> = Box(held: a.alloc(Node { value: 1, label: \"x\" }))\n        return box\n    }\n}", "", "cannot return a reference rooted in region 'a'")]
+    // An array of references.
+    [InlineData("fn bad() -> Node&[>..] {\n    region a {\n        var list: Node&[>..] = []\n        list.append(a.alloc(Node { value: 1, label: \"x\" }))\n        return list\n    }\n}", "", "cannot return a reference rooted in region 'a'")]
+    [InlineData("fn bad() -> Node& {\n    region a {\n        var list: Node&[>..] = []\n        list.append(a.alloc(Node { value: 1, label: \"x\" }))\n        return list[0]\n    }\n}", "", "cannot return a reference rooted in region 'a'")]
+    public void AClosureAGenericOrAnArrayCannotCarryAReferenceOutOfItsRegion(string declarations, string body, string message) =>
+        Rejects(Escapes + "\n" + declarations, body, message);
+
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void WhatStaysInTheRegionOrIsCopiedOutIsAllowed(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal(
+            "5\n6 y\n8\n3\n",
+            AssertAgree(
+                Program(
+                    Declarations + "\n" + Escapes,
+                    """
+                        print(withRegion { r in r.alloc(Node { value: 5, label: "x" }).value })
+                        let owned = withRegion { r in r.alloc(Node { value: 6, label: "y" }).toOwned() }
+                        print("\(owned.value) \(owned.label)")
+                        region a {
+                            let n = a.alloc(Node { value: 5, label: "x" })
+                            let g = { n.value + 1 }
+                            let h = { a.alloc(Node { value: 2, label: "y" }).value }
+                            print(g() + h() + callNow({ n.value }) - 5)
+                            var list: Node&[>..] = []
+                            list.append(n)
+                            list.append(a.alloc(Node { value: -2, label: "z" }))
+                            print(list[0].value + list[1].value)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+    }
 
     // With SABLE_CHECK_REGIONS (runtime/references.c): what a reset gives
     // back is poisoned, and a value's guard bytes are checked as it goes.

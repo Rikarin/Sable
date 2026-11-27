@@ -594,7 +594,17 @@ references stored into a region's memory may refer only into that region,
 and into an object's only into the heap — `r.alloc(Node { next: &local })`
 is rejected naming the local and the region, as is linking one region's
 node from another's — so a linked structure lives in one region and
-nothing in it points out. Non-escape now deletes allocations rather than
+nothing in it points out. A closure carries the anchors of what it
+captured, a region among them (#312): kept in a variable past the region it
+captured into and called, returned, or given to a parameter its function
+keeps (stored in an object or a global — worked out to a fixed point,
+`@escaping` or not), it is rejected; called inside the region, it is not. A
+closure called with a region gives back what may be rooted there, so
+`fn withRegion<R>(_ body: (Region) -> R) -> R` instantiated with `R = Node&`
+is rejected in its body naming the instance; compiled once, its body is
+summarised as giving back a value rooted in its region, and each call with
+a reference among its types is rejected instead. An array of references
+holds what is appended, set or lent to it. Non-escape now deletes allocations rather than
 ARC traffic (§3.7), from summaries of the same shape. Deferred: references
 in arrays, summaries serialised into a `.sbi` (the `.sbi` itself is
 Phase 5's), secondary diagnostic labels, and rule 5's specialisation by

@@ -6,6 +6,7 @@ module LoggerTests
 
 import Sable.DependencyInjection
 import Sable.Diagnostics
+import Sable.IO
 import Sable.Testing
 
 struct Checkout { }
@@ -90,4 +91,49 @@ fn aContainerGivesATypedLoggerMadeWithItsLogger() throws {
     let log = try provider.resolve(Logger.Of<Checkout>.self)
     expect(!log.isEnabled(Level.Warning) && log.logger.context.count == 1)
     expect(Logger.Of<Checkout>.dependencies().count == 1)
+}
+
+@test(arguments: [
+    ("plain", "k=plain"),
+    ("", "k=\"\""),
+    ("a b", "k=\"a b\""),
+    ("say \"hi\"", "k=\"say \\\"hi\\\"\""),
+    ("a=b", "k=\"a=b\""),
+    ("back\\slash", "k=\"back\\\\slash\""),
+    ("two\nlines", "k=\"two\\nlines\""),
+])
+fn aValueIsQuotedWhereItWouldBeMisread(_ value: String, _ written: String) {
+    let log = Logger("q")
+    log.keepLines()
+    log.error("m", [field("k", value)])
+    expect(log.lines() == ["ERROR q: m \(written)"])
+}
+
+@test
+fn aLineIsStampedWithTheTimeWhenAsked() {
+    let log = Logger("t")
+    log.timestamps = true
+    log.keepLines()
+    log.warning("w")
+    log.info("i", [field("ok", true)])
+    let lines = log.lines()
+    require(lines.count == 2)
+    // The time is the clock's; its shape, "2026-11-27T10:00:00Z ", is not.
+    expect(lines[0].hasSuffix("Z WARN t: w") && lines[0].count == "2026-11-27T10:00:00Z WARN t: w".count)
+    expect(lines[1].hasSuffix("Z INFO t: i ok=true"))
+}
+
+@test
+fn theLevelComesFromTheEnvironmentWhereItNamesOne() {
+    let log = Logger("e")
+    log.threshold = Level.Error
+    log.configureFromEnvironment()
+    // SABLE_LOG is the runner's: unset, a level, or something else.
+    if let wanted = Environment.variable("SABLE_LOG") {
+        if let level = parseLevel(wanted) {
+            expect(rank(log.threshold) == rank(level))
+            return
+        }
+    }
+    expect(rank(log.threshold) == rank(Level.Error))
 }

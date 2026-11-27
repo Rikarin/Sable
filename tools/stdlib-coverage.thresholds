@@ -27,7 +27,6 @@ lib/Sable.Core/Runtime.sb                          0   0   # raise me: no tests 
 lib/Sable.Core/TypeInfo.sb                         0   0   # raise me: no tests yet
 lib/Sable.Diagnostics/Field.sb                     0  70   # raise me: no tests yet
 lib/Sable.Diagnostics/Level.sb                     0   0   # raise me: no tests yet
-lib/Sable.Diagnostics/Logger.sb                    0   0   # raise me: no tests yet
 lib/Sable.Generators/Attribute.sb                  0   0   # raise me: no tests yet
 lib/Sable.Generators/Case.sb                       0   0   # raise me: no tests yet
 lib/Sable.Generators/Declaration.sb                0   0   # raise me: no tests yet

@@ -1,0 +1,294 @@
+module XmlReaderStreamTests
+
+// A streaming XmlReader (Sable.Serialize.Xml): bytes given in pieces, by
+// `append` or from a Reader or an AsyncReader, read as the same nodes, with
+// the same places and errors, as the bytes all at once.
+
+import Sable.IO
+import Sable.Serialize.Xml
+import Sable.Testing
+
+fn utf8(_ text: String) -> U8[>..] {
+    var bytes: U8[>..] = []
+    bytes.append(utf8: text)
+    return bytes
+}
+
+// The text as UTF-16, little-endian with a byte order mark.
+fn utf16(_ text: String) -> U8[>..] {
+    let bytes = utf8(text)
+    var written: U8[>..] = [0xFF, 0xFE]
+    var at = 0
+    while at < bytes.count {
+        let lead = Int(bytes[at])
+        var code = lead
+        var width = 1
+        if lead >= 0xF0 {
+            code = lead & 0x07
+            width = 4
+        } else if lead >= 0xE0 {
+            code = lead & 0x0F
+            width = 3
+        } else if lead >= 0xC0 {
+            code = lead & 0x1F
+            width = 2
+        }
+        for i in 1..<width {
+            code = code << 6 | Int(bytes[at + i]) & 0x3F
+        }
+        at += width
+        if code >= 0x10000 {
+            let high = 0xD800 + (code - 0x10000) / 1024
+            let low = 0xDC00 + (code - 0x10000) % 1024
+            written.append(U8(high & 0xFF))
+            written.append(U8(high >> 8))
+            written.append(U8(low & 0xFF))
+            written.append(U8(low >> 8))
+        } else {
+            written.append(U8(code & 0xFF))
+            written.append(U8(code >> 8))
+        }
+    }
+    return written
+}
+
+// A node a line: its kind, place, name, namespace, value and attributes.
+fn line(_ reader: XmlReader, _ kind: XmlNodeKind) -> String {
+    var line = "\(kind) \(reader.line):\(reader.column) \(reader.name) {\(reader.namespace)} '\(reader.value)'"
+    for attribute in reader.attributes {
+        line += " \(attribute.name)=\(attribute.value)"
+    }
+    if kind == .Declaration {
+        line += " \(reader.encoding)"
+    }
+    return line
+}
+
+fn whole(_ bytes: U8[>..]) -> String[>..] {
+    var all: String[>..] = []
+    do {
+        let reader = try XmlReader(bytes: bytes)
+        while let kind = try reader.next() {
+            all.append(line(reader, kind))
+        }
+    } catch {
+        all.append("error \(error.description())")
+    }
+    return all
+}
+
+// The bytes given to the reader that many at a time.
+fn pieces(_ bytes: U8[>..], _ size: Int) -> String[>..] {
+    var all: String[>..] = []
+    let reader = XmlReader.streaming()
+    var given = 0
+    do {
+        while true {
+            if let kind = try reader.next() {
+                all.append(line(reader, kind))
+            } else if reader.needsMore {
+                if given < bytes.count {
+                    let end = given + size < bytes.count ? given + size : bytes.count
+                    try reader.append(bytes[given..<end])
+                    given = end
+                } else {
+                    try reader.finish()
+                }
+            } else {
+                break
+            }
+        }
+    } catch {
+        all.append("error \(error.description())")
+    }
+    return all
+}
+
+// The bytes read from a stream, that many at a time.
+fn streamed(_ bytes: U8[>..], _ size: Int) -> String[>..] {
+    var all: String[>..] = []
+    var source = MemoryStream(bytes)
+    let reader = XmlReader.streaming()
+    do {
+        while let kind = try reader.next(from: &source, upTo: size) {
+            all.append(line(reader, kind))
+        }
+    } catch {
+        all.append("error \(error.description())")
+    }
+    return all
+}
+
+// Items enough that the reader lets go of the bytes it has read, then
+// what ends the document.
+fn items(_ end: String) -> String {
+    var text = "<items>\n"
+    for i in 0..<400 {
+        text += "  <item n='\(i)'>text of item \(i) &amp; é</item>\n"
+    }
+    return text + end
+}
+
+let documents: String[>..] = [
+    "<?xml version='1.0' encoding='UTF-8'?><!DOCTYPE a [<!ENTITY e 'x<b>&#233;</b>y'><!ATTLIST a t NMTOKENS '  p  q '>]><a xmlns:p='urn:p' p:k='v &amp;\r\n w'>\r\n  text &e; more<![CDATA[ c ]]><!-- note --><?pi data?>é中😀</a>",
+    "<!DOCTYPE a [<!ENTITY e '<b/>x'>]><a>&e;yyy</a>",
+    "<!DOCTYPE a SYSTEM 'a.dtd' [<!ENTITY % p '<!ENTITY q \"r\">'> %p;]><a>&q;&undeclared;</a>",
+    "<a>\n<b></a>",
+    "<a>text</a",
+    "<a>]]></a>",
+    "\u{FEFF}<a/>  <!-- after --> ",
+]
+
+@test(arguments: [1, 2, 3, 5, 64, 100000])
+fn piecesAreReadAsTheWholeIs(_ size: Int) {
+    for text in documents {
+        let bytes = utf8(text)
+        let read = whole(bytes)
+        let given = pieces(bytes, size)
+        let taken = streamed(bytes, size)
+        expect(given == read, "\(text): \(given) against \(read)")
+        expect(taken == read, "\(text): \(taken) against \(read)")
+    }
+}
+
+@test(arguments: [1, 7, 1000])
+fn aLongDocumentIsLetGoOfAsItIsRead(_ size: Int) {
+    for end in ["</items>", "</wrong>", "<x>\r\n&bad;</x></items>"] {
+        let bytes = utf8(items(end))
+        let read = whole(bytes)
+        let given = pieces(bytes, size)
+        expect(read.count > 1000)
+        expect(given == read, "\(end): \(given[given.count - 1]) against \(read[read.count - 1])")
+        expect(streamed(bytes, size) == read)
+    }
+}
+
+@test(arguments: [1, 2, 3, 1000])
+fn everyEncodingIsReadInPieces(_ size: Int) {
+    var latin = utf8("<?xml version='1.0' encoding='ISO-8859-1'?><a b='")
+    latin.append(0xE9)
+    latin.append(utf8: "'>")
+    latin.append(0xFF)
+    latin.append(utf8: "</a>")
+    var ascii = utf8("<?xml version='1.0' encoding='US-ASCII'?><a>")
+    ascii.append(0xC3)
+    ascii.append(utf8: "</a>")
+    var odd = utf16("<a/>")
+    odd.append(0)
+    var lone = utf16("<a>")
+    lone.append(0x00)
+    lone.append(0xD8)
+    lone.append(utf8: "a")
+    lone.append(0)
+    let documents: U8[>..][>..] = [
+        utf16("<?xml version='1.0' encoding='UTF-16'?><a b='é'>x😀中</a>"),
+        utf16("<a/>"),
+        latin,
+        ascii,
+        odd,
+        lone,
+        [0x3C, 0x61, 0x3E, 0xFF, 0x3C, 0x2F, 0x61, 0x3E],
+        [0x3C, 0x61, 0x3E, 0xC3],
+        utf8("<?xml version='1.0' encoding='EBCDIC'?><a/>"),
+        utf8("<?xml version='1.0' encoding='UTF-16'?><a/>"),
+        [0x3C, 0x61],
+        [],
+    ]
+    for bytes in documents {
+        // Bytes not of their encoding are an error when they come, after
+        // the nodes before them; all at once, before any node.
+        let read = whole(bytes)
+        let given = pieces(bytes, size)
+        let taken = streamed(bytes, size)
+        if read.count == 1 {
+            expect(given[given.count - 1] == read[0] && taken[taken.count - 1] == read[0], "\(bytes): \(given) against \(read)")
+        } else {
+            expect(given == read, "\(bytes): \(given) against \(read)")
+            expect(taken == read, "\(bytes): \(taken) against \(read)")
+        }
+    }
+}
+
+@test
+fn anElementIsSkippedAsItsBytesCome() {
+    var source = MemoryStream(utf8("<a><b><c>1</c><c>2</c></b><d>3</d></a>"))
+    let reader = XmlReader.streaming()
+    var seen: String[>..] = []
+    while let kind = try! reader.next(from: &source, upTo: 3) {
+        if kind == .StartElement && reader.name == "b" {
+            try! reader.skip(from: &source, upTo: 3)
+            expect(reader.kind == .EndElement && reader.name == "b")
+        } else if kind == .Text {
+            seen.append(reader.value)
+        }
+    }
+    expect(seen == ["3"], "\(seen)")
+    try! reader.skip()
+}
+
+// Chunks given to a task one at a time; an empty one fails.
+final class AsyncTrickle: AsyncReader {
+    var left: U8[>..][>..]
+
+    init(_ chunks: U8[>..][>..]) {
+        left = chunks
+    }
+
+    fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        if left.isEmpty {
+            return []
+        }
+        let first = left[0]
+        var rest: U8[>..][>..] = []
+        for chunk in left[1..<left.count] {
+            rest.append(chunk)
+        }
+        left = rest
+        if first.isEmpty {
+            throw IoError.Interrupted
+        }
+        return first
+    }
+}
+
+@test
+fn anAsyncReaderIsReadFrom() async throws {
+    let source = AsyncTrickle([utf8("<a><b x"), utf8("='1'>skipped</b"), utf8("><c>t"), utf8("ext</c></a>"), utf8(" ")])
+    let reader = XmlReader.streaming()
+    var seen = ""
+    while let kind = try await reader.next(from: source) {
+        seen += "\(kind) "
+        if kind == .StartElement && reader.name == "b" {
+            expect(reader.attribute("x") == "1")
+            try await reader.skip(from: source)
+        } else if kind == .Text {
+            seen += reader.value + " "
+        }
+    }
+    expect(seen == "StartElement StartElement StartElement Text text EndElement EndElement ", seen)
+}
+
+@test
+fn aReadersFailureIsNotTheXmls() async {
+    let failing = AsyncTrickle([utf8("<a>"), []])
+    var reader = XmlReader.streaming()
+    await expectThrows(saying: IoError.Interrupted.description()) {
+        while try await reader.next(from: failing) != none { }
+    }
+    let malformed = AsyncTrickle([utf8("<a></"), utf8("b>")])
+    reader = XmlReader.streaming()
+    await expectThrows(saying: "line 1, column 4: </b> where </a> is wanted") {
+        while try await reader.next(from: malformed) != none { }
+    }
+    let other = AsyncTrickle([utf8("<a><b/></a>")])
+    reader = XmlReader.streaming()
+    _ = try! await reader.next(from: other)
+    try! await reader.skip(from: other)
+    expect(reader.kind == .EndElement && reader.name == "a")
+    let text = AsyncTrickle([utf8("<a>t</a>")])
+    reader = XmlReader.streaming()
+    _ = try! await reader.next(from: text)
+    _ = try! await reader.next(from: text)
+    try! await reader.skip(from: text)
+    expect(reader.kind == .Text)
+}

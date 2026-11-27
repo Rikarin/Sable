@@ -1177,6 +1177,43 @@ fn main() {
                 """).Stdout
         );
 
+    /// <summary>
+    ///     A class's deinit is built where an object of it is made: here by a
+    ///     closure, held by a generic class that code compiled once for every
+    ///     type makes, and destroyed through its metadata. The deinit runs.
+    /// </summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AClassMadeForAGenericHolderRunsItsDeinit(GenericsMode generics) {
+        using var _ = SilGen.UseGenerics(generics);
+        const string source = """
+                              module H
+                              class Counted {
+                                  let gone: Atomic<Int>
+                                  init(_ gone: Atomic<Int>) {
+                                      self.gone = gone
+                                  }
+                                  deinit {
+                                      gone.add(1)
+                                  }
+                              }
+                              @main
+                              fn main() {
+                                  let gone = Atomic<Int>(0)
+                                  do {
+                                      let cell = OnceCell<Counted>()
+                                      _ = cell.getOrInit { Counted(gone) }
+                                  }
+                                  print(gone.load())
+                              }
+                              """;
+        Assert.Equal("1\n", Interpret(source).Output);
+        if (CanBuild) {
+            Assert.Equal("1\n", BuildAndRun(source).Stdout);
+        }
+    }
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

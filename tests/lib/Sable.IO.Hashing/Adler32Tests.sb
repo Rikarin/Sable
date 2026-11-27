@@ -30,6 +30,26 @@ fn theSumsAreReducedBeforeTheyOverflow() {
     expect(adler.value == 0x149A_302C)
 }
 
+/// Adler-32 as RFC 1950 has it, a byte at a time.
+fn byteAtATime(_ bytes: U8[:]) -> U32 {
+    var a: U32 = 1
+    var b: U32 = 0
+    for byte in bytes {
+        a = (a + U32(byte)) % 65521
+        b = (b + a) % 65521
+    }
+    return b << 16 | a
+}
+
+@test(arguments: [0, 15, 16, 17, 31, 32, 48, 63, 703, 704, 705, 736, 5535, 5536, 5537, 5568, 11072, 11121])
+fn eachLengthIsTheSumsOfItsBytes(_ count: Int) {
+    // Lengths about a vector, a run of 22 of them, and the 5536 between reductions.
+    let bytes = sanityBuffer(count)
+    expect(Adler32.hash(bytes) == byteAtATime(bytes))
+    let ones = U8[>..](repeating: 0xFF, count: count)
+    expect(Adler32.hash(ones) == byteAtATime(ones))
+}
+
 @test
 fn piecesOfAnySizeGiveTheSame() {
     let bytes = sanityBuffer(4160)

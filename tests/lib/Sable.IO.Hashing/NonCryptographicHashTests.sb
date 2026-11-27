@@ -4,8 +4,44 @@ module NonCryptographicHashTests
 //     tools/stdlib-coverage.sh Sable.IO.Hashing
 
 import HashingSupport
+import Sable.IO
 import Sable.IO.Hashing
 import Sable.Testing
+
+/// Gives its bytes a few at a time, and then an error, if it is to.
+struct Trickle: Reader {
+    var bytes: U8[>..]
+    var fails: Bool
+
+    mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if bytes.isEmpty && fails {
+            throw IoError.UnexpectedEof
+        }
+        let taken = bytes.count < 7 ? bytes.count : 7
+        let part = bytes[..<taken].toArray()
+        bytes = bytes[taken...].toArray()
+        return part
+    }
+}
+
+/// The same of a task's, from a place in bytes that do not change.
+final class AsyncTrickle: AsyncReader {
+    let bytes: U8[>..]
+    let at: Atomic<Int>
+
+    init(_ bytes: U8[>..]) {
+        self.bytes = bytes
+        at = Atomic<Int>(0)
+    }
+
+    fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        await Task.yield()
+        let start = at.load()
+        let end = start + 7 < bytes.count ? start + 7 : bytes.count
+        at.store(end)
+        return bytes[start..<end].toArray()
+    }
+}
 
 fn fingerprint<H: NonCryptographicHash>(_ parts: String[:], _ function: H.Type) -> U8[>..] {
     var hash = H()
@@ -34,4 +70,40 @@ fn hashBytesIsTheValueInTheFormatsOrder() {
     expect(XxHash64.hashBytes(whole) == XxHash64.hash(whole).bigEndianBytes())
     expect(XxHash128.hashBytes(whole).count == XxHash128.hashByteCount)
     expect(Crc32.hashBytes(whole) == Crc32.hash(whole).littleEndianBytes())
+}
+
+@test
+fn aReaderIsHashedToItsEnd() throws {
+    let bytes = sanityBuffer(300)
+    var reader = Trickle(bytes: bytes, fails: false)
+    expect(try XxHash3.hashBytes(reading: &reader) == XxHash3.hashBytes(bytes))
+    // Nothing is left.
+    expect(try XxHash3.hashBytes(reading: &reader) == XxHash3.hashBytes([]))
+    var stream = MemoryStream(bytes)
+    expect(try Crc64.hashBytes(reading: &stream) == Crc64.hashBytes(bytes))
+}
+
+@test
+fn aReaderIsHashedAfterWhatWasGiven() throws {
+    let bytes = sanityBuffer(300)
+    var crc = Crc32(.Castagnoli)
+    crc.update(bytes[..<10])
+    var reader = Trickle(bytes: bytes[10...].toArray(), fails: false)
+    try crc.update(reading: &reader)
+    expect(crc.value == Crc32.hash(bytes, polynomial: .Castagnoli))
+}
+
+@test
+fn aReadersErrorIsThrown() {
+    var reader = Trickle(bytes: sanityBuffer(30), fails: true)
+    expectThrows(saying: "the stream ended before what was needed") { _ = try Adler32.hashBytes(reading: &reader) }
+}
+
+@test
+fn anAsyncReaderIsHashedToItsEnd() async throws {
+    let bytes = sanityBuffer(300)
+    var hash = XxHash64()
+    hash.update(bytes[..<3])
+    try await hash.update(reading: AsyncTrickle(bytes[3...].toArray()))
+    expect(hash.value == XxHash64.hash(bytes))
 }

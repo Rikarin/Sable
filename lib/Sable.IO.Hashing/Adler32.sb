@@ -59,12 +59,19 @@ public struct Adler32: NonCryptographicHash {
             left = left &- run
             let whole = run & ~31
             if whole > 0 {
-                let (sum, weighted) = adlerChunks(at, whole)
+                let (sum, weighted) = adlerBlocks(at, whole)
                 b = b &+ (whole unchecked as U32) &* a &+ weighted
                 a = a &+ sum
                 at = at &+ whole
             }
             var rest = run &- whole
+            if rest >= 16 {
+                let (sum, weighted) = adlerSixteen(at)
+                b = b &+ 16 &* a &+ weighted
+                a = a &+ sum
+                at = at &+ 16
+                rest = rest &- 16
+            }
             while rest > 0 {
                 a = a &+ (load8(at) unchecked as U32)
                 b = b &+ a
@@ -90,23 +97,44 @@ public struct Adler32: NonCryptographicHash {
 
 /// Of the bytes at an address, a multiple of 32 and at most 5536 of them: the
 /// sum of the bytes, and the sum of each times how many bytes from it to the
-/// end, itself counted. Each lane of a vector keeps its own sums: of its bytes,
-/// of those sums before each step (each a step further from the end), and of
-/// its bytes times their place from a step's end.
+/// end, itself counted. Each lane of a vector is a column, the bytes at one
+/// place in each step of 32: their sum, and the sum of that sum after each
+/// step. A byte of step k (of n) at place j is counted 32 (n - k) - j times,
+/// which is 32 times its column's sums, less j times its column. The sums are
+/// kept in sixteen bits a lane for 22 steps at a time, the most that cannot
+/// overflow, and added to thirty-two bits between: a step is two loads, four
+/// widening additions and four additions.
 @inline(always)
-unsafe fn adlerChunks(_ address: Int, _ count: Int) -> (U32, U32) {
-    let places = SIMD<U16, 32>(repeating: 32) &- SIMD<U16, 32>.sequence(start: 0, step: 1)
+unsafe fn adlerBlocks(_ address: Int, _ count: Int) -> (U32, U32) {
+    var columns = SIMD<U32, 32>()
     var sums = SIMD<U32, 32>()
-    var before = SIMD<U32, 32>()
-    var weighted = SIMD<U32, 32>()
     var at = address
-    let end = address &+ count
-    while at < end {
-        let bytes = SIMD<U16, 32>.converting(RawPtr<U8>(address: at).load(as: SIMD<U8, 32>.self))
-        before = before &+ sums
-        sums = sums &+ SIMD<U32, 32>.converting(bytes)
-        weighted = weighted &+ SIMD<U32, 32>.converting(bytes &* places)
-        at = at &+ 32
+    var steps = count >> 5
+    while steps > 0 {
+        let run = steps < 22 ? steps : 22
+        steps = steps &- run
+        var runColumns = SIMD<U16, 32>()
+        var runSums = SIMD<U16, 32>()
+        let end = at &+ (run << 5)
+        while at < end {
+            runColumns = runColumns &+ SIMD<U16, 32>.converting(RawPtr<U8>(address: at).load(as: SIMD<U8, 32>.self))
+            runSums = runSums &+ runColumns
+            at = at &+ 32
+        }
+        // The sums after each of the run's steps have the columns before it in
+        // them as many times.
+        sums = sums &+ columns &* SIMD<U32, 32>(repeating: run unchecked as U32) &+ SIMD<U32, 32>.converting(runSums)
+        columns = columns &+ SIMD<U32, 32>.converting(runColumns)
     }
-    return (sums.reduceAdd(), before.reduceAdd() &* 32 &+ weighted.reduceAdd())
+    let places = SIMD<U32, 32>.sequence(start: 0, step: 1)
+    return (columns.reduceAdd(), sums.reduceAdd() &* 32 &- (columns &* places).reduceAdd())
+}
+
+/// Of the sixteen bytes at an address, the same: neither sum is more than
+/// sixteen bits.
+@inline(always)
+unsafe fn adlerSixteen(_ address: Int) -> (U32, U32) {
+    let bytes = SIMD<U16, 16>.converting(RawPtr<U8>(address: address).load(as: SIMD<U8, 16>.self))
+    let places = SIMD<U16, 16>(repeating: 16) &- SIMD<U16, 16>.sequence(start: 0, step: 1)
+    return (bytes.reduceAdd() unchecked as U32, (bytes &* places).reduceAdd() unchecked as U32)
 }

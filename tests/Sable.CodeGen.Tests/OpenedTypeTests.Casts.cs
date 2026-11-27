@@ -162,6 +162,35 @@ public sealed partial class OpenedTypeTests {
     );
 
     [Fact]
+    public void ANestedGenericTypeIsNamedThroughItsOwner() => Prints(
+        """
+        Test.Outer.Inner<Int> 3
+        Test.Outer.Inner 1 Test.Outer.Inner<String>
+        inner
+
+        """,
+        """
+        protocol Shown { fn shown() -> String }
+        final class Outer {
+            struct Inner<T> {
+                let n: Int
+                init(_ n: Int) { self.n = n }
+            }
+        }
+        extension Outer.Inner: Shown {
+            fn shown() -> String { return "inner" }
+        }
+        """,
+        """
+            let made = Outer.Inner<Int>(3)
+            print("\(type(of: made)) \(made.n)")
+            let inner = Outer.Inner.self
+            print("\(inner.name) \(inner.parameterCount) \(inner.instantiate([String.self])!)")
+            print(Outer.Inner<Bool>(0).shown())
+        """
+    );
+
+    [Fact]
     public void AGenericClassHoldsOneOfAnotherOfItself() => Prints(
         "log of Test.Repo<Test.Order>\n",
         """

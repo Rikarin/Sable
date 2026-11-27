@@ -5,10 +5,24 @@ module Sable.Build
 public struct TargetSettings {
     var triple: String
     var reflection: Bool
+    var runtime: RuntimeProfile?
 
     /// With `reflection: false`, the build carries no reflection, as
-    /// `--deny-reflection` asks: `Mirror` and `TypeInfo` are errors.
-    public static fn target(_ triple: String, reflection: Bool = true) -> TargetSettings {
-        return TargetSettings { triple: triple, reflection: reflection }
+    /// `--deny-reflection` asks: `Mirror` and `TypeInfo` are errors. With a
+    /// `runtime`, the program links that profile of the runtime, as
+    /// `--runtime` asks; without one, the full runtime.
+    public static fn target(_ triple: String, reflection: Bool = true, runtime: RuntimeProfile? = none) -> TargetSettings {
+        return TargetSettings { triple: triple, reflection: reflection, runtime: runtime }
     }
+}
+
+/// Which parts of the runtime a program links (docs/06 §6.1), each with the
+/// one before it: `minimal` is the core alone — one thread, no task, no
+/// files or sockets; `standard` adds the executor, threads and the system;
+/// `full`, the default, adds the tools — backtraces named by line, coverage
+/// and call profiles.
+public enum RuntimeProfile {
+    minimal,
+    standard,
+    full
 }

@@ -783,7 +783,7 @@ public static class IncrementalBuild {
             // what came before it needs. A static library C links is the
             // objects joined whole (-r), the libraries' and the runtime's too.
             link = settings.Library is LibraryKind.Static
-                ? NativeObjects.LinkLibrary([..units.Select(static u => u.ObjectPath), runtime.Object], executable, LibraryKind.Static, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
+                ? NativeObjects.LinkLibrary([..units.Select(static u => u.ObjectPath), ..runtime.Objects], executable, LibraryKind.Static, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
                 : settings.Library is { } kind
                     ? NativeObjects.LinkLibrary([..units.Select(static u => u.Linked), runtime.Archive], executable, kind, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
                     : NativeObjects.Link([..units.Select(static u => u.Linked), runtime.Archive], executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));

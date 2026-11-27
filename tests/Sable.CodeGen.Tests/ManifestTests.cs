@@ -259,13 +259,14 @@ public sealed class ManifestTests {
         Assert.Contains(Errors(Package + "[target.'cfg(unix)'.dependencies]\nb = \"1\"\n"),
             static e => e.Key == "target" && e.Message.Contains("when", StringComparison.Ordinal));
 
-        // Not part of the format: [reflect] is said in code, and there are no runtime profiles.
+        // Not part of the format: [reflect] is said in code. A runtime profile is one of three.
         Assert.Contains(Errors(Package + "[reflect]\ninclude = [\"Scene\"]\n"),
             static e => e.Key == "reflect" && e.Message.Contains("@reflectable", StringComparison.Ordinal));
-        Assert.Contains(Errors(Package + "[targets.wasm32-wasi]\nruntime = \"minimal\"\n"),
-            static e => e.Key == "targets.wasm32-wasi.runtime" && e.Message.Contains("no runtime profiles", StringComparison.Ordinal));
-        Assert.Contains(Errors(Package + "[targets.wasm32-wasi]\nruntime = \"full\"\n"),
+        Assert.Contains(Errors(Package + "[targets.wasm32-wasi]\nruntime = \"tiny\"\n"),
+            static e => e.Key == "targets.wasm32-wasi.runtime" && e.Message.Contains("\"minimal\"", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[targets.wasm32-wasi]\nruntime = 1\n"),
             static e => e.Key == "targets.wasm32-wasi.runtime");
+        Assert.Equal(RuntimeProfile.Minimal, Parse(Package + "[targets.wasm32-wasi]\nruntime = \"minimal\"\n").TargetSettingsFor(NativeTarget.Of("wasm32-wasi"))!.Runtime);
 
         // Warned about: accepted, with a word that nothing uses them.
         var manifest = Parse(Package + "categories = [\"x\"]\nhomepage = \"https://a\"\n[build-dependencies]\nb = \"1\"\n[targets.wasm32-wasi]\nx = 1\n" +

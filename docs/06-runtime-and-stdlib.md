@@ -22,18 +22,66 @@ Sable.Runtime/
 └── platform/       darwin.c linux.c windows.c wasm.c
 ```
 
-Profiles:
+That tree is the shape aimed at; the runtime as built is `runtime/`, one
+translation unit (`sable_runtime.c` includes its parts in a fixed order), and
+its profiles are made of the parts it has:
 
-| Profile | Contents | Size |
-|---|---|---|
-| `minimal` | alloc, refcount, metadata, error | ~40 KB |
-| `standard` | + conformance, existential, region, task, actor | ~140 KB |
-| `full` | + reflect, backtrace | ~200 KB |
+| Profile | Contents |
+|---|---|
+| `minimal` | the core: the platform layer, objects, memory, references and regions, exclusivity, traps, numbers, strings, hashing, random numbers, arrays, metadata, inline layout, the leak check, the standard streams, arguments and the environment (`io.c`) |
+| `standard` | + the executor and threads (frames, tasks, the watchdog, locks, threads C makes, parallel loops), the system (sockets, files, watching, processes, the terminal, IPC, the trust store) and the processor's kernels (vectors, DLPack, crypto, ciphers, codecs, checksums, validation) |
+| `full` | + the tools: backtraces named by the source's lines (`lines.c`), coverage, call profiles |
 
-Not built: every build links the whole runtime, and until the runtime is
-split there is no setting for it (`[targets.<triple>] runtime` is an error,
-docs/05 §5.2.10). `minimal` plus `--deny-reflection` is meant to be the
-embedded story.
+**Choosing one.** `--runtime minimal|standard|full` (`sable build` and
+`run`, for a file or a package), or `runtime = "minimal"` in a manifest's
+`[targets.<triple>]` (`.target("wasm32-wasi", runtime: .minimal)` in
+package.sb); the flag wins. Without either, the full runtime, compiled as it
+always was: every existing program and test links what it did.
+`--profile-generate` needs the full runtime. `minimal` plus
+`--deny-reflection` is the embedded story.
+
+**The split.** The profile is the C compiler's `SABLE_RUNTIME_PROFILE`
+(1, 2 or 3), which decides the parts `sable_runtime.c` includes; what the
+core calls of a part left out — sharing, the globals' registration, draining
+the tasks as `main` ends, the platform layer's reports to watches and
+signals — it gives in a few lines of its own: with one thread and no task,
+nothing is shared and nothing waits. Each profile's runtime is its own
+build-cache entry (the flag is in the key). What the full runtime exports
+and a smaller one does not is still named by the standard library's archive
+and the compiler's IR, so the build lists both runtimes' definitions,
+compiled to IR for the target, and compiles a stub for each function left
+out (`RuntimeProfiles.AbsentStubs`), archived beside the runtime: a call
+traps, `'sable_process_id' is in a part of the runtime the minimal runtime
+profile leaves out`. So every link of a smaller runtime succeeds where the
+full one's does, and the stubs nothing reaches are left out with the rest.
+
+**What is refused.** Under `minimal`, the program's own code is checked as
+it is parsed (S3451): an `import` of a module that needs the executor,
+threads or the system — `Sable.Concurrency`, `Sable.IO`, `Sable.Net`,
+`Sable.Process`, `Sable.IO.Ipc`, `Sable.IO.Ports`, `Sable.Interop`,
+`Sable.Crypto.X509` (`Library.BeyondMinimal`), or a module importing one —
+and every `async`, as async code runs on the executor. What Sable.Core
+reaches of a part left out without such a use traps as it is called. No
+module needs the tools, so `standard` refuses nothing.
+
+**Sizes** (macOS arm64, `sable build <file>`, bytes of the executable and of
+its `__text`; `examples/ssg` imports Sable.IO, which `minimal` refuses):
+
+| Program | Build | `minimal` | `standard` | `full` |
+|---|---|---|---|---|
+| `examples/01-hello.sb` | `-O2` | 54,816 / 10,100 | 55,288 / 12,064 | 72,752 / 18,916 |
+| `examples/01-hello.sb` | `-O0` | 93,504 / 29,184 | 116,416 / 56,276 | 134,120 / 65,576 |
+| `examples/ssg` | `-O2` | — | 350,016 / 218,560 | 350,792 / 225,412 |
+| `examples/ssg` | `-O0` | — | 664,408 / 413,168 | 681,944 / 422,468 |
+
+The runtime's own object at `-O2`, everything it exports: `__text` 99,520
+bytes minimal, 236,432 standard, 245,168 full (the minimal profile's stubs
+add 48 KB of object, mostly names). A linked program takes only what it
+reaches (`-dead_strip`, `--gc-sections`, `/OPT:REF`), so the profile matters
+most where nothing is left out by the linker — a static library C links,
+which takes the runtime's object whole — and in what start-up and a trap
+reach: a backtrace's line table reader is most of what `full` adds to a
+small program.
 
 ## 6.2 Object header and metadata
 
@@ -201,8 +249,7 @@ protocols are known by name across images — by `sable_type_conformance`.
 The interpreter models the same records (src/Sable.SIL/TypeMetadata.cs), so
 a program interpreted answers as the native one does.
 
-Not yet: the profiles (`minimal`, `standard`, `full`), which need the runtime split
-into parts a link can leave out. The allocator's size classes reach 1 KB;
+The runtime's profiles are §6.1's. The allocator's size classes reach 1 KB;
 each class has 64 KiB slabs of its own, mapped from the system aligned to
 their size, which count the blocks they have out and are unmapped when that
 reaches zero (but for one each class keeps): memory a program once held in

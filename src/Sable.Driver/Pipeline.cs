@@ -357,6 +357,43 @@ public static partial class Pipeline {
         return errors;
     }
 
+    /// <summary>
+    ///     What the program's own files use of the runtime that its profile
+    ///     leaves out (docs/06 §6.1), each an error (S3451) formatted against
+    ///     its file: under the minimal profile, an import of a module that
+    ///     needs more of it (<see cref="Library.BeyondMinimal" />), and
+    ///     <c>async</c> code, which runs on the executor. What the standard
+    ///     library reaches of a part left out traps as it is called, naming it.
+    /// </summary>
+    public static List<string> RuntimeProfileDenied(IEnumerable<SyntaxTree> own, RuntimeProfile profile) {
+        var errors = new List<string>();
+        if (profile != RuntimeProfile.Minimal) {
+            return errors;
+        }
+
+        foreach (var tree in own) {
+            if (tree.Root is not CompilationUnitSyntax unit) {
+                continue;
+            }
+
+            foreach (var import in unit.Imports) {
+                var name = import.Name.ToString().Trim();
+                if (Library.BeyondMinimalOf(name, tree.Options) is { } need) {
+                    var why = need.Module == name ? $"'{name}' needs" : $"'{name}' imports '{need.Module}', which needs";
+                    errors.Add(Diagnostic.Error(ErrorCode.ERR_RuntimeProfileExcludes, import.Name.Span,
+                        $"this program is built with the minimal runtime profile, and {why} the runtime's {need.Part}, which that profile leaves out").Format(tree.Text));
+                }
+            }
+
+            foreach (var token in unit.DescendantTokens().Where(static t => t.Kind == SyntaxKind.AsyncKeyword)) {
+                errors.Add(Diagnostic.Error(ErrorCode.ERR_RuntimeProfileExcludes, token.Span,
+                    "this program is built with the minimal runtime profile, and 'async' code runs on the runtime's executor, which that profile leaves out").Format(tree.Text));
+            }
+        }
+
+        return errors;
+    }
+
     static List<string> Formatted(IEnumerable<(Diagnostic Diagnostic, SyntaxTree? Tree)> diagnostics, IReadOnlyList<SyntaxTree> program) {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
         return [

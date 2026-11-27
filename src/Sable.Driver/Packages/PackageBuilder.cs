@@ -27,6 +27,9 @@ public sealed record BuildRequest(
     ///     <c>unsafe fn</c> in the workspace's own packages (SYNTAX.md §23).
     /// </summary>
     public bool DenyUnsafe { get; init; }
+
+    /// <summary><c>--runtime</c>: the runtime profile, whatever the manifest says (docs/06 §6.1); null for the manifest's.</summary>
+    public RuntimeProfile? Runtime { get; init; }
 }
 
 /// <summary>An executable a build made.</summary>
@@ -398,6 +401,13 @@ public static class PackageBuilder {
                 return null;
             }
 
+            if (Pipeline.RuntimeProfileDenied(OwnSources(graph, member.Name, bins, profile.Optimise, request.Target), RuntimeProfileOf(graph.Workspace, request)) is { Count: > 0 } excluded) {
+                Report(environment, excluded);
+                DiagnosticDocs.WriteHint(environment.Error, excluded);
+                environment.Error.WriteLine($"error: could not compile {member.Name}");
+                return null;
+            }
+
             var reported = new List<string>();
             if (Generate(graph, member.Name, environment, reported, !profile.DebugAssertions, timings) is not { } generated) {
                 DiagnosticDocs.WriteHint(environment.Error, reported);
@@ -523,6 +533,7 @@ public static class PackageBuilder {
                 Sysroot = request.Sysroot,
                 LinkArguments = graph.LinkArguments(member),
                 LinkInputs = graph.LinkInputs(member),
+                Runtime = RuntimeProfileOf(graph.Workspace, request),
             },
             Whole = profile.CodegenUnits == 1 || !profile.Incremental,
             ArcChecks = profile.ArcChecks,
@@ -538,6 +549,14 @@ public static class PackageBuilder {
     /// </summary>
     static bool DeniesReflection(Workspace workspace, BuildRequest request) =>
         request.DenyReflection || workspace.RootManifest.TargetSettingsFor(request.Target ?? NativeTarget.Host) is { Reflection: false };
+
+    /// <summary>
+    ///     The runtime profile the build links (docs/06 §6.1): <c>--runtime</c>,
+    ///     or the root manifest's for the target built for
+    ///     (<c>[targets.&lt;triple&gt;] runtime</c>), or the full runtime.
+    /// </summary>
+    static RuntimeProfile RuntimeProfileOf(Workspace workspace, BuildRequest request) =>
+        request.Runtime ?? workspace.RootManifest.TargetSettingsFor(request.Target ?? NativeTarget.Host)?.Runtime ?? RuntimeProfile.Full;
 
     /// <summary><c>sable run</c>: builds the one binary there is (or the one asked for), runs it, and returns its exit code.</summary>
     public static int Run(Workspace workspace, PackageEnvironment environment, BuildRequest request, IReadOnlyList<string> arguments) {

@@ -1,0 +1,503 @@
+module Sable.Text
+
+/// Where escaped text is to be placed, which decides how a character is
+/// escaped and which are escaped whatever is allowed.
+@derive(Equatable, Hashable, Debug)
+public enum EscapeContext {
+    /// HTML: an element's text or a quoted attribute's value. '&', '<',
+    /// '>' and '"' as `&amp;`, `&lt;`, `&gt;` and `&quot;`, the rest as
+    /// `&#xHH;`; '\'' and '+' always escaped, as .NET's `HtmlEncoder` does.
+    Html
+    /// A JavaScript string literal, in either quotes, in a script element
+    /// or JSON: `\uXXXX` (two for a code point past U+FFFF), and `\b`,
+    /// `\t`, `\n`, `\f`, `\r`, `\\` short; '\\', '`' and HTML's characters
+    /// always escaped, as .NET's `JavaScriptEncoder` does.
+    JavaScript
+    /// A URL's component: each UTF-8 byte as `%HH`. Only the unreserved
+    /// ASCII characters (letters, digits, '-', '.', '_', '~') are ever
+    /// written as they are, as .NET's `UrlEncoder` does. The WHATWG URL
+    /// standard's own sets are Sable.Net's `PercentEncoding`.
+    Url
+    /// CSS, a string or an identifier: `\hh ` with the space that ends the
+    /// digits; ASCII letters and digits alone are written as they are, as
+    /// the OWASP cheat sheet asks.
+    Css
+}
+
+/// Escapes text for the context it is placed in, writing the characters
+/// its settings allow as they are: .NET's `HtmlEncoder`, `JavaScriptEncoder`
+/// and `UrlEncoder`. By default only ASCII is allowed, so everything else is
+/// escaped too. Text with nothing to escape is given back as it is, with
+/// nothing allocated; ill-formed UTF-8 is read as U+FFFD, never passed on.
+///
+/// ```sable
+/// let html = TextEncoder(.Html)
+/// assert(html.encode("<a href='x'>é") == "&lt;a href=&#x27;x&#x27;&gt;&#xE9;")
+/// assert(html.encode("plain") == "plain")
+/// let script = TextEncoder(.JavaScript, allowing: [.basicLatin, .latin1Supplement])
+/// assert(script.encode("</script>\"é\n") == "\\u003C/script\\u003E\\u0022é\\n")
+/// assert(TextEncoder(.Url).encode("a b&c/ü") == "a%20b%26c%2F%C3%BC")
+/// assert(TextEncoder(.Css).encode("a;b") == "a\\3b b")
+/// ```
+public struct TextEncoder {
+    /// Where its text is to be placed.
+    public let context: EscapeContext
+    // The ASCII characters written as they are, a bit each.
+    let low: U64
+    let high: U64
+    // Whether every character past ASCII is allowed, and whether those
+    // allowed are still escaped when unsafe (controls, separators, …).
+    let settings: TextEncoderSettings
+    let everyWide: Bool
+    let checksCategories: Bool
+    // Whether '"' is written as \" (JSON's way) rather than \u0022.
+    let shortQuote: Bool
+
+    /// An encoder for the context that writes as they are the characters
+    /// the settings allow, but for those the context must escape.
+    public init(_ context: EscapeContext, allowing settings: TextEncoderSettings) {
+        var low: U64 = 0
+        var high: U64 = 0
+        let forced = forcedEscapes(context)
+        for code in 0x20..<0x7F {
+            if settings.allows(code: code) && ((code < 64 ? forced.0 : forced.1) >> U64(code & 63) & 1) == 0 {
+                if code < 64 {
+                    low = low | 1 << U64(code)
+                } else {
+                    high = high | 1 << U64(code - 64)
+                }
+            }
+        }
+        self.init(context, low: low, high: high, settings: settings, everyWide: false, checksCategories: true, shortQuote: false)
+    }
+
+    /// An encoder for the context that allows the ranges: ASCII alone
+    /// unless they are given, .NET's `Default` encoders.
+    public init(_ context: EscapeContext, allowing ranges: UnicodeRange[:] = [UnicodeRange.basicLatin]) {
+        self.init(context, allowing: TextEncoderSettings(allowing: ranges))
+    }
+
+    init(_ context: EscapeContext, low: U64, high: U64, settings: TextEncoderSettings, everyWide: Bool, checksCategories: Bool, shortQuote: Bool) {
+        self.context = context
+        self.low = low
+        self.high = high
+        self.settings = settings
+        self.everyWide = everyWide
+        self.checksCategories = checksCategories
+        self.shortQuote = shortQuote
+    }
+
+    /// JSON's escaping, with nothing past it: '"', '\\' and the controls
+    /// alone escaped (and the characters every encoder escapes), '"' as
+    /// `\"`, all else as it is. .NET's `UnsafeRelaxedJsonEscaping`: safe in
+    /// a JSON document, not in HTML.
+    ///
+    /// ```sable
+    /// assert(TextEncoder.relaxedJson.encode("<\"é😀\">") == "<\\\"é😀\\\">")
+    /// ```
+    public static var relaxedJson: TextEncoder {
+        get {
+            return TextEncoder(.JavaScript, low: 0xFFFF_FFFB_0000_0000, high: 0x7FFF_FFFF_EFFF_FFFF, settings: TextEncoderSettings(), everyWide: true, checksCategories: true, shortQuote: true)
+        }
+    }
+
+    // ---- What is escaped ---------------------------------------------------
+
+    /// Whether the character is written as it is, not escaped: the
+    /// opposite of .NET's `WillEncode`.
+    ///
+    /// ```sable
+    /// let html = TextEncoder(.Html)
+    /// assert(html.allows('a') && !html.allows('<') && !html.allows('é'))
+    /// ```
+    public fn allows(_ character: Char) -> Bool {
+        return allows(code: character.codePoint)
+    }
+
+    @inline(always)
+    fn allows(byte: U8) -> Bool {
+        return ((byte < 64 ? low : high) >> U64(byte & 63) & 1) != 0
+    }
+
+    fn allows(code: Int) -> Bool {
+        if code < 0x80 {
+            return allows(byte: U8(code))
+        }
+        if !everyWide && !settings.allows(code: code) {
+            return false
+        }
+        return !checksCategories || isSafe(code)
+    }
+
+    /// Where the first character to be escaped starts, as an offset into
+    /// the text's UTF-8; none when nothing is, .NET's
+    /// `FindFirstCharacterToEncodeUtf8`.
+    ///
+    /// ```sable
+    /// assert(TextEncoder(.Html).firstToEncode("ab<c") == 2)
+    /// assert(TextEncoder(.Html).firstToEncode("abc") == none)
+    /// ```
+    public fn firstToEncode(_ text: String) -> Int? {
+        let bytes = text.utf8
+        let end = text.utf8Count
+        var i = 0
+        while i < end {
+            let byte = bytes[i]
+            if byte < 0x80 {
+                if !allows(byte: byte) {
+                    return i
+                }
+                i += 1
+            } else {
+                let width = byte < 0xE0 ? 2 : byte < 0xF0 ? 3 : 4
+                if !allows(code: scalarCode(text, i, width)) {
+                    return i
+                }
+                i += width
+            }
+        }
+        return none
+    }
+
+    // ---- Encoding ----------------------------------------------------------
+
+    /// The text with what is to be escaped escaped; the text itself, with
+    /// nothing allocated, when nothing is.
+    public fn encode(_ text: String) -> String {
+        guard let first = firstToEncode(text) else {
+            return text
+        }
+        unsafe {
+            var writer = StringWriter.allocate(capacity: text.utf8Count + 16)
+            _ = write(text, from: first, into: &writer)
+            return writer.finish()
+        }
+    }
+
+    /// The text, what is to be escaped escaped, added at the builder's end:
+    /// a text with nothing to escape appended as it is.
+    ///
+    /// ```sable
+    /// let builder = TextBuilder("<p>")
+    /// TextEncoder(.Html).encode("1 < 2", into: builder)
+    /// builder.append("</p>")
+    /// assert(builder.build() == "<p>1 &lt; 2</p>")
+    /// ```
+    public fn encode(_ text: String, into builder: TextBuilder) {
+        guard let first = firstToEncode(text) else {
+            builder.append(text)
+            return
+        }
+        builder.appendEncoded(text, from: first, self)
+    }
+
+    /// The UTF-8 bytes encoded onto the end of the output, a chunk at a
+    /// time: why it stopped, and how many bytes it read, as
+    /// `Utf8.toUtf16` says. An ill-formed sequence is U+FFFD (escaped
+    /// unless allowed); unless `isFinalBlock`, a sequence the bytes end
+    /// partway through is left unread, with `.NeedMoreData`.
+    ///
+    /// ```sable
+    /// var output: U8[>..] = []
+    /// let chunk: U8[>..] = [0x3C, 0x62, 0xC3]
+    /// let (status, read) = TextEncoder(.Html).encode(utf8: chunk, into: &output, isFinalBlock: false)
+    /// assert(status == .NeedMoreData && read == 2)
+    /// assert(String.fromUtf8Lossy(output) == "&lt;b")
+    /// ```
+    public fn encode(utf8 bytes: U8[:], into output: inout U8[>..], isFinalBlock: Bool = true) -> (status: OperationStatus, read: Int) {
+        let end = bytes.count
+        var i = 0
+        var run = 0
+        while i < end {
+            let byte = bytes[i]
+            if byte < 0x80 {
+                if allows(byte: byte) {
+                    i += 1
+                    continue
+                }
+                output.append(contentsOf: bytes[run..<i])
+                escape(Int(byte)).append(to: &output)
+                i += 1
+                run = i
+                continue
+            }
+            let (code, width) = decodeUtf8(bytes, i)
+            if code == -2 && !isFinalBlock {
+                output.append(contentsOf: bytes[run..<i])
+                return (status: .NeedMoreData, read: i)
+            }
+            if code >= 0 && allows(code: code) {
+                i += width
+                continue
+            }
+            output.append(contentsOf: bytes[run..<i])
+            let scalar = code >= 0 ? code : 0xFFFD
+            if allows(code: scalar) {
+                output.append(contentsOf: [0xEF, 0xBF, 0xBD])
+            } else {
+                escape(scalar).append(to: &output)
+            }
+            i += width
+            run = i
+        }
+        output.append(contentsOf: bytes[run..<end])
+        return (status: .Done, read: end)
+    }
+
+    /// The text, whose bytes before the offset are written as they are,
+    /// encoded at the writer's end: how
+    /// many characters were written.
+    fn write(_ text: String, from start: Int, into writer: inout StringWriter) -> Int {
+        let bytes = text.utf8
+        let end = text.utf8Count
+        var scalars = 0
+        for i in 0..<start {
+            scalars += (bytes[i] & 0xC0) != 0x80 ? 1 : 0
+        }
+        var i = start
+        var run = 0
+        while i < end {
+            let byte = bytes[i]
+            var width = 1
+            var code = Int(byte)
+            if byte < 0x80 {
+                if allows(byte: byte) {
+                    i += 1
+                    scalars += 1
+                    continue
+                }
+            } else {
+                width = byte < 0xE0 ? 2 : byte < 0xF0 ? 3 : 4
+                code = scalarCode(text, i, width)
+                if allows(code: code) {
+                    i += width
+                    scalars += 1
+                    continue
+                }
+            }
+            writer.append(utf8: text, from: run, to: i)
+            let escaped = escape(code)
+            escaped.append(to: &writer)
+            scalars += escaped.count
+            i += width
+            run = i
+        }
+        writer.append(utf8: text, from: run, to: end)
+        return scalars
+    }
+
+    /// The code point escaped as the context writes it.
+    fn escape(_ code: Int) -> EscapeBytes {
+        var escaped = EscapeBytes()
+        match context {
+            case .Html => {
+                if code == 0x26 {
+                    escaped.put("&amp;")
+                } else if code == 0x3C {
+                    escaped.put("&lt;")
+                } else if code == 0x3E {
+                    escaped.put("&gt;")
+                } else if code == 0x22 {
+                    escaped.put("&quot;")
+                } else {
+                    escaped.put("&#x")
+                    escaped.putHex(code, uppercase: true)
+                    escaped.put(byte: 0x3B)
+                }
+            }
+            case .JavaScript => {
+                let letter: U8 = match code {
+                    case 0x08 => 0x62
+                    case 0x09 => 0x74
+                    case 0x0A => 0x6E
+                    case 0x0C => 0x66
+                    case 0x0D => 0x72
+                    case 0x5C => 0x5C
+                    case 0x22 => shortQuote ? 0x22 : 0
+                    default   => 0
+                }
+                if letter != 0 {
+                    escaped.put(byte: 0x5C)
+                    escaped.put(byte: letter)
+                } else if code >= 0x10000 {
+                    escaped.putUnit(0xD800 + ((code - 0x10000) >> 10))
+                    escaped.putUnit(0xDC00 + (code & 0x3FF))
+                } else {
+                    escaped.putUnit(code)
+                }
+            }
+            case .Url => {
+                if code < 0x80 {
+                    escaped.putPercent(code)
+                } else if code < 0x800 {
+                    escaped.putPercent(0xC0 | code >> 6)
+                    escaped.putPercent(0x80 | code & 0x3F)
+                } else if code < 0x10000 {
+                    escaped.putPercent(0xE0 | code >> 12)
+                    escaped.putPercent(0x80 | code >> 6 & 0x3F)
+                    escaped.putPercent(0x80 | code & 0x3F)
+                } else {
+                    escaped.putPercent(0xF0 | code >> 18)
+                    escaped.putPercent(0x80 | code >> 12 & 0x3F)
+                    escaped.putPercent(0x80 | code >> 6 & 0x3F)
+                    escaped.putPercent(0x80 | code & 0x3F)
+                }
+            }
+            case .Css => {
+                escaped.put(byte: 0x5C)
+                escaped.putHex(code, uppercase: false)
+                escaped.put(byte: 0x20)
+            }
+        }
+        return escaped
+    }
+}
+
+// The ASCII characters the context escapes, whatever is allowed, a bit each
+// below 64 and above: every control, and the context's own.
+fn forcedEscapes(_ context: EscapeContext) -> (U64, U64) {
+    // '"', '&', '\'', '+', '<' and '>'.
+    let html: U64 = 1 << 0x22 | 1 << 0x26 | 1 << 0x27 | 1 << 0x2B | 1 << 0x3C | 1 << 0x3E
+    let controls: U64 = 0xFFFF_FFFF
+    let delete: U64 = 1 << 63
+    return match context {
+        case .Html => (controls | html, delete)
+        // And '\\' and '`'.
+        case .JavaScript => (controls | html, delete | 1 << (0x5C - 64) | 1 << (0x60 - 64))
+        // All but letters, digits, '-', '.', '_' and '~'.
+        case .Url => (~(0x03FF_0000_0000_0000 | 1 << 0x2D | 1 << 0x2E), ~(0x07FF_FFFE_07FF_FFFE | 1 << (0x5F - 64) | 1 << (0x7E - 64)))
+        // All but letters and digits.
+        case .Css => (~0x03FF_0000_0000_0000, ~0x07FF_FFFE_07FF_FFFE)
+    }
+}
+
+// Whether a code point past ASCII may be written as it is where it is
+// allowed: not a control, a format character, a separator of lines or of
+// paragraphs, private use or unassigned.
+fn isSafe(_ code: Int) -> Bool {
+    guard let character = Char.fromCodePoint(value: code) else {
+        return false
+    }
+    return match character.generalCategory {
+        case .Control, .Format, .LineSeparator, .ParagraphSeparator, .Surrogate, .PrivateUse, .Unassigned => false
+        default                                                                                           => true
+    }
+}
+
+// The code point of the scalar of so many bytes at the text's offset.
+@inline(always)
+fn scalarCode(_ text: String, _ at: Int, _ width: Int) -> Int {
+    let bytes = text.utf8
+    var code = Int(bytes[at]) & (0x7F >> width)
+    for k in 1..<width {
+        code = code << 6 | Int(bytes[at + k]) & 0x3F
+    }
+    return code
+}
+
+// The scalar whose UTF-8 starts at the offset, and how many bytes it takes;
+// -1 for an ill-formed sequence, its maximal subpart that many bytes, and -2
+// for one the bytes end partway through, the rest of them.
+fn decodeUtf8(_ bytes: U8[:], _ at: Int) -> (Int, Int) {
+    let lead = bytes[at]
+    guard let need = Utf8.sequenceLength(lead: lead) else {
+        return (-1, 1)
+    }
+    var code = Int(lead) & (0x7F >> need)
+    var k = 1
+    while k < need {
+        if at + k >= bytes.count {
+            return (-2, bytes.count - at)
+        }
+        let byte = bytes[at + k]
+        var lowest: U8 = 0x80
+        var highest: U8 = 0xBF
+        if k == 1 {
+            if lead == 0xE0 {
+                lowest = 0xA0
+            } else if lead == 0xED {
+                highest = 0x9F
+            } else if lead == 0xF0 {
+                lowest = 0x90
+            } else if lead == 0xF4 {
+                highest = 0x8F
+            }
+        }
+        if byte < lowest || byte > highest {
+            return (-1, k)
+        }
+        code = code << 6 | Int(byte & 0x3F)
+        k += 1
+    }
+    return (code, need)
+}
+
+// An escape's bytes, at most sixteen, held in two words.
+struct EscapeBytes {
+    var first: U64 = 0
+    var second: U64 = 0
+    var count: Int = 0
+
+    init() { }
+
+    mutating fn put(byte: U8) {
+        if count < 8 {
+            first = first | U64(byte) << U64(count * 8)
+        } else {
+            second = second | U64(byte) << U64((count - 8) * 8)
+        }
+        count += 1
+    }
+
+    mutating fn put(_ ascii: String) {
+        for byte in ascii.utf8 {
+            put(byte: byte)
+        }
+    }
+
+    // The value in hexadecimal, with no leading zeros.
+    mutating fn putHex(_ value: Int, uppercase: Bool) {
+        var shift = 20
+        while shift > 0 && (value >> shift) == 0 {
+            shift -= 4
+        }
+        while shift >= 0 {
+            put(byte: hexDigit(value >> shift & 15, uppercase))
+            shift -= 4
+        }
+    }
+
+    // A UTF-16 unit as \uXXXX.
+    mutating fn putUnit(_ unit: Int) {
+        put(byte: 0x5C)
+        put(byte: 0x75)
+        put(byte: hexDigit(unit >> 12 & 15, true))
+        put(byte: hexDigit(unit >> 8 & 15, true))
+        put(byte: hexDigit(unit >> 4 & 15, true))
+        put(byte: hexDigit(unit & 15, true))
+    }
+
+    mutating fn putPercent(_ byte: Int) {
+        put(byte: 0x25)
+        put(byte: hexDigit(byte >> 4, true))
+        put(byte: hexDigit(byte & 15, true))
+    }
+
+    fn append(to writer: inout StringWriter) {
+        writer.append(word: first, length: count < 8 ? count : 8)
+        if count > 8 {
+            writer.append(word: second, length: count - 8)
+        }
+    }
+
+    fn append(to output: inout U8[>..]) {
+        for k in 0..<count {
+            output.append(U8.truncating((k < 8 ? first >> U64(k * 8) : second >> U64((k - 8) * 8)) & 0xFF))
+        }
+    }
+}
+
+@inline(always)
+fn hexDigit(_ value: Int, _ uppercase: Bool) -> U8 {
+    return U8.truncating(value < 10 ? 0x30 + value : (uppercase ? 0x37 : 0x57) + value)
+}

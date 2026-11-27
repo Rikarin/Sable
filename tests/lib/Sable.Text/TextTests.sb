@@ -15,13 +15,3 @@ fn parsingIntegers(_ text: String, _ radix: Int, _ value: Int) {
 fn whatIsNoIntegerOrTooBigIsNone(_ text: String) {
     assertEqual(parseInt(text), none)
 }
-
-@test
-fn escapingHtml() {
-    assertEqual(escapedHtml("<a href=\"x\">&</a>"), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;")
-}
-
-@test(arguments: [("plain", "plain"), ("'", "&#39;"), (">", "&gt;"), ("\"x\"", "&quot;x&quot;")])
-fn escapingEachCharacter(_ text: String, _ escaped: String) {
-    assertEqual(escapedHtml(text), escaped)
-}

@@ -1,0 +1,72 @@
+module Sable.Text
+
+/// CSS's escaping, as the CSSOM standard serializes: `escapeIdentifier` is
+/// JavaScript's `CSS.escape`, `escapeString` a string in double quotes.
+/// Both escape controls as `\hh ` and U+0000 as U+FFFD. A
+/// `TextEncoder(.Css)` escapes everything but letters and digits, the
+/// OWASP cheat sheet's rule for values from outside.
+///
+/// ```sable
+/// assert(Css.escapeIdentifier("1a b") == "\\31 a\\ b")
+/// assert(Css.escapeIdentifier("-") == "\\-")
+/// assert(Css.escapeString("a\"b\\") == "\"a\\\"b\\\\\"")
+/// ```
+public struct Css {
+    /// The text as an identifier: a digit first (or after a first '-')
+    /// as `\hh `, a lone '-' as `\-`, and every ASCII character but
+    /// letters, digits, '-' and '_' after a '\\'.
+    public static fn escapeIdentifier(_ text: String) -> String {
+        let escaped = TextBuilder()
+        var index = 0
+        var dashFirst = false
+        for character in text {
+            let code = character.codePoint
+            let digit = code >= 0x30 && code <= 0x39
+            if code == 0 {
+                escaped.append('\u{FFFD}')
+            } else if code < 0x20 || code == 0x7F || (digit && (index == 0 || (index == 1 && dashFirst))) {
+                escaped.append(cssHexEscape(code))
+            } else if code == 0x2D && index == 0 && text.utf8Count == 1 {
+                escaped.append("\\-")
+            } else if code >= 0x80 || code == 0x2D || code == 0x5F || isAlphanumeric(U8(code)) {
+                escaped.append(character)
+            } else {
+                escaped.append('\\')
+                escaped.append(character)
+            }
+            if index == 0 {
+                dashFirst = code == 0x2D
+            }
+            index += 1
+        }
+        return escaped.build()
+    }
+
+    /// The text as a string in double quotes: '"' and '\\' after a '\\',
+    /// and, so that it is safe in a style element or attribute too, '<',
+    /// '>', '&' and '\'' as `\hh `.
+    public static fn escapeString(_ text: String) -> String {
+        let escaped = TextBuilder()
+        escaped.append('"')
+        for character in text {
+            let code = character.codePoint
+            if code == 0 {
+                escaped.append('\u{FFFD}')
+            } else if code < 0x20 || code == 0x7F || code == 0x3C || code == 0x3E || code == 0x26 || code == 0x27 {
+                escaped.append(cssHexEscape(code))
+            } else if code == 0x22 || code == 0x5C {
+                escaped.append('\\')
+                escaped.append(character)
+            } else {
+                escaped.append(character)
+            }
+        }
+        escaped.append('"')
+        return escaped.build()
+    }
+}
+
+// The code point as '\\', its lower-case hexadecimal digits and a space.
+fn cssHexEscape(_ code: Int) -> String {
+    return "\\\(code:x) "
+}

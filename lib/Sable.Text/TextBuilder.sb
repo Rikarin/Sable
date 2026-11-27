@@ -121,6 +121,17 @@ public class TextBuilder: TextWriter, Resettable {
         }
     }
 
+    /// The text, the encoder's escapes for what it escapes from the byte
+    /// offset on, added at the end.
+    fn appendEncoded(_ text: String, from first: Int, _ encoder: TextEncoder) {
+        let before = tail.count
+        scalars += encoder.write(text, from: first, into: &tail)
+        bytes += tail.count - before
+        if tail.count >= 65536 {
+            flush()
+        }
+    }
+
     /// The integer added at the end in decimal, its digits written straight
     /// into the buffer: .NET's `Append(int)`.
     public fn append<T: BinaryInteger>(_ value: T) {

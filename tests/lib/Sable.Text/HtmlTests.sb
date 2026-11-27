@@ -1,0 +1,83 @@
+module HtmlTests
+
+// Html and Css (Sable.Text): run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+@test(arguments: [
+    ("<a href=\"x\">&</a>", "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;"),
+    ("'", "&#x27;"),
+    ("plain\ntext + é😀", "plain\ntext + é😀"),
+])
+fn escapingLeavesAllButTheFiveAsTheyAre(_ text: String, _ escaped: String) {
+    expect(Html.escape(text) == escaped)
+    let builder = TextBuilder()
+    Html.escape(text, into: builder)
+    expect(builder.build() == escaped)
+}
+
+@test(arguments: [
+    ("a-b_c.d,e", "a-b_c.d,e"),
+    ("a b=\"c\"", "a&#x20;b&#x3D;&quot;c&quot;"),
+    ("x`y\u{200B}é", "x&#x60;y&#x200B;é"),
+])
+fn anAttributeEscapesAllButLettersDigitsAndAFew(_ text: String, _ escaped: String) {
+    expect(Html.escapeAttribute(text) == escaped)
+}
+
+@test(arguments: [
+    ("&amp;&lt;&gt;&quot;&apos;", "&<>\"'"),
+    ("&CounterClockwiseContourIntegral;", "\u{2233}"),
+    ("&NotEqualTilde;&nGt;", "\u{2242}\u{338}\u{226B}\u{20D2}"),
+    ("&AElig &aacute; &copy2", "Æ á ©2"),
+    ("&notit; &notin;", "¬it; ∉"),
+    ("&noSuchThing; & &; &#; &#x; &1", "&noSuchThing; & &; &#; &#x; &1"),
+    ("&#65;&#x41;&#X41&#0065", "AAAA"),
+    ("&#0;&#xD800;&#x110000;&#99999999999999999999;", "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"),
+    ("&#x80;&#x81;&#x9F;", "€\u{81}Ÿ"),
+    ("no references", "no references"),
+    ("&amp", "&"),
+    ("&ampx", "&x"),
+])
+fn referencesAreReadAsTheTokenizerReadsThem(_ text: String, _ unescaped: String) {
+    expect(Html.unescape(text) == unescaped)
+}
+
+@test
+fn inAnAttributeALegacyNameBeforeALetterOrEqualsIsNoReference() {
+    expect(Html.unescape("?a=1&copy=2&not3&amp;x", inAttribute: true) == "?a=1&copy=2&not3&x")
+    expect(Html.unescape("&copy; &copy", inAttribute: true) == "© ©")
+    expect(Html.unescape("&copy=2") == "©=2")
+}
+
+@test
+fn everyNamedReferenceIsInTheTable() {
+    // The first and the last by their bytes, and some between.
+    expect(Html.unescape("&AElig;&zwnj;&zwj;&Aacute;&zscr;") == "Æ\u{200C}\u{200D}Á\u{1D4CF}")
+    expect(Html.unescape("&ThickSpace;&fjlig;&bne;") == "\u{205F}\u{200A}fj=\u{20E5}")
+}
+
+@test(arguments: [
+    ("abc", "abc"),
+    ("1a", "\\31 a"),
+    ("-1", "-\\31 "),
+    ("-", "\\-"),
+    ("--a", "--a"),
+    ("a b.c#d", "a\\ b\\.c\\#d"),
+    ("\u{0}é_\u{1F}\u{7F}", "\u{FFFD}é_\\1f \\7f "),
+])
+fn anIdentifierIsEscapedAsCssEscapeDoes(_ text: String, _ escaped: String) {
+    expect(Css.escapeIdentifier(text) == escaped)
+}
+
+@test(arguments: [
+    ("abc", "\"abc\""),
+    ("a\"b\\c", "\"a\\\"b\\\\c\""),
+    ("</style>&'", "\"\\3c /style\\3e \\26 \\27 \""),
+    ("\u{0}\n", "\"\u{FFFD}\\a \""),
+])
+fn aStringIsQuotedAndEscaped(_ text: String, _ escaped: String) {
+    expect(Css.escapeString(text) == escaped)
+}

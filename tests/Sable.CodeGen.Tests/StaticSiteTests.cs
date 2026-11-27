@@ -68,7 +68,7 @@ public sealed class StaticSiteTests {
             Assert.Contains("<title>Three tiers of memory · Sable Notes</title>", memory, StringComparison.Ordinal);
             Assert.Contains("<li><strong>Values</strong> live inline, copied on assignment.</li>", memory, StringComparison.Ordinal);
             Assert.Contains("<li>Many short-lived nodes — a parse tree, say:\n<ul>\n<li>allocate them in a region,</li>", memory, StringComparison.Ordinal);
-            Assert.Contains("2 &lt; 3 &amp;&amp; &quot;quotes&quot; are &#39;fine&#39;, and *this* is not", memory, StringComparison.Ordinal);
+            Assert.Contains("2 &lt; 3 &amp;&amp; &quot;quotes&quot; are &#x27;fine&#x27;, and *this* is not", memory, StringComparison.Ordinal);
             Assert.Contains("<a rel=\"prev\" href=\"building.html\">&larr; Building this site</a>", memory, StringComparison.Ordinal);
 
             var hello = interpreted["hello.html"];

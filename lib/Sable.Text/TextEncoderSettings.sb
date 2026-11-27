@@ -1,0 +1,139 @@
+module Sable.Text
+
+/// Which characters a `TextEncoder` may write as they are, .NET's
+/// `TextEncoderSettings`: ranges and characters allowed, and some of them
+/// forbidden again, in the order asked. Nothing is allowed to begin with.
+///
+/// What is allowed is only a wish: whatever the settings, an encoder still
+/// escapes what is unsafe in its context, and every control, format
+/// character, separator of lines or paragraphs, private use and unassigned
+/// code point.
+///
+/// ```sable
+/// var settings = TextEncoderSettings(allowing: [.basicLatin, .latin1Supplement])
+/// settings.forbid('é')
+/// settings.allow(charactersIn: "€")
+/// assert(settings.allows('ü') && settings.allows('€'))
+/// assert(!settings.allows('é') && !settings.allows('ő'))
+/// assert(settings.allowedRanges.count == 3)
+/// ```
+@derive(Equatable, Debug)
+public struct TextEncoderSettings {
+    // The code points allowed, as runs in order, apart and not touching:
+    // each from a start up to (not through) its end.
+    var starts: Int[>..] = []
+    var ends: Int[>..] = []
+
+    /// Nothing allowed.
+    public init() { }
+
+    /// The ranges allowed.
+    public init(allowing ranges: UnicodeRange[:]) {
+        for range in ranges {
+            allow(range)
+        }
+    }
+
+    /// The range's code points allowed too.
+    public mutating fn allow(_ range: UnicodeRange) {
+        if range.length == 0 {
+            return
+        }
+        var low = range.first
+        var high = range.first + range.length
+        var newStarts: Int[>..] = []
+        var newEnds: Int[>..] = []
+        var placed = false
+        for i in 0..<starts.count {
+            if ends[i] < low {
+                newStarts.append(starts[i])
+                newEnds.append(ends[i])
+            } else if starts[i] > high {
+                if !placed {
+                    newStarts.append(low)
+                    newEnds.append(high)
+                    placed = true
+                }
+                newStarts.append(starts[i])
+                newEnds.append(ends[i])
+            } else {
+                low = starts[i] < low ? starts[i] : low
+                high = ends[i] > high ? ends[i] : high
+            }
+        }
+        if !placed {
+            newStarts.append(low)
+            newEnds.append(high)
+        }
+        starts = newStarts
+        ends = newEnds
+    }
+
+    /// The character allowed too.
+    public mutating fn allow(_ character: Char) {
+        allow(UnicodeRange(first: character.codePoint, length: 1))
+    }
+
+    /// Every character of the text allowed too.
+    public mutating fn allow(charactersIn text: String) {
+        for character in text {
+            allow(character)
+        }
+    }
+
+    /// The range's code points no longer allowed.
+    public mutating fn forbid(_ range: UnicodeRange) {
+        let low = range.first
+        let high = range.first + range.length
+        var newStarts: Int[>..] = []
+        var newEnds: Int[>..] = []
+        for i in 0..<starts.count {
+            if starts[i] < low {
+                newStarts.append(starts[i])
+                newEnds.append(ends[i] < low ? ends[i] : low)
+            }
+            if ends[i] > high {
+                newStarts.append(starts[i] > high ? starts[i] : high)
+                newEnds.append(ends[i])
+            }
+        }
+        starts = newStarts
+        ends = newEnds
+    }
+
+    /// The character no longer allowed.
+    public mutating fn forbid(_ character: Char) {
+        forbid(UnicodeRange(first: character.codePoint, length: 1))
+    }
+
+    /// Whether the settings allow the character.
+    public fn allows(_ character: Char) -> Bool {
+        return allows(code: character.codePoint)
+    }
+
+    /// Whether the settings allow the code point: found by bisection.
+    fn allows(code: Int) -> Bool {
+        var low = 0
+        var high = starts.count
+        while low < high {
+            let middle = (low + high) / 2
+            if ends[middle] <= code {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low < starts.count && starts[low] <= code
+    }
+
+    /// What is allowed, as ranges in order that neither overlap nor touch.
+    public var allowedRanges: UnicodeRange[>..] {
+        get {
+            var ranges: UnicodeRange[>..] = []
+            for i in 0..<starts.count {
+                ranges.append(UnicodeRange(first: starts[i], length: ends[i] - starts[i]))
+            }
+            return ranges
+        }
+    }
+}

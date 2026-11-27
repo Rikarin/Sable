@@ -133,7 +133,7 @@ public sealed class PanicTests {
     /// <summary>
     ///     SABLE_BACKTRACE=1 shows the program's frames from the caller of the
     ///     runtime's trap; 'full' the runtime's own too; '0' none at all.
-    ///     Unoptimised: on Linux and Windows only such a build keeps the
+    ///     Unoptimised: on Windows only such a build keeps the
     ///     program's functions where a backtrace finds their names
     ///     (<see cref="NativeBuild.ForTarget" />'s namesFrames).
     /// </summary>

@@ -176,21 +176,25 @@ typedef struct SableTypeMetadata {
 fields, conformance records, type arguments and object metadata; a field's
 name, type name and type; a protocol descriptor's name; a conformance
 record's protocol and table; a witness table's protocol, associated types,
-associated conformances and bases — is a `SableRef`. On macOS and Linux
+associated conformances and bases; a shape's (below) part names, name,
+conformances, payload labels and vtable, a shape conformance's protocol and
+requirements, and a requirement's protocol; the structural list's protocol
+and requirements — is a `SableRef`. On macOS and Linux
 (Mach-O and ELF, 64-bit) it holds the distance from the field itself to
 what it points at, 0 for null: the compiler writes it as `sub (ptrtoint
 @target, ptrtoint <the field>)`, which the static linker resolves, so the
 loader fixes nothing up and a record holding only such pointers is
 read-only data (`__TEXT,__const`, `.rodata`); the runtime makes its own
-records' the same way (`sable_set_ref`), whatever the distance. On Windows,
+records' the same way (`sable_set_ref`), whatever the distance, and a shape
+of its own (a structural union's, a box's) as it first needs it. On Windows,
 whose COFF relocates such a difference only within a section, and on WASI,
 which has no load-time fixups to save, it holds the address. It is read with
 `sable_ref`, and a record holding one is never copied as it is. Pointers to
 code — the requirements of a witness table, a vtable, value witnesses,
 destroy and visit functions — and a type's value-witness table stay
-absolute everywhere, so a call through one costs what it did; so do the
-records the compiler gives only the runtime to build from (shapes,
-templates' accessors, the structural list's requirements).
+absolute everywhere, so a call through one costs what it did; so do a
+vtable's slots in a shape, a shape's superclass accessor and templates'
+accessors.
 
 - **Layout**: size, alignment and stride as the value is stored —
   natively LLVM's own numbers for the type the code uses, in the

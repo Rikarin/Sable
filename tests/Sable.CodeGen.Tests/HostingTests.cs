@@ -33,7 +33,7 @@ public sealed class HostingTests {
             builder.services.addWorker("worker") { context, cancellation in
                 {{service}}
             }
-            let host = try! builder.build()
+            let host = try! await builder.build()
             host.lifetime.onReload { Runtime.writeError("reloaded\n") }
             let _ = host.lifetime.started.register { Runtime.writeError("started\n") }
             let _ = host.lifetime.stopping.register { Runtime.writeError("stopping\n") }

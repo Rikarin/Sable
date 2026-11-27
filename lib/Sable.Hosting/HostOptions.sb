@@ -15,6 +15,10 @@ public struct HostOptions: Sendable {
     public var handleSignals: Bool
     /// What a SIGHUP does.
     public var onHangup: HangupPolicy
+    /// Whether the configuration is reloaded as its files change, while
+    /// the host runs: those of its providers that say so
+    /// (`Configuration.watch`, on the host's clock).
+    public var reloadOnChange: Bool
 
     /// The usual ones.
     public init() {
@@ -23,5 +27,6 @@ public struct HostOptions: Sendable {
         onServiceFailure = ServiceFailurePolicy.StopHost
         handleSignals = true
         onHangup = HangupPolicy.Reload
+        reloadOnChange = true
     }
 }

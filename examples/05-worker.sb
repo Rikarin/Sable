@@ -1,8 +1,11 @@
 module Examples.Worker
 
 import Sable.Concurrency
+import Sable.Configuration
 import Sable.Diagnostics
 import Sable.Hosting
+import Sable.IO
+import Sable.Serialize
 import Sable.Time
 
 // ---------------------------------------------------------------------------
@@ -15,16 +18,27 @@ public struct Order: Sendable {
     public let item: String
 }
 
+/// What the intake is configured by: the section "Intake" of the host's
+/// configuration (`--Intake:Items:0=tea`, `Intake__Items__0=tea`, or
+/// `[Intake]` of appsettings.toml), these where it says nothing.
+@derive(Serializable)
+public struct IntakeOptions: Sendable {
+    @serialize(defaulted)
+    public var items: String[>..] = ["tea", "cups", "a kettle"]
+}
+
 /// Takes in orders, until there are no more: a daemon's would come from a
 /// socket, and it would stop at a SIGTERM rather than ask to.
 @immutable
 final class Intake: HostedService {
     let orders: Channel<Order>
     let lifetime: ApplicationLifetime
+    let items: String[>..]
 
-    init(orders: Channel<Order>, lifetime: ApplicationLifetime) {
+    init(orders: Channel<Order>, lifetime: ApplicationLifetime, options: Options<IntakeOptions>) {
         self.orders = orders
         self.lifetime = lifetime
+        items = options.value.items
     }
 
     async fn start(cancellation: CancellationToken) throws {
@@ -34,7 +48,6 @@ final class Intake: HostedService {
     async fn run(cancellation: CancellationToken) throws {
         // Once every service is there.
         _ = await lifetime.started.cancellationRequested()
-        let items: String[>..] = ["tea", "cups", "a kettle"]
         var id = 1
         for item in items {
             if cancellation.isCancellationRequested {
@@ -77,7 +90,10 @@ final class Shipper: HostedService {
 
 @main
 async fn main() {
-    let builder = ApplicationBuilder()
+    let builder = ApplicationBuilder(arguments: Environment.arguments())
+    // Bound from the settings files, the environment and the arguments as
+    // the host is built: options that do not bind stop it there.
+    builder.container.configure(IntakeOptions.self, section: "Intake")
     builder.logging.minimumLevel = Level.Warning
     builder.options.shutdownTimeout = Duration.seconds(10)
     // With Type=notify in its unit; nothing, where systemd did not start it.
@@ -86,7 +102,9 @@ async fn main() {
     // What two services share is made before either.
     let orders = Channel<Order>()
     builder.services.add("shipper", Shipper(orders: orders))
-    builder.services.add("intake", make: { context in Intake(orders: orders, lifetime: context.lifetime) })
+    builder.services.add("intake", make: { context in
+        Intake(orders: orders, lifetime: context.lifetime, options: try context.container.resolve(Options<IntakeOptions>.self))
+    })
 
     // Every weekday morning, on Prague's clocks, whatever they do in March.
     let prague = (try? TimeZone.find("Europe/Prague")) ?? TimeZone.utc
@@ -94,7 +112,7 @@ async fn main() {
         try builder.services.addRecurring("30 8 * * mon-fri", name: "report", options: RecurringOptions(zone: prague)) { _cancellation in
             print("good morning")
         }
-        let host = try builder.build()
+        let host = try await builder.build()
         host.lifetime.onReload { print("reloaded") }
         // A daemon's main ends with 'runToExit', which waits for no service
         // the host gave up on.

@@ -1,0 +1,32 @@
+module WindowsServiceTests
+
+// Sable.Hosting, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Hosting
+
+import Sable.Hosting
+import Sable.Testing
+
+import HostingSupport
+
+@test
+fn thereAreWindowsServicesOnWindowsAlone() {
+    #if os(windows)
+    expect(WindowsService.isSupported)
+    #else
+    expect(!WindowsService.isSupported)
+    #endif
+}
+
+// A test is no service the manager started: the host connects, is told
+// so, and tells it nothing.
+@test
+async fn aHostThatIsNoServiceRunsAsAnyOther() {
+    let record = Record()
+    let builder = quietBuilder(FakeHostClock())
+    builder.useWindowsService()
+    builder.services.add("a", Recorded("a", record))
+    let host = try! await builder.build()
+    _ = host.lifetime.started.register { host.lifetime.requestStop() }
+    assertEqual(await outcome(host), "")
+    assertEqual(record.all, "start-a run-a end-a stop-a")
+}

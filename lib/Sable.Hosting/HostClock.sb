@@ -3,22 +3,60 @@ module Sable.Hosting
 import Sable.Concurrency
 import Sable.Time
 
-/// The time the host goes by — its timeouts, its jobs' schedules — and the
-/// one place it does: a test's clock takes its place
-/// (`ApplicationBuilder.clock`). No more than that: the seam a clock of
-/// Sable.Time's is to take.
-public protocol HostClock: Sendable {
-    /// What time it is.
-    var now: UtcDateTime { get }
+/// The time the host goes by — its timeouts, its jobs' schedules, its
+/// configuration's reloads — and the one place it does: any `Clock` of
+/// date and time, a `TestClock(at: UtcDateTime…)` in a test
+/// (`ApplicationBuilder.clock`). The system's, unless it is given another.
+///
+/// ```sable
+/// let clock = TestClock(at: UtcDateTime.unixEpoch)
+/// let builder = ApplicationBuilder()
+/// builder.clock = HostClock(clock)
+/// assert(builder.clock.now() == UtcDateTime.unixEpoch)
+/// ```
+public struct HostClock: Clock {
+    let reads: Reading
 
-    /// Waits until it is this time, or the task is cancelled; no longer than
-    /// it was to be, though the clock be set back meanwhile.
-    fn sleep(until time: UtcDateTime) async throws(CancellationError)
+    /// The clock's time.
+    public init<C: Clock>(_ clock: C) where C.Instant == UtcDateTime {
+        reads = Reading(now: { clock.now() }, sleep: { time in try await clock.sleep(until: time) })
+    }
+
+    /// The system's date and time. A sleep is no longer than it was to be
+    /// though the clock be set back meanwhile, and wakes within a minute of
+    /// one set forward.
+    public static var system: HostClock => HostClock(SystemHostClock())
+
+    public fn now() -> UtcDateTime {
+        return reads.now()
+    }
+
+    public fn sleep(until deadline: UtcDateTime) async throws(CancellationError) {
+        do {
+            try await reads.sleep(deadline)
+        } catch {
+            throw CancellationError()
+        }
+    }
+}
+
+// A clock's two calls, kept as an object's so that a HostClock is Sendable.
+@immutable
+final class Reading {
+    let now: () -> UtcDateTime
+    let sleep: async (UtcDateTime) throws -> Void
+
+    init(now: @escaping @Sendable () -> UtcDateTime, sleep: @escaping @Sendable async (UtcDateTime) throws -> Void) {
+        self.now = now
+        self.sleep = sleep
+    }
 }
 
 // The system's clock.
-struct SystemHostClock: HostClock {
-    var now: UtcDateTime => UtcDateTime.now()
+struct SystemHostClock: Clock {
+    fn now() -> UtcDateTime {
+        return UtcDateTime.now()
+    }
 
     // A minute at most at a time: the clock may be set, or the machine
     // sleep, meanwhile.

@@ -1,6 +1,7 @@
 module Sable.Hosting
 
 import Sable.Concurrency
+import Sable.Configuration
 import Sable.DependencyInjection
 import Sable.Diagnostics
 import Sable.Time
@@ -11,20 +12,20 @@ public struct HostContext: Sendable {
     /// Where the program runs.
     public let environment: HostEnvironment
     /// What it is configured by.
-    public let configuration: any HostConfiguration
+    public let configuration: Configuration
     /// How it logs.
     public let logging: HostLogging
     /// When the host starts and stops, and how to ask it to.
     public let lifetime: ApplicationLifetime
     /// The time it goes by.
-    public let clock: any HostClock
+    public let clock: HostClock
     /// What the container gives.
     public let container: ServiceProvider
 
     /// Waits this long by the host's clock; throws CancellationError as
     /// soon as the token is cancelled, or the task is.
     public fn sleep(for duration: Duration, cancellation: CancellationToken) async throws(CancellationError) {
-        try await sleep(until: clock.now.adding(duration), cancellation: cancellation)
+        try await sleep(until: clock.now().adding(duration), cancellation: cancellation)
     }
 
     /// Waits until the host's clock says this time, or the token is cancelled.

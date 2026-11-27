@@ -999,7 +999,8 @@ Sable.Concurrency  Task, TaskGroup, Actor runtime, Channel, Mutex, Atomic
 Sable.Net          Url, sockets, Dns; Http client to come
 Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
-Sable.Hosting      host, lifetime, services, cron jobs
+Sable.Hosting      host, lifetime, services, cron jobs, systemd, Windows services
+Sable.Configuration  providers, sections bound, options, reload
 Sable.DependencyInjection  services, scopes, open generics
 Sable.Validation   validators, rules, @derive(Validatable)
 Sable.Diagnostics  Logger, tracing, metrics

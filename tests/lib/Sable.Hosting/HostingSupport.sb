@@ -9,7 +9,7 @@ import Sable.Time
 
 /// A clock a test sets: no time passes but what it says does.
 @immutable
-public final class FakeHostClock: HostClock {
+public final class FakeHostClock: Clock {
     let state: Mutex<TestClockState>
     let changed: WaitList
 
@@ -23,7 +23,9 @@ public final class FakeHostClock: HostClock {
         changed = WaitList()
     }
 
-    public var now: UtcDateTime => state.withLock { (s: inout TestClockState) -> UtcDateTime in s.now }
+    public fn now() -> UtcDateTime {
+        return state.withLock { (s: inout TestClockState) -> UtcDateTime in s.now }
+    }
 
     public fn advance(_ duration: Duration) {
         state.withLock { (s: inout TestClockState) -> Void in s.now = s.now.adding(duration) }
@@ -49,7 +51,7 @@ public final class FakeHostClock: HostClock {
         while true {
             let ticket = changed.ticket
             let woken = state.withLock { (s: inout TestClockState) -> Bool in s.early != early }
-            if now >= time || woken || Task.isCancelled {
+            if now() >= time || woken || Task.isCancelled {
                 break
             }
             await changed.parkCancellably(since: ticket)
@@ -73,7 +75,7 @@ public final class FakeHostClock: HostClock {
 
     /// Waits until something sleeps until this long from now.
     public fn awaitSleep(_ duration: Duration) async {
-        let time = now.adding(duration)
+        let time = now().adding(duration)
         while true {
             let ticket = changed.ticket
             let there = state.withLock { (s: inout TestClockState) -> Bool in s.sleepers.contains(time) }
@@ -222,7 +224,7 @@ public fn quietBuilder(_ clock: FakeHostClock) -> ApplicationBuilder {
     let builder = ApplicationBuilder()
     builder.logging.minimumLevel = none
     builder.options.handleSignals = false
-    builder.clock = clock
+    builder.clock = HostClock(clock)
     return builder
 }
 

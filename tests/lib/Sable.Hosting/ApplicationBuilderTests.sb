@@ -4,6 +4,7 @@ module ApplicationBuilderTests
 //     tools/stdlib-coverage.sh Sable.Hosting
 
 import Sable.Concurrency
+import Sable.Configuration
 import Sable.Diagnostics
 import Sable.Hosting
 import Sable.IO
@@ -13,7 +14,7 @@ import Sable.Time
 import HostingSupport
 
 @test
-fn servicesAreMadeInOrderFromTheContext() {
+async fn servicesAreMadeInOrderFromTheContext() {
     let made = Record()
     let builder = quietBuilder(FakeHostClock())
     builder.environment = HostEnvironment(name: "Development", applicationName: "app")
@@ -27,17 +28,17 @@ fn servicesAreMadeInOrderFromTheContext() {
     })
     expect(builder.services.names == ["a", "b"])
     assertEqual(made.all, "")
-    _ = try! builder.build()
+    _ = try! await builder.build()
     assertEqual(made.all, "a:app b")
 }
 
 @test
-fn whatMakingAServiceThrowsBuildThrows() {
+async fn whatMakingAServiceThrowsBuildThrows() {
     let builder = quietBuilder(FakeHostClock())
     builder.services.add("bad", make: { _context in
         throw TestError("not made")
     })
-    expectThrows(saying: "not made") { _ = try builder.build() }
+    await expectThrows(saying: "not made") { _ = try await builder.build() }
 }
 
 @test
@@ -49,7 +50,7 @@ fn aWorkerIsGivenTheContext() async {
         context.lifetime.requestStop()
         _ = await cancellation.cancellationRequested()
     }
-    assertEqual(await outcome(try! builder.build()), "")
+    assertEqual(await outcome(try! await builder.build()), "")
     assertEqual(record.all, "ran")
 }
 
@@ -64,7 +65,7 @@ fn theContextSleepsByTheHostsClock() async {
         try await context.sleep(for: Duration.hours(1), cancellation: cancellation)
         record.add("not cancelled")
     }
-    let host = try! builder.build()
+    let host = try! await builder.build()
     let running = Task.spawn { await outcome(host) }
     await clock.pass(Duration.hours(1))
     await record.awaitLine("slept")
@@ -77,9 +78,9 @@ fn theContextSleepsByTheHostsClock() async {
 @test
 fn theSystemsClockIsTheUsualOne() async {
     let builder = ApplicationBuilder()
-    let before = builder.clock.now
+    let before = builder.clock.now()
     try! await builder.clock.sleep(until: before.adding(Duration.milliseconds(5)))
-    expect(builder.clock.now.durationSince(before) >= Duration.milliseconds(5))
+    expect(builder.clock.now().durationSince(before) >= Duration.milliseconds(5))
     let clock = builder.clock
     let sleeping = Task.spawn {
         await expectThrows(CancellationError.self) { try await clock.sleep(until: before.adding(Duration.hours(1))) }
@@ -118,16 +119,32 @@ fn theEnvironmentIsNamedByItsVariable() {
 }
 
 @test
-fn configurationIsTheEnvironmentsVariables() async {
+fn configurationIsTheSettingsFilesTheEnvironmentAndTheArguments() {
+    let builder = ApplicationBuilder(arguments: ["--Http:Port=8080"])
+    let names = builder.configuration.providers.map { $0.name }.toArray()
+    assertEqual(names, ["appsettings.toml", "appsettings.\(builder.environment.name).toml", "environment", "command line"])
+    assertEqual(ApplicationBuilder().configuration.providers.count, 3)
+}
+
+@test
+async fn theHostIsConfiguredAsTheBuilderSays() {
     unsafe {
-        Environment.set("APP_Http__Port", "80")
-        Environment.set("APP_DATABASE__URL", "db")
+        Environment.set("HostingTests__Level", "Debug")
     }
-    let configuration = EnvironmentConfiguration(prefix: "APP_")
-    expect(configuration.value("Http:Port") == "80")
-    expect(configuration.value("Database:Url") == "db")
-    expect(configuration.value("Database:Name") == none)
-    try! await configuration.reload()
+    let builder = ApplicationBuilder(arguments: ["--HostingTests:Port=8080", "--hostingtests:level=Trace"])
+    builder.logging.minimumLevel = none
+    builder.configuration.addValues(["HostingTests:Name": "shop"])
+    let host = try! await builder.build()
+    expect(host.configuration.value("HostingTests:Port") == "8080")
+    expect(host.configuration.value("HostingTests:Level") == "Trace")
+    expect(host.configuration.value("hostingtests:name") == "shop")
+}
+
+@test
+async fn configurationThatCannotBeLoadedIsNotBuilt() {
+    let builder = quietBuilder(FakeHostClock())
+    builder.configuration.addFile(FilePath("no/such/settings.toml"))
+    await expectThrows(saying: "no/such/settings.toml: not found") { _ = try await builder.build() }
 }
 
 @test

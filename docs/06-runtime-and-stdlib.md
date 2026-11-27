@@ -1233,7 +1233,14 @@ Sable.Hosting       ApplicationBuilder and Host (services started in order,
                     run side by side and stopped in reverse within a
                     timeout; signals; failure policies), HostedService,
                     ApplicationLifetime, recurring jobs (CronExpression,
-                    intervals, overlap policies), Systemd (sd_notify)
+                    intervals, overlap policies), HostClock (any Clock),
+                    Systemd (sd_notify), WindowsService
+Sable.Configuration ConfigurationBuilder and Configuration (providers layered,
+                    case-insensitive keys, reload, changes, watch, debugView),
+                    ConfigurationSection.bind (Serializable), providers of
+                    files (TOML, JSON, YAML, .env), the environment, the
+                    command line, memory and UserSecrets; Options,
+                    OptionsMonitor, ServiceCollection.configure
 Sable.DependencyInjection
                     @injectable and @container (a graph checked and made as
                     it is compiled); ServiceCollection (singleton, scoped,
@@ -2435,12 +2442,15 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
   (`Sable.DependencyInjection`, below), which has the host's environment,
   configuration, logging, lifetime and clock too. The host disposes the
   container once its services have stopped.
-- **Seams.** `configuration` is any `HostConfiguration` — a key's text, and
-  `reload` — with the environment's variables for the one there is: #80's
-  library is to conform to it. `logging` is the settings (`HostLogging`)
-  each task makes its own `Logger` from, as a Logger is mutable and not
-  Sendable; providers are #83's. All the host knows of time is `HostClock`
-  — now, and sleep until — which tests replace, and #61's Clock is to.
+- **Seams.** `configuration` is a `ConfigurationBuilder` (below), loaded as
+  the host is built, with .NET's sources: `appsettings.toml` and
+  `appsettings.<environment>.toml` if they are there, the environment's
+  variables, and the arguments the builder is given. `logging` is the
+  settings (`HostLogging`) each task makes its own `Logger` from, as a
+  Logger is mutable and not Sendable; providers are #83's. All the host
+  knows of time is a `HostClock`, which holds any `Clock` of `UtcDateTime`
+  (#61) — a test's `TestClock` — and is the system's otherwise, with a
+  sleep that a clock set back does not lengthen.
 - **Starting and stopping.** A service's `start` is awaited before the next
   service's begins, and its `run` is started as it ends. Stopping goes the
   other way: the last service's token is cancelled, its `run` waited for,
@@ -2473,10 +2483,59 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
 - **Service managers.** `Systemd.notify` sends a datagram to NOTIFY_SOCKET
   (`process_notify`; a path, or an abstract name on Linux; not vsock), and
   `useSystemd` sends READY, RELOADING, STOPPING and the watchdog's. launchd
-  needs nothing but the foreground and SIGTERM. A Windows service is not
-  built: its control dispatcher takes over a thread for the service's life
-  and its stop request comes to a handler there, which is a runtime layer
-  that could not be tested here.
+  needs nothing but the foreground and SIGTERM. `useWindowsService` has
+  the runtime (`process_service`) start the Service Control Manager's
+  dispatcher on a thread of its own, which it keeps for the service's life,
+  and wait until the manager has called the service's main or said that the
+  program is not a service; the host then reports running, stop-pending and
+  stopped, and a stop or shutdown control is raised as SIGTERM, which the
+  host hears as it hears a console's. There are no services but on Windows:
+  elsewhere, WASI with it, the call says so and the host does nothing. Only
+  the path of a program the manager did not start is tested; a service's
+  own needs an installed service, which CI does not have.
+
+### Configuration
+
+`Sable.Configuration` is .NET's configuration and options over what the
+library has. A `ConfigurationBuilder` is a list of providers
+(`ConfigurationProvider`: a name, an async `load`, its files, whether all it
+gives is secret), each one's values over those before; `build` loads them
+into a `Configuration`.
+
+- **Keys.** Text by a path of parts parted by ':', compared without regard
+  to case (`ConfigurationPath`). A file's tables and arrays are flattened
+  into paths, an array's elements keyed by position, so a later provider
+  overrides an array element by element, as .NET's does. Every value is
+  text; an empty table or array is "", which binds as an empty one.
+- **Providers.** Files (`ConfigurationFormat`: TOML, JSON with comments,
+  YAML, `.env`), read through Sable.Serialize's decoders and flattened by a
+  walk of `Decoder` that knows no format; the environment's variables, by
+  prefix, `__` a ':'; the command line, as .NET's provider reads it (#76's
+  argument parser does not exist yet, so there is none to share);
+  memory; and `UserSecrets`, a JSON file under the user's settings
+  folder (`KnownFolder.Config`), outside any repository. A package's
+  provider — a cloud secret store — is a conformance of its own.
+- **Binding.** `ConfigurationSection.bind` is `T.decode` from a
+  `ConfigurationDecoder`: a field is a key however cased, a number or a Bool
+  is parsed from text, and an error names the key. A field with no key
+  keeps its initial value where it is `@serialize(defaulted)`, as for any
+  format. No reflection.
+- **Versions.** The values are an immutable tree, replaced as a whole when
+  `reload` finds a provider's values changed; `changes` gives the versions
+  (a `Watch`), and `watch` reloads after a provider's files change
+  (`FileWatcher`), the delay after a change waited out on any `Clock`, so
+  a test does it with a `TestClock` and no sleep.
+- **Options.** `OptionsMonitor<T>` is bound from a section and checked —
+  by a `Validator` (`validatedOptions`) or a closure — at once, and again
+  at each new version, before `reload` returns; a version that does not
+  bind or pass is refused and the options kept. The configuration holds its
+  monitors weakly. `ServiceCollection.configure` registers a monitor and
+  its `Options<T>`, keyed by the options' name, the monitor as a singleton
+  that is waited for: the provider's build — a host's — fails on options
+  that do not bind or pass, as .NET's `ValidateOnStart` has it.
+- **Seeing it.** `debugView` lists every key with its value and the
+  provider it came from; a key that looks secret, or a provider's that are
+  all secrets, shows "[redacted]".
 
 ### Cryptography
 

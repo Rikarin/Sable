@@ -5,8 +5,6 @@ import Sable.Crypto.X509
 /// Which servers' certificates a client believes.
 ///
 /// ```sable
-/// import Sable.Crypto.X509
-///
 /// let trust = TlsServerTrust.Verified(CertificateVerifier(roots: TrustStore([])))
 /// match trust {
 ///     case .Verified(let verifier) => assert(verifier.roots.certificates.isEmpty)

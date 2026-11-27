@@ -1,0 +1,109 @@
+module TlsStreamTests
+
+// TlsStream (Sable.Net.Tls) over a stream that replays RFC 8448's server.
+// Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Rfc8448
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.IO
+import Sable.Net.Tls
+import Sable.Testing
+
+/// A stream that gives what a server sent, a chunk a read, and keeps what
+/// was written to it.
+final class Replay: AsyncReader, AsyncWriter {
+    let chunks: U8[>..][>..]
+    var next = 0
+    var written: U8[>..] = []
+
+    init(_ chunks: U8[>..][>..]) {
+        self.chunks = chunks
+    }
+
+    fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        if next == chunks.count {
+            return []
+        }
+        next += 1
+        return chunks[next - 1]
+    }
+
+    fn write(_ bytes: U8[:]) async throws(IoError) {
+        written.append(contentsOf: bytes)
+    }
+}
+
+fn traceClient() -> TlsClientConnection {
+    let certificate = try! Certificate.parse(der: Rfc8448.certificate[11..<11 + 0x1B0])
+    let key = try! X25519PrivateKey(Rfc8448.clientPrivateKey)
+    return TlsClientConnection(host: "server", options: TlsClientOptions(trust: .Pinned([certificate])), clientHello: Rfc8448.clientHello, keyShares: [.X25519(key)])
+}
+
+@test
+fn aStreamCarriesTheTracesHandshakeAndData() async throws {
+    let server = Replay([Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord, Rfc8448.newSessionTicketRecord, Rfc8448.serverApplicationRecord, Rfc8448.serverAlertRecord])
+    let stream = try await TlsStream.connect(server, connection: traceClient())
+    assertEqual(server.written, joined(Rfc8448.clientHelloRecord, Rfc8448.clientFinishedRecord))
+    expect(stream.cipherSuite == .Aes128GcmSha256 && stream.applicationProtocol == none)
+    try await stream.write(Rfc8448.applicationData)
+    let first = try await stream.read(upTo: 10)
+    assertEqual(first, Rfc8448.applicationData[0..<10].toArray())
+    let rest = try await stream.read(upTo: 100)
+    assertEqual(joined(first, rest), Rfc8448.applicationData)
+    assertEqual(try await stream.read(upTo: 100), [])
+    try await stream.close()
+    assertEqual(server.written, joined(joined(joined(Rfc8448.clientHelloRecord, Rfc8448.clientFinishedRecord), Rfc8448.clientApplicationRecord), Rfc8448.clientAlertRecord))
+}
+
+@test
+fn aStreamThatEndsInTheHandshakeFails() async {
+    let server = Replay([Rfc8448.serverHelloRecord])
+    do {
+        _ = try await TlsStream.connect(server, connection: traceClient())
+        expect(false, "a handshake with no end")
+    } catch {
+        expect(error.alert == .handshakeFailure)
+    }
+}
+
+@test
+fn aFaultInTheHandshakeSendsItsAlert() async {
+    let alert: U8[>..] = [21, 3, 3, 0, 1, 2]
+    let server = Replay([alert])
+    do {
+        _ = try await TlsStream.connect(server, host: "example.com", options: TlsClientOptions(trust: .Pinned([])))
+        expect(false, "a malformed alert taken")
+    } catch {
+        expect(error.alert == .decodeError)
+    }
+    expect(server.written.count > 7)
+    assertEqual(server.written[server.written.count - 7..<server.written.count].toArray(), [21, 3, 3, 0, 2, 2, 50])
+}
+
+@test
+fn aStreamThatEndsBeforeTheServerClosesIsCutShort() async throws {
+    let server = Replay([Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord])
+    let stream = try await TlsStream.connect(server, connection: traceClient())
+    do {
+        _ = try await stream.read(upTo: 10)
+        expect(false, "bytes from nowhere")
+    } catch {
+        expect(error.description() == IoError.UnexpectedEof.description())
+    }
+}
+
+@test
+fn aBadRecordIsInvalidData() async throws {
+    var bad = Rfc8448.serverApplicationRecord
+    bad[10] = bad[10] ^ 1
+    let server = Replay([Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord, bad])
+    let stream = try await TlsStream.connect(server, connection: traceClient())
+    do {
+        _ = try await stream.read(upTo: 10)
+        expect(false, "a record that should not open")
+    } catch {
+        expect("\(error.description())".contains("bad_record_mac"))
+    }
+}

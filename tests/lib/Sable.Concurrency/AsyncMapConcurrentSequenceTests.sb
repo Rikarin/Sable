@@ -21,8 +21,7 @@ final class Gates {
     let started: Atomic<Int>
 
     init() {
-        let closed: [Int: Bool] = [:]
-        opened = Mutex(closed)
+        opened = Mutex([:])
         changed = WaitList()
         running = Atomic(0)
         most = Atomic(0)

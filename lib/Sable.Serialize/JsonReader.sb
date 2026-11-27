@@ -356,8 +356,7 @@ public struct JsonReader {
         wants = next
         last = token
         if options.rejectDuplicateKeys && kind == 1 {
-            let noKeys: [String: Bool] = [:]
-            keys.append(noKeys)
+            keys.append([:])
         }
         return token
     }

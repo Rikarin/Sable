@@ -141,6 +141,40 @@ public sealed class AccessibilityTests {
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAccessible);
     }
 
+    /// <summary>
+    ///     An internal overload in a type's body does not hide a public one
+    ///     in an extension from another module, nor the other way round (#351).
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "public struct V {\n    var n: Int\n    static fn parse(_ n: Int, _ m: Int) -> V { return V(n: n + m) }\n}\nextension V {\n    public static fn parse(_ text: String) -> V { return V(n: text.count) }\n}"
+    )]
+    [InlineData(
+        "public struct V {\n    var n: Int\n    public static fn parse(_ text: String) -> V { return V(n: text.count) }\n}\nextension V {\n    static fn parse(_ n: Int, _ m: Int) -> V { return V(n: n + m) }\n}"
+    )]
+    public void AnInternalOverloadDoesNotHideAPublicOneFromAnotherModule(string first) {
+        var trees = new[] {
+            SyntaxTree.Parse(new($"module First\n{first}", "a.sb")),
+            SyntaxTree.Parse(new("module Second\nimport First\nfn probe() -> V { return V.parse(\"1.2\") }", "b.sb")),
+        };
+        var compilation = Compilation.Create(trees);
+        AssertNone([..compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error)]);
+
+        var call = trees[1].Root.DescendantNodes().OfType<InvocationExpressionSyntax>().Single();
+        var bound = Assert.IsType<BoundCall>(SemanticModel.Unconverted(compilation.GetSemanticModel(trees[1]).GetBoundNode(call)!));
+        Assert.Equal(Accessibility.Public, bound.Function.DeclaredAccessibility);
+    }
+
+    /// <summary>Where every overload is hidden, that is still the error.</summary>
+    [Fact]
+    public void InternalOverloadsAloneAreReportedAsHidden() {
+        var errors = ErrorsAcross(
+            ("module First\npublic struct V {\n    var n: Int\n    static fn parse(_ n: Int) -> V { return V(n: n) }\n}\nextension V {\n    static fn parse(_ t: String) -> V { return V(n: t.count) }\n}", "a.sb"),
+            ("module Second\nimport First\nfn probe() -> V { return V.parse(\"1.2\") }", "b.sb")
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAccessible);
+    }
+
     [Fact]
     public void AnExtensionInAnotherModuleDoesNotSeePrivateMembers() {
         var errors = ErrorsAcross(

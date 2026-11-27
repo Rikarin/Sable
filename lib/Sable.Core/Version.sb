@@ -155,7 +155,7 @@ public struct Version {
     }
 
     // The version from..<to writes.
-    static fn parseScalars(_ scalars: Char[>..], _ from: Int, _ to: Int) throws(ParseError) -> Version {
+    static fn parse(_ scalars: Char[>..], _ from: Int, _ to: Int) throws(ParseError) -> Version {
         if from >= to {
             throw .Empty
         }
@@ -252,7 +252,7 @@ extension Version: Parsable {
     /// ```
     public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Version {
         let scalars = text.toString().toArray()
-        return try Version.parseScalars(scalars, 0, scalars.count)
+        return try Version.parse(scalars, 0, scalars.count)
     }
 }
 

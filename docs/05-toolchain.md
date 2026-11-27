@@ -670,7 +670,7 @@ error.
 | `codegen-units` | — | `1` compiles the program whole even in a dev build; the units are otherwise the packages, so another count is warned about |
 | `incremental` | `true` | `false` compiles the program whole each time, keeping no unit's object; an unchanged build is still skipped |
 | `panic` | `"abort"` | a trap always aborts; `"unwind"` is warned about |
-| `strip` | `"none"` | `"debuginfo"` or `"symbols"`: the link's `--strip-debug`/`--strip-all` on Linux, `-S`/`-S -x` on macOS; `"local"`, the symbols nothing needs by name — every one of the program's own, which are hidden (§5.4, "Symbols") — and not the debug information, `--discard-all` and `-x`, which a backtrace and the debugger name functions by; a warning on Windows |
+| `strip` | `"none"` | `"debuginfo"` or `"symbols"`: the link's `--strip-debug`/`--strip-all` on Linux, `-S`/`-S -x` on macOS; `"local"`, the symbols nothing needs by name — every one of the program's own, which are hidden (§5.4, "Symbols") — and not the debug information, `--discard-all` (and `objcopy --discard-all` after it, as GNU ld keeps the symbols it made local itself) and `-x`, which a backtrace and the debugger name functions by; a warning on Windows |
 | `rpath` | `false` | the executable looks for shared libraries beside itself (`$ORIGIN`, `@executable_path`); a warning on Windows, which does already |
 | `exclusivity` | `"checked"` / `"unchecked"` | keeps or drops the dynamic exclusivity checks (docs/02 §2.3) |
 | `overflow-checks` | `true` | `false`: integer `+ - *`, negation, `abs` and `as` wrap rather than trap |

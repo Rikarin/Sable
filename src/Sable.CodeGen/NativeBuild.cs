@@ -841,6 +841,27 @@ public static class NativeBuild {
         }
     });
 
+    /// <summary>A Linux executable's local symbols left out (<c>strip = "local"</c>); its DWARF stays.</summary>
+    public static void DiscardLocalSymbols(string executable, NativeTarget target) {
+        if (target.Platform != NativePlatform.Linux) {
+            return;
+        }
+
+        // The program's symbols are hidden in its objects and made local by the
+        // link (#300), which GNU ld's --discard-all leaves be — it discards the
+        // symbols local in what it is given, and lld those it writes — so they
+        // are discarded from the executable, by LLVM's objcopy or binutils'.
+        foreach (var tool in (string[])[Path.Combine(Path.GetDirectoryName(CompilerPath) ?? "", "llvm-objcopy"), "llvm-objcopy", "objcopy"]) {
+            try {
+                if (Run(tool, ["--discard-all", executable]).ExitCode == 0) {
+                    return;
+                }
+            } catch (System.ComponentModel.Win32Exception) {
+                // Not here: the next.
+            }
+        }
+    }
+
     /// <summary>
     ///     Gathers a macOS executable's debug information, which its link left
     ///     in the objects it was made from, into its <c>.dSYM</c>, as clang does

@@ -1,0 +1,80 @@
+module SlabPoolBench
+
+// Ten thousand records kept by name while they churn: a quarter of them
+// removed and as many inserted, a round at a time, every live one read each
+// round. Named by generational handles in a SlabPool ("slab"), or by an Int
+// key in a Dictionary ("dictionary"), the general way.
+
+import Sable.Testing
+
+struct Body {
+    var x: Int
+    var speed: Int
+}
+
+let live = 10_000
+let rounds = 20
+
+fn slab() -> String {
+    var pool = SlabPool<Body>(capacity: live)
+    var handles: SlabHandle<Body>[>..] = []
+    for i in 0..<live {
+        handles.append(pool.insert(Body { x: i, speed: i % 7 }))
+    }
+
+    var total = 0
+    for round in 0..<rounds {
+        var i = round % 4
+        while i < live {
+            _ = pool.remove(handles[i])
+            handles[i] = pool.insert(Body { x: round, speed: i % 5 })
+            i += 4
+        }
+
+        for handle in handles {
+            pool[handle].x += pool[handle].speed
+            total += pool[handle].x
+        }
+    }
+    return "\(total) \(pool.count)"
+}
+
+fn dictionary() -> String {
+    var bodies: [Int: Body] = [:]
+    var keys: Int[>..] = []
+    var next = 0
+    for i in 0..<live {
+        bodies[next] = Body { x: i, speed: i % 7 }
+        keys.append(next)
+        next += 1
+    }
+
+    var total = 0
+    for round in 0..<rounds {
+        var i = round % 4
+        while i < live {
+            _ = bodies.remove(keys[i])
+            bodies[next] = Body { x: round, speed: i % 5 }
+            keys[i] = next
+            next += 1
+            i += 4
+        }
+
+        for key in keys {
+            var body = bodies[key]!
+            body.x += body.speed
+            bodies[key] = body
+            total += body.x
+        }
+    }
+    return "\(total) \(bodies.count)"
+}
+
+@bench(arguments: ["slab", "dictionary"])
+fn measure(_ b: Bencher, _ how: String) {
+    if how == "slab" {
+        b.check(b.iterate { slab() })
+    } else {
+        b.check(b.iterate { dictionary() })
+    }
+}

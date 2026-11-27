@@ -1,0 +1,62 @@
+module OffsetAllocatorsBench
+
+// A GPU heap's bookkeeping: a 64 MiB span carved into resources of 256 bytes
+// to 64 KiB, a ring of 512 kept, the oldest given back as each is made, a
+// hundred thousand times. By a BuddyAllocator ("buddy"), or a
+// RangeAllocator ("range"). Neither owns memory, so there is no general
+// allocator to hold them to; each is held to the other, and to itself.
+
+import Sable.Testing
+
+let span: Int = 64 << 20
+let kept = 512
+let requests = 100_000
+
+// Sizes from 256 bytes to 64 KiB, the small ones commoner.
+fn size(_ i: Int) -> Int {
+    let k = (i * 2654435761) % 1000
+    return k < 700 ? 256 + k * 8 : k < 950 ? 8192 + k * 16 : 65536
+}
+
+fn buddy() -> String {
+    let heap = BuddyAllocator(capacity: span, minimumBlockSize: 256, checksLeaks: false)
+    var ring = Int[>..](repeating: -1, count: kept)
+    var total = 0
+    for i in 0..<requests {
+        let slot = i % kept
+        if ring[slot] >= 0 {
+            heap.free(at: ring[slot])
+        }
+
+        let block = heap.allocate(size(i), alignment: 256)!
+        ring[slot] = block.lowerBound
+        total += block.count
+    }
+    return "\(total) \(heap.allocationCount)"
+}
+
+fn range() -> String {
+    let heap = RangeAllocator(capacity: span, checksLeaks: false)
+    var ring = Int[>..](repeating: -1, count: kept)
+    var total = 0
+    for i in 0..<requests {
+        let slot = i % kept
+        if ring[slot] >= 0 {
+            heap.free(at: ring[slot])
+        }
+
+        let block = heap.allocate(size(i), alignment: 256)!
+        ring[slot] = block.lowerBound
+        total += block.count
+    }
+    return "\(total) \(heap.allocationCount)"
+}
+
+@bench(arguments: ["buddy", "range"])
+fn measure(_ b: Bencher, _ how: String) {
+    if how == "buddy" {
+        b.check(b.iterate { buddy() })
+    } else {
+        b.check(b.iterate { range() })
+    }
+}

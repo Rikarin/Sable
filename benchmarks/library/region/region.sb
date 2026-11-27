@@ -1,0 +1,95 @@
+module RegionBench
+
+// A hundred frames, each a chain of 2000 small records built, walked and
+// dropped: by the general allocator, a class a record ("heap"); in a region
+// made for the frame and gone with it ("region"); and in a FrameAllocator's
+// region, reset as its frame comes round again ("frames").
+
+import Sable.Testing
+
+final class HeapNode {
+    let value: Int
+    let next: HeapNode?
+
+    init(_ value: Int, _ next: HeapNode?) {
+        self.value = value
+        self.next = next
+    }
+}
+
+struct Link {
+    var value: Int
+    var next: Link&?
+}
+
+let records = 2000
+let frameCount = 100
+
+fn heapFrame(_ frame: Int) -> Int {
+    var head: HeapNode? = none
+    for i in 0..<records {
+        head = HeapNode(i + frame, head)
+    }
+
+    var total = 0
+    var current = head
+    while let node = current {
+        total += node.value
+        current = node.next
+    }
+    return total
+}
+
+fn chain(in r: Region, _ frame: Int) -> Int {
+    var head = r.alloc(Link { value: frame, next: none })
+    for i in 1..<records {
+        head = r.alloc(Link { value: i + frame, next: head })
+    }
+
+    var total = head.value
+    var current = head.next
+    while current != none {
+        total += current!.value
+        current = current!.next
+    }
+    return total
+}
+
+fn heap() -> String {
+    var total = 0
+    for frame in 0..<frameCount {
+        total += heapFrame(frame)
+    }
+    return "\(total)"
+}
+
+fn regions() -> String {
+    var total = 0
+    for frame in 0..<frameCount {
+        region arena {
+            total += chain(in: arena, frame)
+        }
+    }
+    return "\(total)"
+}
+
+fn frames(_ allocator: FrameAllocator) -> String {
+    var total = 0
+    for frame in 0..<frameCount {
+        let current = allocator.beginFrame()
+        total += chain(in: current, frame)
+    }
+    return "\(total)"
+}
+
+@bench(arguments: ["heap", "region", "frames"])
+fn measure(_ b: Bencher, _ how: String) {
+    let allocator = FrameAllocator(framesInFlight: 3)
+    if how == "heap" {
+        b.check(b.iterate { heap() })
+    } else if how == "region" {
+        b.check(b.iterate { regions() })
+    } else {
+        b.check(b.iterate { frames(allocator) })
+    }
+}

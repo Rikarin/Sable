@@ -38,8 +38,8 @@ bridge between "I want a graph of objects" and "I do not want to pay for a heap"
 ```sable
 fn parse(src: String) -> Ast.Module {
     region arena {                      // reserve, bump, release in one store
-        let tokens: Token[>..] = arena.alloc()
-        lex(src, into: tokens)
+        let tokens = arena.alloc(Token[>..]())    // a Token[>..]& that writes
+        lex(src, into: &tokens)
         return parseModule(tokens, in: arena).toOwned()
     }                                   // whole arena released here
 }
@@ -49,6 +49,17 @@ Values allocated in a region are referenced with `&` references whose **root is
 inferred** — see §2.4. A region reference may not outlive its region, and the
 compiler proves that statically with no annotations in the signature. `toOwned()`
 copies out of the region into Tier 0/Tier 2 storage.
+
+What the compiler cannot see — a raw address kept into a region, a write
+past a value through one — `SABLE_CHECK_REGIONS=1` catches at run time:
+what a reset, a nested block's end or the region's end gives back is
+poisoned (every byte `0xDE`), and each value is followed by guard bytes that
+are checked as it is given back. Sable.Core builds on regions for what
+they do not cover: `FrameAllocator` (a region for each frame in flight,
+reset as its frame comes round, trapping if that frame is still held), and,
+for memory that is not the program's, `BuddyAllocator` and `RangeAllocator`
+(offsets, not memory) and `SlabPool<T>` (values named by generational
+handles, a stale one refused).
 
 Regions are the answer for compilers, parsers, request handlers, frame-scoped
 game state, and every other "allocate a thousand little things, throw them all
@@ -562,7 +573,7 @@ class Scene {                        // Tier 2: identity, observers, reflection
     fn update(dt: F32) {
         frameArena.reset()                       // one store
         region frame = frameArena {
-            let visible: Entity&[>..] = frame.alloc() // refs rooted in 'frame'
+            let visible = frame.alloc(Entity&[>..]())   // refs rooted in 'frame'
             cull(entities, into: visible)             // no allocation, no ARC
             for e in visible { e.step(dt) }           // borrowed, zero retains
         }                                             // released, one store

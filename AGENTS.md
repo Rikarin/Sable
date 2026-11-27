@@ -10,8 +10,10 @@ is what to hold to while changing things.
 - **Everything is the standard library.** No third-party libraries, no
   packages, even where an issue suggests binding one. C in `runtime/` only
   where an instruction or a system call needs it.
-- **A compiler gap is fixed in the compiler,** never worked around in the
-  library. If the fix is too big, stop and say so.
+- **A compiler gap is fixed in the compiler.** Where the fix is too big for
+  the change at hand, a workaround may stay only with an issue that shows the
+  gap and names every place the workaround is used (file, line, what to undo),
+  so it can be taken out when the compiler is fixed (#351, #352 are examples).
 - **Breaking changes are fine:** there are no users. No deprecation shims.
 - **One spelling for each thing.** Before adding API, look for what exists
   (and in other modules); extend it rather than add a rival.

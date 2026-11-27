@@ -1,0 +1,55 @@
+module Sable.IO.Hashing
+
+import Sable.IO
+
+// Streams hashed as they are read, without all of one in memory at once, as
+// Sable.Crypto's hashes are: .NET's `Append(Stream)`.
+
+/// How much is asked of a reader at a time.
+let streamedBytes: Int = 65536
+
+extension NonCryptographicHash {
+    /// Hashes what the reader has left, to its end, after the bytes already
+    /// given.
+    ///
+    /// ```sable
+    /// var crc = Crc32()
+    /// crc.update(utf8: "1234")
+    /// var stream = MemoryStream("56789".utf8Bytes())
+    /// try! crc.update(reading: &stream)
+    /// assert(crc.value == 0xCBF43926)
+    /// ```
+    public mutating fn update<R: Reader>(reading reader: inout R) throws(IoError) {
+        while true {
+            let bytes = try reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// Hashes what the reader has left, to its end, after the bytes already
+    /// given, the task suspended while it waits for them.
+    public mutating fn update<R: AsyncReader>(reading reader: R) async throws(IoError) {
+        while true {
+            let bytes = try await reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// The hash of what the reader has left, to its end, as bytes.
+    ///
+    /// ```sable
+    /// var stream = MemoryStream("Wikipedia".utf8Bytes())
+    /// assert((try! Adler32.hashBytes(reading: &stream)) == [0x11, 0xE6, 0x03, 0x98])
+    /// ```
+    public static fn hashBytes<R: Reader>(reading reader: inout R) throws(IoError) -> U8[>..] {
+        var hash = Self()
+        try hash.update(reading: &reader)
+        return hash.hashBytes()
+    }
+}

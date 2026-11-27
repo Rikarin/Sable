@@ -28,11 +28,18 @@ fn crcRuntimeAvailable() -> Bool
 @builtin("crc_update")
 unsafe fn crcRuntime(_ kind: Int, _ state: Int, _ address: Int, _ count: Int) -> Int
 
-/// The state after the bytes at an address, of a CRC of a kind.
+/// The state after the bytes at an address, of a CRC of a kind: where it is
+/// called, so that a few bytes cost no more than the instructions for them.
+@inline(always)
 unsafe fn crcAdvance(_ kind: Int, _ state: U64, _ address: Int, _ count: Int) -> U64 {
     if crcRuntimeAvailable() {
         return crcRuntime(kind, state unchecked as Int, address, count) unchecked as U64
     }
+    return crcByTables(kind, state, address, count)
+}
+
+/// The same, eight bytes a step by tables.
+unsafe fn crcByTables(_ kind: Int, _ state: U64, _ address: Int, _ count: Int) -> U64 {
     var crc = state
     var at = address
     let end = address &+ count

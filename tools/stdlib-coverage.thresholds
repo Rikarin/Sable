@@ -15,6 +15,7 @@ lib/Sable.Build/BuildScript.sb                     0  70   # raise me: no tests 
 lib/Sable.Build/Condition.sb                       0   0   # raise me: no tests yet
 lib/Sable.Build/Dependency.sb                      0  70   # raise me: no tests yet
 lib/Sable.Build/Manifest.sb                        0   0   # raise me: no tests yet
+lib/Sable.Build/Module.sb                          0  70   # raise me: no tests yet (lib/package.sb evaluated: LibraryTierTests)
 lib/Sable.Build/Profile.sb                         0  70   # raise me: no tests yet
 lib/Sable.Build/Target.sb                          0  70   # raise me: no tests yet
 lib/Sable.Build/TargetSettings.sb                  0  70   # raise me: no tests yet

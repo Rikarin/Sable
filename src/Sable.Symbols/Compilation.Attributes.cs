@@ -171,6 +171,18 @@ public sealed partial class Compilation {
                 continue;
             }
 
+            // A generator is run by the program the compiler makes of a
+            // package's generators/ directory (docs/08 §8.1); a function
+            // anywhere else would be compiled and never run.
+            if (name == "generator" && !IsInGeneratorsDirectory(tree.Text.FileName)) {
+                ReportDeclaration(
+                    ErrorCode.ERR_AttributeDoesNotApply,
+                    attribute.Span,
+                    $"'@generator' applies to {known.Where}, and '{tree.Text.FileName}' is not in one: nothing would run it"
+                );
+                continue;
+            }
+
             // Said once is said: a second would contradict the first, or repeat it.
             if (!RepeatableAttributes.Contains(name) && SiblingAttributes(attribute).TakeWhile(a => a != attribute).Any(a => AttributeName(a) == name)) {
                 ReportDeclaration(ErrorCode.ERR_DuplicateAttribute, attribute.Span, $"'@{name}' is written twice on one declaration");
@@ -737,6 +749,17 @@ public sealed partial class Compilation {
 
     /// <summary>The platforms <c>@available</c> may name: what <c>#if os(...)</c> tests (ParseOptions.TargetOs).</summary>
     static readonly string[] Platforms = ["macos", "linux", "windows", "wasi"];
+
+    /// <summary>
+    ///     Whether a file is part of a package's generator program: under a
+    ///     <c>generators/</c> directory, but not its <c>tests/</c>, whose cases
+    ///     are compiled as the package's other files are.
+    /// </summary>
+    internal static bool IsInGeneratorsDirectory(string fileName) {
+        var parts = fileName.Split('/', '\\');
+        var at = parts.Length < 2 ? -1 : Array.LastIndexOf(parts, "generators", parts.Length - 2);
+        return at >= 0 && parts[at + 1] != "tests";
+    }
 
     /// <summary>The arguments of the attributes whose meaning depends on them, which are read later.</summary>
     void CheckAttributeArguments(AttributeSyntax attribute, string name) {

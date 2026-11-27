@@ -42,6 +42,26 @@ public sealed class AttributeTests {
         Assert.Contains(message, error.Message, StringComparison.Ordinal);
     }
 
+    // A generator is run by the program made of a package's generators/
+    // directory (docs/08 §8.1); anywhere else nothing would run it.
+    [Theory]
+    [InlineData("src/main.sb", false)]
+    [InlineData("main.sb", false)]
+    [InlineData("app/generators/tests/case/main.sb", false)]
+    [InlineData("app/generators/json.sb", true)]
+    [InlineData("generators/sub/json.sb", true)]
+    [InlineData("lib/Sable.Testing/generators/Mockable.sb", true)]
+    [InlineData(@"C:\app\generators\json.sb", true)]
+    public void AGeneratorIsDeclaredInAGeneratorsDirectoryAlone(string file, bool accepted) {
+        var tree = SyntaxTree.Parse(new SourceText("module M\n\n@generator(\"x\")\nfn g() { }\n", file));
+        var errors = Compilation.Create([tree]).GetAllDiagnostics().Where(static d => d.Code == ErrorCode.ERR_AttributeDoesNotApply).ToList();
+        if (accepted) {
+            Assert.Empty(errors);
+        } else {
+            Assert.Contains($"'{file}' is not in one: nothing would run it", Assert.Single(errors).Message, StringComparison.Ordinal);
+        }
+    }
+
     [Theory]
     [InlineData("@inline(sometimes)\nfn f() { }")]
     [InlineData("@deprecated(3)\nfn f() { }")]

@@ -335,6 +335,9 @@ fn pongEach(_ listener: TcpListener, _ options: TlsServerOptions, _ count: Int) 
             _ = try? await tls.read(upTo: 1024)
             tcp.close()
             seen += tls.isResumed ? "resumed " : "full "
+            if !tls.peerCertificates.isEmpty {
+                seen += "\(tls.peerCertificates[0].subject) "
+            }
         } catch {
             seen += "\(error) "
         }
@@ -358,5 +361,48 @@ fn opensslsClientResumesASessionOfTheServer() async throws {
     expect(secondWell && second.contains("Reused, TLSv1.3"), second)
     let seen = await server.value
     expect(seen == "full resumed ", seen)
+    try? directory.remove()
+}
+
+@test
+fn theClientSendsItsCertificateToOpensslsServer() async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let directory = try written(pki)
+    // -Verify 1: a certificate of a client demanded, verified against the CA when the certificates are good.
+    guard let (child, start, port) = try await sServer(directory, 1, ["-Verify", "1", "-CAfile", "ca.pem", "-attime", "1797292800"]) else {
+        expect(false, "s_server said no port")
+        return
+    }
+    var lines = start
+    let key = PrivateKey.Ed25519(Ed25519PrivateKey.generate())
+    var options = pki.clientOptions()
+    options.certificateChain = [pki.clientCertificate("alice", key: key)]
+    options.privateKey = key
+    let tcp = try await TcpStream.connect(host: "127.0.0.1", port: port)
+    let tls = try await TlsStream.connect(tcp, host: "localhost", options: options)
+    expect((try await reversed(tls)).contains("olleh"))
+    try await tls.close()
+    tcp.close()
+    await drain(&lines)
+    expect(await ended(child) != none)
+    try? directory.remove()
+}
+
+@test(arguments: ["p256", "rsa"])
+fn opensslsClientSendsItsCertificateToTheServer(_ kind: String) async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let directory = try written(pki)
+    let key: PrivateKey = kind == "p256" ? EcdsaPrivateKey<P256>.generate().anyKey : .Rsa(RsaPrivateKey.generate(bits: 2048))
+    try File.write(directory.path.appending("client.pem"), pki.clientCertificate("carol", key: key).pem)
+    try File.write(directory.path.appending("client-key.pem"), key.pem())
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let serving = pki.verifyingServerOptions()
+    let server = Task.spawn { () -> String in await pongEach(listener, serving, 1) }
+    let (output, well) = try await sClient(directory, listener.port, ["-cert", "client.pem", "-key", "client-key.pem"])
+    expect(well && output.contains("pong"), output)
+    let seen = await server.value
+    expect(seen == "full CN=carol ", seen)
     try? directory.remove()
 }

@@ -43,7 +43,12 @@ public struct TlsServerOptions: Sendable {
     /// days is said to the client.
     public var ticketLifetime: Duration = Duration.seconds(7200)
 
-    /// The time tickets are issued and checked at; none is the system's now.
+    /// Whether the client is asked for a certificate, and whose are
+    /// believed.
+    public var clientAuthentication: TlsClientAuthentication = .NotAsked
+
+    /// The time tickets are issued and checked at, and clients'
+    /// certificates; none is the system's now.
     public var time: UtcDateTime? = none
 
     public init(certificateChain: Certificate[:], privateKey: PrivateKey) {

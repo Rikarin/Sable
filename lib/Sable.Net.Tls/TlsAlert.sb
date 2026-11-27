@@ -56,6 +56,8 @@ public struct TlsAlert: Formattable, Sendable {
     public static var missingExtension: TlsAlert => TlsAlert(code: 109)
     /// An extension that was not asked for.
     public static var unsupportedExtension: TlsAlert => TlsAlert(code: 110)
+    /// A client that sends no certificate where one is demanded.
+    public static var certificateRequired: TlsAlert => TlsAlert(code: 116)
     /// No application protocol both ends take.
     public static var noApplicationProtocol: TlsAlert => TlsAlert(code: 120)
 
@@ -83,6 +85,7 @@ public struct TlsAlert: Formattable, Sendable {
         case 90  => "user_canceled"
         case 109 => "missing_extension"
         case 110 => "unsupported_extension"
+        case 116 => "certificate_required"
         case 120 => "no_application_protocol"
         default  => "alert \(code)"
     }

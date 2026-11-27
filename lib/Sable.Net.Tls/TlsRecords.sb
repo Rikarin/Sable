@@ -1,6 +1,7 @@
 module Sable.Net.Tls
 
 import Sable.Crypto
+import Sable.Crypto.X509
 
 /// What both ends of a TLS 1.3 connection do alike (RFC 8446 §5): records
 /// read from the bytes that came and opened, the handshake's messages
@@ -234,4 +235,50 @@ fn certificateVerifyContent(server: Bool, transcriptHash: U8[:]) -> U8[>..] {
     content.append(0)
     content.append(contentsOf: transcriptHash)
     return content
+}
+
+/// signature_algorithms of the schemes both ends sign and check with
+/// (RFC 8446 §4.2.3): ECDSA of P-256 and P-384, RSA-PSS, Ed25519.
+fn signatureAlgorithms() -> U8[>..] {
+    return [0, 12, 4, 3, 5, 3, 8, 4, 8, 5, 8, 6, 8, 7]
+}
+
+/// The certificates of a Certificate message (RFC 8446 §4.4.2), the
+/// sender's own first; its request context must be empty, as each end's
+/// is.
+fn readCertificateMessage(_ body: inout TlsReader) throws(TlsError) -> Certificate[>..] {
+    if !(try body.vector(1)).isEmpty {
+        throw TlsError.Failed(.illegalParameter, reason: "a Certificate with a request context")
+    }
+    var list = TlsReader(try body.vector(3), "the certificate list")
+    try body.finish()
+    var certificates: Certificate[>..] = []
+    while !list.isAtEnd {
+        let der = try list.vector(3)
+        _ = try list.vector(2)
+        do {
+            certificates.append(try Certificate.parse(der: der))
+        } catch {
+            throw TlsError.Failed(.badCertificate, reason: "a certificate that does not parse: \(error.description())")
+        }
+    }
+    return certificates
+}
+
+/// A CertificateVerify checked: the signature, by the certificate's key,
+/// of the transcript's hash, as the server's or the client's.
+fn readCertificateVerify(_ body: inout TlsReader, of certificate: Certificate, server: Bool, transcriptHash: U8[:]) throws(TlsError) {
+    let scheme = try body.number(2)
+    let signature = try body.vector(2)
+    try body.finish()
+    let content = certificateVerifyContent(server: server, transcriptHash: transcriptHash)
+    var key: PublicKey? = none
+    do {
+        key = try certificate.publicKey()
+    } catch {
+        throw TlsError.UntrustedCertificate(error)
+    }
+    if !TlsClientConnection.isValid(signature, scheme: scheme, of: content, key: key!) {
+        throw TlsError.Failed(.decryptError, reason: "a CertificateVerify that is no signature of its certificate's key")
+    }
 }

@@ -32,7 +32,7 @@ fn anAlertFormatsAsItsName() {
 fn anUntrustedCertificateHasItsAlert(_ why: CertificateError, _ code: Int) {
     let error = TlsError.UntrustedCertificate(why)
     expect(error.alert == TlsAlert(code: code))
-    expect(error.description().hasPrefix("the server's certificate is not trusted"))
+    expect(error.description().hasPrefix("the other end's certificate is not trusted"))
     expect(error.debugDescription() == error.description())
 }
 

@@ -1,5 +1,6 @@
 module Sable.Net.Tls
 
+import Sable.Crypto.X509
 import Sable.IO
 
 /// A TLS 1.3 connection over a stream, of a client (`connect`) or of a
@@ -82,6 +83,11 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
     /// The name the client asked the server for; on a client's stream, the
     /// host connected to.
     public var serverName: String? => client != none ? client!.host : server!.serverName
+
+    /// The other end's certificates as it sent them, its own first: the
+    /// server's, on a client's stream, and the client's, if it sent any, on a
+    /// server's.
+    public var peerCertificates: Certificate[>..] => client != none ? client!.peerCertificates : server!.peerCertificates
 
     /// Whether the handshake resumed a session of a ticket.
     public var isResumed: Bool => client != none ? client!.isResumed : server!.isResumed

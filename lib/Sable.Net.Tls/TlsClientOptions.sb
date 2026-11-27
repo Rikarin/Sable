@@ -1,10 +1,13 @@
 module Sable.Net.Tls
 
+import Sable.Crypto
+import Sable.Crypto.X509
 import Sable.Time
 
 /// How a client connects: whom it trusts, which application protocols it
-/// offers (ALPN, RFC 7301) and which suites. The defaults need no changing:
-/// the system's trusted certificates and every suite the library has.
+/// offers (ALPN, RFC 7301) and which suites, and the certificate it sends a
+/// server that asks for one. The defaults need no changing: the system's
+/// trusted certificates, every suite the library has, and no certificate.
 ///
 /// ```sable
 /// var options = TlsClientOptions()
@@ -28,6 +31,13 @@ public struct TlsClientOptions: Sendable {
     /// Where sessions of each host are kept, to resume a connection with
     /// the next time; none for a client that resumes none.
     public var sessionCache: TlsSessionCache? = none
+
+    /// The certificates sent a server that asks for one, the client's own
+    /// first; none sends an empty Certificate.
+    public var certificateChain: Certificate[>..] = []
+
+    /// The key of the first certificate, which signs the CertificateVerify.
+    public var privateKey: PrivateKey? = none
 
     public init(trust: TlsServerTrust = TlsServerTrust.system()) {
         self.trust = trust

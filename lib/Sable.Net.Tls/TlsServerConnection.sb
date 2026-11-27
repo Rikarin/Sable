@@ -15,8 +15,9 @@ import Sable.Time
 /// handshake a ticket of the session goes to the client, sealed with the
 /// options' ticket key; a client that offers one back resumes the session
 /// (RFC 8446 §4.2.11, with a fresh key exchange), and no certificate is
-/// sent. The client is not asked for a certificate. Every fault found sends
-/// the client its alert and throws.
+/// sent. If the options say so the client is asked for a certificate, which
+/// is verified, and its signature of the handshake checked. Every fault
+/// found sends the client its alert and throws.
 ///
 /// ```sable
 /// let key = EcdsaPrivateKey<P256>.generate().anyKey
@@ -47,6 +48,10 @@ public struct TlsServerConnection: Sendable {
 
     /// Whether the client resumed a session of a ticket.
     public private(set) var isResumed = false
+
+    /// The client's certificates as it sent them, its own first; none if
+    /// none was asked for, or it sent none.
+    public private(set) var peerCertificates: Certificate[>..] = []
 
     /// The suite chosen; none before the client's ClientHello.
     public private(set) var cipherSuite: TlsCipherSuite? = none
@@ -129,8 +134,9 @@ public struct TlsServerConnection: Sendable {
 
     fn keysChange(from before: ServerState) -> Bool {
         return match before {
-            case .Connected => false
-            default         => true
+            case .WaitClientHello => true
+            case .WaitFinished    => true
+            default               => false
         }
     }
 
@@ -144,6 +150,35 @@ public struct TlsServerConnection: Sendable {
                 let earlier = transcript
                 transcript.append(contentsOf: message)
                 try answer(try ClientHello.read(&body), message, earlier)
+                state = !isResumed && options.clientAuthentication.verifier != none ? .WaitCertificate : .WaitFinished
+            }
+            case .WaitCertificate => {
+                if type != 11 {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) where a Certificate should be")
+                }
+                let certificates = try readCertificateMessage(&body)
+                transcript.append(contentsOf: message)
+                if certificates.isEmpty {
+                    if case .Required(_) = options.clientAuthentication {
+                        throw TlsError.Failed(.certificateRequired, reason: "a client with no certificate")
+                    }
+                    state = .WaitFinished
+                } else {
+                    do {
+                        _ = try options.clientAuthentication.verifier!.verify(certificates[0], intermediates: certificates[1..<certificates.count], purpose: KeyPurpose.clientAuth, at: time)
+                    } catch {
+                        throw TlsError.UntrustedCertificate(error)
+                    }
+                    peerCertificates = certificates
+                    state = .WaitCertificateVerify
+                }
+            }
+            case .WaitCertificateVerify => {
+                if type != 15 {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) where a CertificateVerify should be")
+                }
+                try readCertificateVerify(&body, of: peerCertificates[0], server: false, transcriptHash: transcriptHash())
+                transcript.append(contentsOf: message)
                 state = .WaitFinished
             }
             case .WaitFinished => {
@@ -335,6 +370,23 @@ public struct TlsServerConnection: Sendable {
         var encryptedBody: U8[>..] = []
         appendVector(&encryptedBody, encrypted, 2)
         add(&flight, handshakeMessage(8, encryptedBody))
+
+        if !isResumed, let verifier = options.clientAuthentication.verifier {
+            var extensions: U8[>..] = []
+            appendExtension(&extensions, 13, signatureAlgorithms())
+            var names: U8[>..] = []
+            for root in verifier.roots.certificates {
+                appendVector(&names, root.subject.der, 2)
+            }
+            if !names.isEmpty {
+                var authorities: U8[>..] = []
+                appendVector(&authorities, names, 2)
+                appendExtension(&extensions, 47, authorities)
+            }
+            var request: U8[>..] = [0]
+            appendVector(&request, extensions, 2)
+            add(&flight, handshakeMessage(13, request))
+        }
 
         if !isResumed {
             var entries: U8[>..] = []
@@ -582,6 +634,8 @@ struct SessionTicket {
 /// Where a server's handshake is.
 enum ServerState: Sendable {
     WaitClientHello
+    WaitCertificate
+    WaitCertificateVerify
     WaitFinished
     Connected
 }

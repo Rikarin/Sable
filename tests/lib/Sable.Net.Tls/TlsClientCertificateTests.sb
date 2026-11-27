@@ -1,0 +1,143 @@
+module TlsClientCertificateTests
+
+// Clients' certificates in Sable.Net.Tls (RFC 8446 §4.3.2, §4.4.2): the
+// server's CertificateRequest, the client's Certificate and
+// CertificateVerify, and the server's verifying them; in process, and over
+// TCP on loopback. Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Sable.Concurrency
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.IO
+import Sable.Net
+import Sable.Net.Tls
+import Sable.Testing
+import TlsSupport
+
+/// A client of the PKI's that sends the certificate of the key.
+fn identified(_ pki: TestPki, _ key: PrivateKey, name: String = "alice") -> TlsClientOptions {
+    var options = pki.clientOptions()
+    options.certificateChain = [pki.clientCertificate(name, key: key)]
+    options.privateKey = key
+    return options
+}
+
+@test(arguments: ["p256", "p384", "ed25519", "rsa"])
+fn theServerVerifiesTheClientsCertificate(_ kind: String) throws {
+    let key: PrivateKey = match kind {
+        case "p256"    => EcdsaPrivateKey<P256>.generate().anyKey
+        case "p384"    => EcdsaPrivateKey<P384>.generate().anyKey
+        case "ed25519" => .Ed25519(Ed25519PrivateKey.generate())
+        default        => .Rsa(RsaPrivateKey.generate(bits: 2048))
+    }
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var client = TlsClientConnection(host: "localhost", options: identified(pki, key))
+    var server = TlsServerConnection(options: pki.verifyingServerOptions())
+    try exchange(&client, &server)
+    require(client.isHandshakeComplete && server.isHandshakeComplete)
+    require(server.peerCertificates.count == 1)
+    expect("\(server.peerCertificates[0].subject)" == "CN=alice")
+    try client.write([1, 2])
+    try server.receive(client.takeOutgoing())
+    assertEqual(server.takeReceived(), [1, 2])
+}
+
+@test
+fn aClientWithoutACertificateIsRefusedWhereOneIsRequired() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    var server = TlsServerConnection(options: pki.verifyingServerOptions())
+    let error = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(error?.alert == .certificateRequired, "\(error)")
+    expect("\(TlsAlert.certificateRequired)" == "certificate_required")
+    _ = expectThrows(TlsError.self) { try client.receive(server.takeOutgoing()) }
+}
+
+@test
+fn aClientWithoutACertificateIsTakenWhereOneIsRequested() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    var server = TlsServerConnection(options: pki.verifyingServerOptions(demanding: false))
+    try exchange(&client, &server)
+    expect(client.isHandshakeComplete && server.isHandshakeComplete && server.peerCertificates.isEmpty)
+}
+
+@test
+fn aClientOfAnotherCaIsRefused() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let other = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()), root: "Another Root")
+    let key = PrivateKey.Ed25519(Ed25519PrivateKey.generate())
+    var options = pki.clientOptions()
+    options.certificateChain = [other.clientCertificate("mallory", key: key)]
+    options.privateKey = key
+    var client = TlsClientConnection(host: "localhost", options: options)
+    var server = TlsServerConnection(options: pki.verifyingServerOptions())
+    let error = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(error?.alert == .unknownCa, "\(error)")
+}
+
+@test
+fn aCertificateForServersAloneIsRefusedOfAClient() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.clientOptions()
+    // The server's own certificate is for server authentication alone.
+    options.certificateChain = [pki.leaf]
+    options.privateKey = pki.key
+    var client = TlsClientConnection(host: "localhost", options: options)
+    var server = TlsServerConnection(options: pki.verifyingServerOptions())
+    _ = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(!server.isHandshakeComplete)
+}
+
+@test
+fn aSignatureByAnotherKeyIsRefused() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = identified(pki, .Ed25519(Ed25519PrivateKey.generate()))
+    options.privateKey = .Ed25519(Ed25519PrivateKey.generate())
+    var client = TlsClientConnection(host: "localhost", options: options)
+    var server = TlsServerConnection(options: pki.verifyingServerOptions())
+    let error = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(error?.alert == .decryptError, "\(error)")
+}
+
+@test
+fn aResumedSessionAsksForNoCertificate() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = identified(pki, .Ed25519(Ed25519PrivateKey.generate()))
+    options.sessionCache = TlsSessionCache()
+    let serverOptions = pki.verifyingServerOptions()
+    var first = TlsClientConnection(host: "localhost", options: options)
+    var firstServer = TlsServerConnection(options: serverOptions)
+    try exchange(&first, &firstServer)
+    var client = TlsClientConnection(host: "localhost", options: options)
+    var server = TlsServerConnection(options: serverOptions)
+    try exchange(&client, &server)
+    expect(client.isResumed && server.isResumed && server.peerCertificates.isEmpty)
+}
+
+@test
+fn theClientsCertificateCrossesTcp() async throws {
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let serving = pki.verifyingServerOptions()
+    let server = Task.spawn { () -> String in
+        do {
+            let tcp = try await listener.accept()
+            let tls = try await TlsStream.accept(tcp, options: serving)
+            _ = try await tls.read(upTo: 16)
+            try await tls.write([1])
+            tcp.close()
+            return "\(tls.peerCertificates[0].subject)"
+        } catch {
+            return "\(error)"
+        }
+    }
+    let tcp = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    let tls = try await TlsStream.connect(tcp, host: "localhost", options: identified(pki, EcdsaPrivateKey<P256>.generate().anyKey, name: "bob"))
+    try await tls.write([7])
+    expect(try await tls.read(upTo: 16) == [1])
+    expect(tls.peerCertificates == [pki.leaf])
+    tcp.close()
+    expect(await server.value == "CN=bob")
+}

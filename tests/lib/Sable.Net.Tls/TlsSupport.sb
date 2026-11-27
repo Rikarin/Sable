@@ -32,6 +32,26 @@ public struct TestPki {
         leaf = try! builder.issued(to: key.publicKey, by: root, signingKey: rootKey)
     }
 
+    /// A certificate the CA issued a client of the name, for client
+    /// authentication, of the key given.
+    public fn clientCertificate(_ name: String, key: PrivateKey) -> Certificate {
+        var builder = CertificateBuilder(subject: DistinguishedName(commonName: name))
+        builder.notBefore = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        builder.notAfter = UtcDateTime.of(year: 2036, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        builder.purposes = [.clientAuth]
+        return try! builder.issued(to: key.publicKey, by: root, signingKey: rootKey)
+    }
+
+    /// A server that demands a certificate of a client the CA issued, its
+    /// clock at the clients'.
+    public fn verifyingServerOptions(demanding: Bool = true) -> TlsServerOptions {
+        var options = serverOptions()
+        let verifier = CertificateVerifier(roots: TrustStore([root]))
+        options.clientAuthentication = demanding ? .Required(verifier) : .Requested(verifier)
+        options.time = clientOptions().time
+        return options
+    }
+
     /// A server of the certificate, its chain the certificate alone.
     public fn serverOptions() -> TlsServerOptions {
         return TlsServerOptions(certificateChain: [leaf], privateKey: key)

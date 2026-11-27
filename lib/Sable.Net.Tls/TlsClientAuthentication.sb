@@ -1,0 +1,36 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+import Sable.Crypto.X509
+
+/// Whether a server asks the client for a certificate (RFC 8446 §4.3.2),
+/// and whose it believes: a certificate the client sends is verified by the
+/// verifier, for client authentication, and the subjects of the verifier's
+/// roots are named in the request as the authorities taken.
+///
+/// ```sable
+/// let verifier = CertificateVerifier(roots: TrustStore([]))
+/// var options = TlsServerOptions(certificateChain: [], privateKey: .Ed25519(Ed25519PrivateKey.generate()))
+/// options.clientAuthentication = .Required(verifier)
+/// assert(options.clientAuthentication.verifier != none)
+/// assert(TlsClientAuthentication.NotAsked.verifier == none)
+/// ```
+public union TlsClientAuthentication: Sendable {
+    /// No certificate is asked for.
+    NotAsked
+
+    /// One is asked for, and a client may send none; one it sends must be
+    /// verified.
+    Requested(CertificateVerifier)
+
+    /// One is demanded: a client that sends none is refused with
+    /// certificate_required.
+    Required(CertificateVerifier)
+
+    /// The verifier of the client's certificate; none if none is asked for.
+    public var verifier: CertificateVerifier? => match self {
+        case .NotAsked               => none
+        case .Requested(let checker) => checker
+        case .Required(let checker)  => checker
+    }
+}

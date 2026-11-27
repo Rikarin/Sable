@@ -15,7 +15,9 @@ import Sable.Time
 /// signature by its key. A session of the host in the options' cache is
 /// offered too (RFC 8446 §4.2.11), and if the server takes it, it sends no
 /// certificate; the tickets the server sends after the handshake go into
-/// the cache. Every fault found sends the server its alert and throws.
+/// the cache. A server that asks for a certificate is sent the options'
+/// chain, and a signature by its key, or an empty Certificate if there is
+/// none. Every fault found sends the server its alert and throws.
 ///
 /// ```sable
 /// var client = TlsClientConnection(host: "example.com")
@@ -50,6 +52,11 @@ public struct TlsClientConnection: Sendable {
 
     /// When the tickets that come are had.
     let time: UtcDateTime
+
+    /// The context and the signature schemes of the server's
+    /// CertificateRequest, once one has come.
+    var requestContext: U8[>..]? = none
+    var requestedSchemes: Int[>..] = []
 
     /// The suite of the HelloRetryRequest, once one has come.
     var retriedSuite: TlsCipherSuite? = none
@@ -183,15 +190,24 @@ public struct TlsClientConnection: Sendable {
                 state = isResumed ? .WaitFinished : .WaitCertificate
             }
             case .WaitCertificate => {
+                if type == 13 && requestContext == none {
+                    try readCertificateRequest(&body)
+                    transcript.append(contentsOf: message)
+                    return
+                }
                 try expect(type, 11, "Certificate")
-                try readCertificate(&body)
+                let certificates = try readCertificateMessage(&body)
+                if certificates.isEmpty {
+                    throw TlsError.Failed(.decodeError, reason: "a server with no certificate")
+                }
+                peerCertificates = certificates
                 transcript.append(contentsOf: message)
                 try checkTrust()
                 state = .WaitCertificateVerify
             }
             case .WaitCertificateVerify => {
                 try expect(type, 15, "CertificateVerify")
-                try readCertificateVerify(&body)
+                try readCertificateVerify(&body, of: peerCertificates[0], server: true, transcriptHash: transcriptHash())
                 transcript.append(contentsOf: message)
                 state = .WaitFinished
             }
@@ -457,26 +473,66 @@ public struct TlsClientConnection: Sendable {
         }
     }
 
-    mutating fn readCertificate(_ body: inout TlsReader) throws(TlsError) {
-        if !(try body.vector(1)).isEmpty {
-            throw TlsError.Failed(.illegalParameter, reason: "a Certificate with a request context")
-        }
-        var list = TlsReader(try body.vector(3), "the certificate list")
+    /// A CertificateRequest (RFC 8446 §4.3.2): its context, and the
+    /// signature schemes the server takes; the authorities it names are
+    /// not asked.
+    mutating fn readCertificateRequest(_ body: inout TlsReader) throws(TlsError) {
+        let context = try body.vector(1)
+        var extensions = TlsReader(try body.vector(2), "CertificateRequest's extensions")
         try body.finish()
-        var certificates: Certificate[>..] = []
-        while !list.isAtEnd {
-            let der = try list.vector(3)
-            _ = try list.vector(2)
-            do {
-                certificates.append(try Certificate.parse(der: der))
-            } catch {
-                throw TlsError.Failed(.badCertificate, reason: "a certificate that does not parse: \(error.description())")
+        var schemes: Int[>..]? = none
+        while !extensions.isAtEnd {
+            let type = try extensions.number(2)
+            var data = TlsReader(try extensions.vector(2), "a CertificateRequest extension")
+            if type == 13 {
+                var list = TlsReader(try data.vector(2), "signature_algorithms")
+                var read: Int[>..] = []
+                while !list.isAtEnd {
+                    read.append(try list.number(2))
+                }
+                schemes = read
+            } else {
+                _ = try data.take(data.bytes.count - data.at)
+            }
+            try data.finish()
+        }
+        guard let taken = schemes else {
+            throw TlsError.Failed(.missingExtension, reason: "a CertificateRequest without signature_algorithms")
+        }
+        requestContext = context
+        requestedSchemes = taken
+    }
+
+    /// The client's Certificate and CertificateVerify for the server's
+    /// request: the options' chain if its key makes a signature the server
+    /// takes, and an empty Certificate if not.
+    mutating fn sendCertificate(_ context: U8[:]) throws(TlsError) {
+        var scheme: Int? = none
+        if let key = options.privateKey, !options.certificateChain.isEmpty {
+            scheme = TlsServerConnection.signatureScheme(for: key, offered: requestedSchemes)
+        }
+        var entries: U8[>..] = []
+        if scheme != none {
+            for certificate in options.certificateChain {
+                appendVector(&entries, certificate.der, 3)
+                entries.append(contentsOf: [0, 0])
             }
         }
-        if certificates.isEmpty {
-            throw TlsError.Failed(.decodeError, reason: "a server with no certificate")
+        var body: U8[>..] = []
+        appendVector(&body, context, 1)
+        appendVector(&body, entries, 3)
+        let certificate = handshakeMessage(11, body)
+        try records.send(certificate)
+        transcript.append(contentsOf: certificate)
+        if let chosen = scheme {
+            let content = certificateVerifyContent(server: false, transcriptHash: transcriptHash())
+            var verify: U8[>..] = []
+            appendNumber(&verify, chosen, 2)
+            appendVector(&verify, TlsServerConnection.sign(content, scheme: chosen, key: options.privateKey!), 2)
+            let message = handshakeMessage(15, verify)
+            try records.send(message)
+            transcript.append(contentsOf: message)
         }
-        peerCertificates = certificates
     }
 
     fn checkTrust() throws(TlsError) {
@@ -494,22 +550,6 @@ public struct TlsClientConnection: Sendable {
                     throw TlsError.UntrustedCertificate(.UnknownIssuer(issuer: "\(leaf.issuer)"))
                 }
             }
-        }
-    }
-
-    mutating fn readCertificateVerify(_ body: inout TlsReader) throws(TlsError) {
-        let scheme = try body.number(2)
-        let signature = try body.vector(2)
-        try body.finish()
-        let content = certificateVerifyContent(server: true, transcriptHash: transcriptHash())
-        var key: PublicKey? = none
-        do {
-            key = try peerCertificates[0].publicKey()
-        } catch {
-            throw TlsError.UntrustedCertificate(error)
-        }
-        if !TlsClientConnection.isValid(signature, scheme: scheme, of: content, key: key!) {
-            throw TlsError.Failed(.decryptError, reason: "the server's CertificateVerify is no signature of its certificate's key")
         }
     }
 
@@ -559,7 +599,10 @@ public struct TlsClientConnection: Sendable {
         let hash = transcriptHash()
         var keys = schedule!
         keys.advance()
-        let finished = handshakeMessage(20, TlsKeySchedule.finishedData(cipherSuite!, trafficSecret: records.ownSecret!, transcriptHash: hash))
+        if let context = requestContext {
+            try sendCertificate(context)
+        }
+        let finished = handshakeMessage(20, TlsKeySchedule.finishedData(cipherSuite!, trafficSecret: records.ownSecret!, transcriptHash: transcriptHash()))
         try records.send(finished)
         transcript.append(contentsOf: finished)
         records.useKeys(own: keys.deriveSecret("c ap traffic", transcriptHash: hash), peer: keys.deriveSecret("s ap traffic", transcriptHash: hash))
@@ -596,7 +639,7 @@ public struct TlsClientConnection: Sendable {
             appendExtension(&extensions, 0, list)
         }
         appendExtension(&extensions, 10, [0, 4, 0, 0x1D, 0, 0x17])
-        appendExtension(&extensions, 13, [0, 12, 4, 3, 5, 3, 8, 4, 8, 5, 8, 6, 8, 7])
+        appendExtension(&extensions, 13, signatureAlgorithms())
         var shares: U8[>..] = []
         for share in keyShares {
             appendNumber(&shares, share.group, 2)

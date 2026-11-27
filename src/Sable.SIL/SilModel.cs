@@ -2142,7 +2142,19 @@ public sealed class SilModule {
             }
         }
 
-        return Functions.RemoveAll(match);
+        var removed = Functions.RemoveAll(match);
+
+        // A class whose deinit went is one nothing makes (SilPassManager.Reachable):
+        // there is no object of it to run one on.
+        if (removed > 0 && Unit is null) {
+            foreach (var type in Types.OfType<ClassType>()) {
+                if (type.Deinit is { } deinit && !_byName.ContainsKey(deinit)) {
+                    type.Deinit = null;
+                }
+            }
+        }
+
+        return removed;
     }
 
     public SilFunction Add(SilFunction function) {
@@ -2414,7 +2426,7 @@ public static class SilBuiltins {
             // '@builtin' of the library's, on a value that copies on write.
             // An array's buffer too, alone or as such a struct's one field,
             // which an empty array has none of: unique.
-            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType or ArrayType)] } or ArrayType }]
+            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType or ArrayType)] } or ArrayType } or AddressType { Pointee: ScalarType { Name: "Region" } }]
                 ? new([operands[0]], SilType.Bool)
                 : null;
         }

@@ -105,7 +105,7 @@ public static class SilPassManager {
     /// <summary>
     ///     Drops every function the entry point cannot reach: through calls
     ///     and function values, the globals' initialiser, the deinits and
-    ///     vtables of the classes it makes, and every type's deinit.
+    ///     vtables of the classes it makes, and every struct's deinit.
     /// </summary>
     public static void RemoveUnreachable(SilModule module) {
         if (Reachable(module) is { } reached) {
@@ -163,7 +163,10 @@ public static class SilPassManager {
                     pending.Push(deinit);
                     break;
                 case ClassType @class:
-                    if (@class.Deinit is { } classDeinit) {
+                    // A class's deinit runs only on an object of it, so in a
+                    // program compiled whole it is reached where one is made,
+                    // below; a library's or a unit's objects may be made elsewhere.
+                    if (@class.Deinit is { } classDeinit && (module.Unit is not null || module.IsLibrary)) {
                         pending.Push(classDeinit);
                     }
 
@@ -286,6 +289,10 @@ public static class SilPassManager {
                             if (made.Add(type)) {
                                 foreach (var (_, method) in type.VTable) {
                                     pending.Push(method);
+                                }
+
+                                if (type.Deinit is { } madeDeinit) {
+                                    pending.Push(madeDeinit);
                                 }
                             }
                         }

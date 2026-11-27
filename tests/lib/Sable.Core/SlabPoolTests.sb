@@ -1,0 +1,136 @@
+module SlabPoolTests
+
+// SlabPool (Sable.Core): values named by generational handles, the slots
+// reused, a stale handle refused.
+
+import Sable.Testing
+
+@test
+fn aValueIsReadAndChangedThroughItsHandle() {
+    var pool = SlabPool<String>()
+    let a = pool.insert("a")
+    let b = pool.insert("b")
+    expect(pool[a] == "a" && pool[b] == "b")
+    pool[b] = "bee"
+    expect(pool[b] == "bee")
+    expect(pool.count == 2 && !pool.isEmpty && pool.slotCount == 2)
+}
+
+@test
+fn aRemovedValuesSlotIsReusedUnderANewGeneration() {
+    var pool = SlabPool<Int>(capacity: 4)
+    let first = pool.insert(1)
+    _ = pool.insert(2)
+    expect(pool.remove(first) == 1)
+    let again = pool.insert(3)
+    expect(again.index == first.index)
+    expect(again.generation == first.generation + 2)
+    expect(again != first)
+    expect(pool.slotCount == 2 && pool.count == 2)
+}
+
+@test
+fn aStaleHandleIsRefusedNotReadAsTheNewValue() {
+    var pool = SlabPool<Int>()
+    let old = pool.insert(10)
+    _ = pool.remove(old)
+    let fresh = pool.insert(20)
+    expect(!pool.contains(old))
+    expect(pool.contains(fresh))
+    expect(pool.remove(old) == none)
+    expect(pool[fresh] == 20)
+    expectPanic("a stale handle: the value of slot 0, generation 1, was removed; the slot is in generation 3") {
+        print(pool[old])
+    }
+}
+
+@test
+fn aHandleOfNoSlotHereIsRefused() {
+    var other = SlabPool<Int>()
+    _ = other.insert(1)
+    let foreign = other.insert(2)
+    var pool = SlabPool<Int>()
+    _ = pool.insert(7)
+    expect(!pool.contains(foreign))
+    expectPanic("a stale handle: slot 1 is not one of this pool's 1") {
+        pool[foreign] = 3
+    }
+}
+
+@test
+fn removingAllMakesEveryHandleStaleAndKeepsTheSlots() {
+    var pool = SlabPool<String>()
+    let handles = [pool.insert("x"), pool.insert("y"), pool.insert("z")]
+    _ = pool.remove(handles[1])
+    pool.removeAll()
+    expect(pool.isEmpty && pool.slotCount == 3)
+    for handle in handles {
+        expect(!pool.contains(handle))
+    }
+
+    let reused = pool.insert("w")
+    expect(reused.index == 0 && pool.slotCount == 3)
+}
+
+@test
+fn iteratingGoesThroughTheValuesHeldWithTheirHandles() {
+    var pool = SlabPool<Int>()
+    let a = pool.insert(1)
+    let b = pool.insert(2)
+    let c = pool.insert(3)
+    _ = pool.remove(b)
+    var seen: String[>..] = []
+    for (handle, value) in pool {
+        expect(pool[handle] == value)
+        seen.append("\(handle.debugDescription())=\(value)")
+    }
+
+    expect(seen == ["0#1=1", "2#1=3"])
+    expect(a.debugDescription() == "0#1" && c.index == 2)
+}
+
+@test
+fn handlesAreEqualAndHashedByTheirSlotAndGeneration() {
+    var pool = SlabPool<Int>()
+    let a = pool.insert(5)
+    var names: [SlabHandle<Int>: String] = [:]
+    names[a] = "five"
+    expect(names[SlabHandle<Int>(index: 0, generation: 1)] == "five")
+    _ = pool.remove(a)
+    let b = pool.insert(6)
+    expect(names[b] == none)
+}
+
+@test
+fn aCopyOfThePoolIsAValueOfItsOwn() {
+    var pool = SlabPool<Int>()
+    let a = pool.insert(1)
+    var copy = pool
+    copy[a] = 2
+    _ = copy.remove(a)
+    expect(pool[a] == 1 && pool.contains(a) && !copy.contains(a))
+}
+
+@test
+fn insertingAndRemovingAtRandomAgreesWithADictionary() {
+    forAll(Gen.number(in: 0...9).array(count: 0...60), cases: 200) { (ops: Int[>..]) in
+        var pool = SlabPool<Int>()
+        var model: [SlabHandle<Int>: Int] = [:]
+        var handles: SlabHandle<Int>[>..] = []
+        for (step, op) in ops.enumerated() {
+            if op < 6 || handles.isEmpty {
+                let handle = pool.insert(step)
+                model[handle] = step
+                handles.append(handle)
+            } else {
+                let handle = handles[op % handles.count]
+                expect(pool.remove(handle) == model.remove(handle))
+            }
+        }
+
+        expect(pool.count == model.count)
+        for handle in handles {
+            expect(pool.contains(handle) == (model[handle] != none))
+        }
+    }
+}

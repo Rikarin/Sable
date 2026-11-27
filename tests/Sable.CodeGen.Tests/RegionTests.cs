@@ -196,4 +196,127 @@ public sealed class RegionTests {
     [InlineData("var outer = pool.alloc(Link { value: 0, next: none })\nregion frame = pool {\n    outer = frame.alloc(Link { value: 2, next: none })\n}\nprint(outer.value)", "refers to region 'frame', which is gone — the region ended")]
     public void WhatAResetOrABlockTookCannotBeUsed(string body, string message) =>
         Rejects(Linked, "region pool {\n" + body + "\n}", message);
+
+    const string Containers = """
+                              fn lex(_ text: String, into tokens: inout String[>..]) {
+                                  for word in text.split(separator: ' ') {
+                                      tokens.append(word)
+                                  }
+                              }
+
+                              fn copyOut() -> Node {
+                                  region arena {
+                                      let n = arena.alloc(Node { value: 1, label: "x" })
+                                      n.value = 5
+                                      n.label = n.label + "y"
+                                      return n.toOwned()
+                                  }
+                              }
+                              """;
+
+    [Fact]
+    public void WhatARegionAllocatesIsChangedThroughItsReferenceAndCopiedOutWithToOwned() =>
+        Assert.Equal(
+            "2\n3\n[\"a\", \"b\", \"c\"]\nxy 5\n",
+            AssertAgree(
+                Program(
+                    Declarations + "\n" + Containers,
+                    """
+                        var kept: String[>..] = []
+                        region arena {
+                            let numbers = arena.alloc(Int[>..]())
+                            numbers.append(1)
+                            numbers.append(2)
+                            print(numbers.count)
+                            let words = arena.alloc(String[>..]())
+                            lex("a b c", into: &words)
+                            print(words.count)
+                            kept = words.toOwned()
+                        }
+                        print(kept)
+                        let owned = copyOut()
+                        print("\(owned.label) \(owned.value)")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Theory]
+    [InlineData("fn bad() -> Int[>..]& {\n    region arena {\n        let numbers = arena.alloc(Int[>..]())\n        return numbers\n    }\n}", "", "cannot return a reference rooted in region 'arena'")]
+    [InlineData("fn bad() -> Link {\n    region arena {\n        let a = arena.alloc(Link { value: 1, next: none })\n        return arena.alloc(Link { value: 2, next: a }).toOwned()\n    }\n}", "", "cannot return a reference rooted in region 'arena'")]
+    [InlineData("", "region pool {\n    let numbers = pool.alloc(Int[>..]())\n    numbers.append(1)\n    pool.reset()\n    numbers.append(2)\n}", "the region was reset at line")]
+    [InlineData("", "var outer: Int[>..] = []\nvar held = &outer\nregion arena {\n    held = arena.alloc(Int[>..]())\n}\nheld.append(1)", "which is gone — the region ended")]
+    public void AContainerInARegionCannotOutliveIt(string declarations, string body, string message) =>
+        Rejects(Linked + "\n" + declarations, body, message);
+
+    // With SABLE_CHECK_REGIONS (runtime/references.c): what a reset gives
+    // back is poisoned, and a value's guard bytes are checked as it goes.
+    // Native only: the interpreter's region has no bytes to poison, and
+    // traps on any use of what a reset gave back.
+    const string RawCell = """
+                           struct Cell {
+                               var value: Int
+                           }
+
+                           """;
+
+    static readonly Dictionary<string, string> CheckingRegions = new() { ["SABLE_CHECK_REGIONS"] = "1" };
+
+    [Theory]
+    [InlineData(false, "0\n")]
+    [InlineData(true, "222\n")]
+    public void WhatAResetGivesBackIsPoisonedWhenRegionsAreChecked(bool checking, string expected) {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun(
+            Program(
+                RawCell,
+                """
+                    region pool {
+                        let cell = pool.alloc(Cell { value: 42 })
+                        var address = 0
+                        Memory.withPointer(to: &cell.value) { address = $0.address }
+                        pool.reset()
+                        unsafe {
+                            print(RawPtr<U8>(address: address).load())
+                        }
+                    }
+                """
+            ),
+            environment: checking ? CheckingRegions : null
+        );
+        Assert.Equal(expected, run.Stdout);
+        Assert.Equal(0, run.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("pool.reset()")]
+    [InlineData("")]
+    public void AWritePastAValueInACheckedRegionIsCaught(string ending) {
+        if (!CanBuild) {
+            return;
+        }
+
+        var body = $$"""
+                         region pool {
+                             let cell = pool.alloc(Cell { value: 1 })
+                             var address = 0
+                        Memory.withPointer(to: &cell.value) { address = $0.address }
+                             unsafe {
+                                 RawPtr<U8>(address: address + 8).store(7)
+                             }
+                             {{ending}}
+                             print("written")
+                         }
+                         print("after")
+                     """;
+        var plain = BuildAndRun(Program(RawCell, body));
+        Assert.Equal("written\nafter\n", plain.Stdout);
+        var run = BuildAndRun(Program(RawCell, body), environment: CheckingRegions);
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.Contains("a write ran past a value of 8 bytes in a region: the guard bytes after it were overwritten", run.Stderr);
+        Assert.DoesNotContain("after", run.Stdout);
+    }
 }

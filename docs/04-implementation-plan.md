@@ -664,8 +664,19 @@ node kept across a reset does not. `region frame = pool { … }` is a nested
 region in the same memory: the block allocates through `frame`, `pool` is
 lent to it meanwhile (a direct use is an error), and as the block ends
 what it took is given back — destroyed, its chunks freed, the bump pointer
-restored. Deferred: `toOwned()` as a method (a dereference already copies
-out), and thread affinity, which waits for threads.
+restored. `r.toOwned()` copies what a reference refers to out into a
+value of its own (`OwnedCopy` in the binder); what `alloc` gives writes,
+so a growable array or any container is held in a region —
+`let tokens = arena.alloc(Token[>..]())`, appended to, passed `inout`,
+refused past the region's end or a reset — though its elements' buffer is
+still the heap's, freed as the region ends. `FrameAllocator` (#312) keeps
+regions of no block, one a frame in flight, each reset as its frame comes
+round; a reference into one is rooted in the local holding the region,
+and a frame still held when it comes round traps rather than being reset
+under it. `SABLE_CHECK_REGIONS` poisons what a reset, a block's end or the
+region's end gives back, and puts guard bytes after every value, checked
+as it is given back. Deferred: element storage in the region itself, and
+thread affinity, which waits for threads.
 
 ### 3.6 Inline layout (~6 weeks)
 

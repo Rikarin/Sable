@@ -1706,7 +1706,10 @@ public sealed partial class Binder {
         }
 
         local.TypeResolver = () => type;
-        local.IsWritableReference = type is ReferenceTypeSymbol && initializer is not null && BoundExpression.IsWritableReference(initializer);
+        // A 'var' given what a region allocates is rebound, as a list is
+        // walked or built, mostly to references that only read: it reads.
+        local.IsWritableReference = type is ReferenceTypeSymbol && initializer is not null && BoundExpression.IsWritableReference(initializer)
+                                    && !(local.IsMutable && BoundExpression.IsRegionAllocation(initializer));
 
         Declare(local.Name, local);
         TrackRethrowSource(local, initializer);
@@ -5040,6 +5043,10 @@ public sealed partial class Binder {
         InvocationExpressionSyntax syntax,
         TypeSymbol? expectedType = null
     ) {
+        if (OwnedCopy(syntax) is { } owned) {
+            return owned;
+        }
+
         // A call that may pass an '@autoclosure' parameter binds its
         // arguments as a question first: which overload, and so which of
         // them are closure bodies, is not known until they are bound. Each
@@ -5059,6 +5066,43 @@ public sealed partial class Binder {
         }
 
         return bound;
+    }
+
+    /// <summary>
+    ///     <c>r.toOwned()</c> of a reference <c>r: T&amp;</c> (docs/02 §2.1):
+    ///     what it refers to, copied out into a value of its own, which
+    ///     outlives the region or the place the reference is rooted in. A
+    ///     copy of a value that holds references holds them still, rooted
+    ///     where they were. Null for any other call, and where <c>T</c> has a
+    ///     <c>toOwned</c> of its own.
+    /// </summary>
+    BoundExpression? OwnedCopy(InvocationExpressionSyntax syntax) {
+        if (syntax is not {
+                Expression: MemberAccessExpressionSyntax {
+                    OperatorToken.Kind: SyntaxKind.DotToken,
+                    Name: IdentifierNameSyntax { Identifier.Text: "toOwned" },
+                    Expression: var receiverSyntax
+                },
+                TrailingClosure: null,
+                LabeledClosures.Count: 0
+            }
+            || syntax.ArgumentList is { Arguments.Count: > 0 }) {
+            return null;
+        }
+
+        if (Speculate(receiverSyntax, null).Type is not ReferenceTypeSymbol { RelativeWidth: null } speculated
+            || LookupMemberOfKind(speculated.ReferencedType, "toOwned", instance: true) is not null) {
+            _unmetRequirement = null;
+            return null;
+        }
+
+        var receiver = BindExpression(receiverSyntax);
+        if (receiver.Type is not ReferenceTypeSymbol { RelativeWidth: null, ReferencedType: var referenced }) {
+            return new BoundError(syntax, receiver);
+        }
+
+        var dereferenced = new BoundConversion(syntax, referenced, receiver, ConversionKind.Dereference);
+        return new BoundConversion(syntax, referenced, dereferenced, ConversionKind.Identity);
     }
 
     /// <summary>The expressions a call passes, as written: in parentheses, then its trailing closures.</summary>
@@ -5927,6 +5971,14 @@ public sealed partial class Binder {
             }
 
             if (parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
+                // 'lex(into: &tokens)' with 'tokens' a reference that writes,
+                // 'arena.alloc(Token[>..]())': the place it refers to.
+                if (arguments[i] is { Type: ReferenceTypeSymbol { RelativeWidth: null, ReferencedType: var through } } reference
+                    && wanted is not ReferenceTypeSymbol
+                    && BoundExpression.IsWritableReference(reference)) {
+                    arguments = arguments.SetItem(i, new BoundConversion(reference.Syntax, through, reference, ConversionKind.Dereference));
+                }
+
                 CheckWritableArgument(arguments[i], parameter);
             }
 

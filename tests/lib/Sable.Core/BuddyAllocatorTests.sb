@@ -1,0 +1,162 @@
+module BuddyAllocatorTests
+
+// BuddyAllocator (Sable.Core): blocks of powers of two halved out of a span
+// and joined with their buddies as they come back; misuse and leaks caught.
+
+import Sable.Testing
+
+@test
+fn sizesAreRoundedUpToAPowerOfTwoAndTheSmallestBlock() {
+    let heap = BuddyAllocator(capacity: 1000, minimumBlockSize: 50)
+    expect(heap.capacity == 1024 && heap.minimumBlockSize == 64)
+    expect(heap.allocate(1) == 0..<64)
+    expect(heap.allocate(65) == 128..<256)
+    expect(heap.allocate(64) == 64..<128)
+    expect(heap.allocatedBytes == 256 && heap.freeBytes == 768 && heap.allocationCount == 3)
+    heap.reset()
+    expect(heap.allocationCount == 0 && heap.largestFreeRange == 1024)
+}
+
+@test
+fn anAlignmentBiggerThanTheSizeTakesABiggerBlock() {
+    let heap = BuddyAllocator(capacity: 1024, minimumBlockSize: 16)
+    _ = heap.allocate(16)!
+    let aligned = heap.allocate(16, alignment: 256)!
+    expect(aligned == 256..<512)
+    heap.reset()
+}
+
+@test
+fn blocksComeBackTogetherWithTheirBuddies() {
+    let heap = BuddyAllocator(capacity: 256, minimumBlockSize: 64)
+    let blocks = [heap.allocate(64)!, heap.allocate(64)!, heap.allocate(64)!, heap.allocate(64)!]
+    expect(heap.largestFreeRange == 0 && heap.allocate(1) == none)
+    heap.free(at: blocks[1].lowerBound)
+    heap.free(at: blocks[2].lowerBound)
+    expect(heap.largestFreeRange == 64)
+    expect(heap.allocate(128) == none)
+    heap.free(at: blocks[0].lowerBound)
+    expect(heap.largestFreeRange == 128)
+    heap.free(at: blocks[3].lowerBound)
+    expect(heap.largestFreeRange == 256 && heap.allocatedBytes == 0)
+}
+
+@test
+fn aRequestBiggerThanTheSpanGetsNone() {
+    let heap = BuddyAllocator(capacity: 512)
+    expect(heap.minimumBlockSize == 256)
+    expect(heap.allocate(513) == none)
+    expect(heap.allocate(1, alignment: 1024) == none)
+    let small = BuddyAllocator(capacity: 1, minimumBlockSize: 8)
+    expect(small.capacity == 8 && small.allocate(8) == 0..<8)
+    small.reset()
+}
+
+@test
+fn anAllocationIsFoundByWhereItStarts() {
+    let heap = BuddyAllocator(capacity: 1024, minimumBlockSize: 64)
+    let a = heap.allocate(100)!
+    expect(heap.allocation(at: 0) == a)
+    expect(heap.allocation(at: 64) == none)
+    expect(heap.allocation(at: 3) == none && heap.allocation(at: -64) == none && heap.allocation(at: 4096) == none)
+    heap.free(at: 0)
+    expect(heap.allocation(at: 0) == none)
+}
+
+@test
+fn givingBackABlockThatIsNotOutTraps() {
+    let heap = BuddyAllocator(capacity: 1024, minimumBlockSize: 64)
+    let a = heap.allocate(64)!
+    heap.free(at: a.lowerBound)
+    expectPanic("no block starting at 0 is allocated: given back twice, or never handed out") {
+        heap.free(at: a.lowerBound)
+    }
+}
+
+@test
+fn badRequestsTrap() {
+    let heap = BuddyAllocator(capacity: 1024)
+    expectPanic("cannot allocate -4 offsets") {
+        _ = heap.allocate(-4)
+    }
+    expectPanic("an alignment is a power of two, not 12") {
+        _ = heap.allocate(8, alignment: 12)
+    }
+    expectPanic("a buddy allocator cannot have 0 offsets") {
+        _ = BuddyAllocator(capacity: 0)
+    }
+    expectPanic("a block cannot be 0 offsets") {
+        _ = BuddyAllocator(capacity: 64, minimumBlockSize: 0)
+    }
+}
+
+@test
+fn anAllocatorThatGoesWithBlocksOutIsALeak() {
+    expectPanic("a BuddyAllocator went with 2 block(s) still allocated: 0..<64, 128..<256") {
+        let heap = BuddyAllocator(capacity: 1024, minimumBlockSize: 64, checksLeaks: true)
+        _ = heap.allocate(64)
+        _ = heap.allocate(128)
+    }
+    let quiet = BuddyAllocator(capacity: 1024, checksLeaks: false)
+    _ = quiet.allocate(8)
+    expect(!quiet.checksLeaks)
+}
+
+@test
+fn aSpanOfManyWordsOfBlocksIsCarvedAndJoined() {
+    let heap = BuddyAllocator(capacity: 1 << 16, minimumBlockSize: 16)
+    var blocks: Range<Int>[>..] = []
+    while let block = heap.allocate(16) {
+        blocks.append(block)
+    }
+
+    expect(blocks.count == 4096 && blocks[4095] == 65520..<65536)
+    var i = 0
+    while i < blocks.count {
+        heap.free(at: blocks[i].lowerBound)
+        i += 2
+    }
+
+    expect(heap.largestFreeRange == 16 && heap.allocate(32) == none)
+    i = 1
+    while i < blocks.count {
+        heap.free(at: blocks[i].lowerBound)
+        i += 2
+    }
+
+    expect(heap.largestFreeRange == 1 << 16)
+}
+
+@test
+fn allocatingAndFreeingAtRandomNeverOverlaps() {
+    forAll(Gen.number(in: 1...300).array(count: 0...60), cases: 150) { (sizes: Int[>..]) in
+        let heap = BuddyAllocator(capacity: 2048, minimumBlockSize: 16, checksLeaks: false)
+        var held: Range<Int>[>..] = []
+        for (step, size) in sizes.enumerated() {
+            if step % 3 == 2 && !held.isEmpty {
+                held.swapAt(size % held.count, held.count - 1)
+                let gone = held.removeLast()
+                heap.free(at: gone.lowerBound)
+            } else if let block = heap.allocate(size) {
+                expect(block.count >= size && block.count.isPowerOfTwo && block.lowerBound % block.count == 0)
+                for other in held {
+                    expect(block.upperBound <= other.lowerBound || other.upperBound <= block.lowerBound)
+                }
+
+                held.append(block)
+            }
+        }
+
+        var total = 0
+        for block in held {
+            total += block.count
+        }
+
+        expect(heap.allocatedBytes == total)
+        for block in held {
+            heap.free(at: block.lowerBound)
+        }
+
+        expect(heap.largestFreeRange == 2048)
+    }
+}

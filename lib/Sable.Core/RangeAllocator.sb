@@ -1,0 +1,196 @@
+module Sable.Core
+
+/// Ranges of offsets handed out of a span the allocator does not own — a GPU
+/// heap, a file, a buffer shared with another process: the bookkeeping of
+/// what is in use, not memory. A request is given the first free run, from
+/// the low end, that holds it aligned; what it leaves before and after stays
+/// free, and a range given back is joined with the free runs on either side,
+/// so the span does not fragment into pieces too small to use.
+///
+/// Each request is the size asked, not rounded, unlike a BuddyAllocator's;
+/// the cost is a walk of the free runs to find one, and to give one back.
+///
+/// Giving back a range that is not out — twice, or never handed out — traps.
+/// With 'checksLeaks', which SABLE_CHECK_LEAKS sets, an allocator that goes
+/// with ranges still out traps, naming them.
+///
+/// ```sable
+/// let heap = RangeAllocator(capacity: 1000)
+/// let a = heap.allocate(100)!
+/// let b = heap.allocate(50, alignment: 64)!
+/// assert(a == 0..<100 && b == 128..<178)
+/// heap.free(at: a.lowerBound)
+/// assert(heap.allocate(100) == 0..<100)
+/// assert(heap.allocate(2000) == none)
+/// heap.reset()
+/// assert(heap.allocatedBytes == 0)
+/// ```
+public final class RangeAllocator {
+    // The free runs, by where they start, none touching another.
+    var free: Range<Int>[>..]
+    // Each range out: its end, by its start.
+    var allocations: [Int: Int]
+
+    /// How many offsets there are to hand out, from 0.
+    public let capacity: Int
+
+    /// How many offsets are handed out.
+    public private(set) var allocatedBytes: Int
+
+    /// Whether the allocator traps if it goes with ranges still out.
+    public let checksLeaks: Bool
+
+    /// An allocator of the offsets 0 to 'capacity', all free.
+    public init(capacity: Int, checksLeaks: Bool = Runtime.environment(name: "SABLE_CHECK_LEAKS") != none) {
+        precondition(capacity >= 0, "a range allocator cannot have \(capacity) offsets")
+        self.capacity = capacity
+        self.checksLeaks = checksLeaks
+        free = capacity > 0 ? [0..<capacity] : []
+        allocations = [:]
+        allocatedBytes = 0
+    }
+
+    deinit {
+        if checksLeaks && !allocations.isEmpty {
+            fatalError("a RangeAllocator went with \(allocations.count) range(s) still allocated: \(outstanding())")
+        }
+    }
+
+    /// How many offsets are free.
+    public var freeBytes: Int => capacity - allocatedBytes
+
+    /// How many ranges are out.
+    public var allocationCount: Int => allocations.count
+
+    /// The largest request that can be met now, with no alignment. Below
+    /// 'freeBytes' when the free offsets are in pieces.
+    public var largestFreeRange: Int {
+        get {
+            var largest = 0
+            for run in free {
+                if run.count > largest {
+                    largest = run.count
+                }
+            }
+            return largest
+        }
+    }
+
+    /// 'size' offsets, starting at a multiple of 'alignment' (a power of
+    /// two); none when no free run holds them.
+    public fn allocate(_ size: Int, alignment: Int = 1) -> Range<Int>? {
+        precondition(size >= 1, "cannot allocate \(size) offsets")
+        precondition(alignment >= 1 && alignment.isPowerOfTwo, "an alignment is a power of two, not \(alignment)")
+        var i = 0
+        while i < free.count {
+            let run = free[i]
+            let start = (run.lowerBound + alignment - 1) & ~(alignment - 1)
+            if start <= run.upperBound - size {
+                let end = start + size
+                // What the range leaves of the run, before it and after it.
+                if start > run.lowerBound && end < run.upperBound {
+                    free[i] = run.lowerBound..<start
+                    insertFree(end..<run.upperBound, at: i + 1)
+                } else if start > run.lowerBound {
+                    free[i] = run.lowerBound..<start
+                } else if end < run.upperBound {
+                    free[i] = end..<run.upperBound
+                } else {
+                    removeFree(at: i)
+                }
+
+                allocations[start] = end
+                allocatedBytes += size
+                return start..<end
+            }
+
+            i += 1
+        }
+
+        return none
+    }
+
+    /// The range that starts at 'offset' given back, joined with the free
+    /// runs it touches. Traps unless a range starting there is out.
+    public fn free(at offset: Int) {
+        guard let end = allocations.remove(offset) else {
+            fatalError("no range starting at \(offset) is allocated: given back twice, or never handed out")
+        }
+
+        allocatedBytes -= end - offset
+        // The first run after the range.
+        let i = free.partitionPoint { $0.lowerBound < offset }
+        let joinsBefore = i > 0 && free[i - 1].upperBound == offset
+        let joinsAfter = i < free.count && free[i].lowerBound == end
+        if joinsBefore && joinsAfter {
+            free[i - 1] = free[i - 1].lowerBound..<free[i].upperBound
+            removeFree(at: i)
+        } else if joinsBefore {
+            free[i - 1] = free[i - 1].lowerBound..<end
+        } else if joinsAfter {
+            free[i] = offset..<free[i].upperBound
+        } else {
+            insertFree(offset..<end, at: i)
+        }
+    }
+
+    /// The range out that starts at 'offset'; none if no range starting
+    /// there is.
+    public fn allocation(at offset: Int) -> Range<Int>? {
+        if let end = allocations[offset] {
+            return offset..<end
+        }
+
+        return none
+    }
+
+    /// Every range given back at once: the whole span free.
+    public fn reset() {
+        allocations.removeAll()
+        free = capacity > 0 ? [0..<capacity] : []
+        allocatedBytes = 0
+    }
+
+    fn insertFree(_ run: Range<Int>, at index: Int) {
+        free.append(run)
+        var i = free.count - 1
+        while i > index {
+            free.swapAt(i, i - 1)
+            i -= 1
+        }
+    }
+
+    fn removeFree(at index: Int) {
+        var i = index
+        while i + 1 < free.count {
+            free.swapAt(i, i + 1)
+            i += 1
+        }
+
+        _ = free.removeLast()
+    }
+
+    fn outstanding() -> String {
+        return outstandingRanges(allocations)
+    }
+}
+
+// The ranges out, by where they start, as text: at most eight of them.
+fn outstandingRanges(_ allocations: [Int: Int]) -> String {
+    var starts: Int[>..] = []
+    for (start, _) in allocations {
+        starts.append(start)
+    }
+
+    starts.sort()
+    var text = ""
+    for (n, start) in starts.enumerated() {
+        if n == 8 {
+            text += ", …"
+            break
+        }
+
+        text += (n == 0 ? "" : ", ") + "\(start)..<\(allocations[start]!)"
+    }
+    return text
+}

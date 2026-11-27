@@ -85,3 +85,5 @@ lib/Sable.IO/OsCalls.sb                           85  40   # each branch is an e
 lib/Sable.IO/OsPipe.sb                            85  50   # a pipe is refused only out of descriptors
 lib/Sable.IO/File.sb                              80  70   # a move between file systems needs two of them, as macOS has not
 lib/Sable.Time/SuspendingClock.sb                85  50   # sleeping again takes a machine that slept meanwhile
+lib/Sable.Concurrency/Thread+Placement.sb         85  50   # no affinity is macOS's and WASI's alone; CI's coverage runs on Linux, which always has one
+lib/Sable.Concurrency/ThreadPriority.sb           85  60   # High and Highest need privilege on Linux, and Lowest can starve a loaded runner, so no test sets them

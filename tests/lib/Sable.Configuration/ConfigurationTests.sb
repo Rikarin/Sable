@@ -1,0 +1,145 @@
+module ConfigurationTests
+
+// Sable.Configuration, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Configuration
+
+import Sable.Concurrency
+import Sable.Configuration
+import Sable.IO
+import Sable.Serialize
+import Sable.Testing
+import Sable.Time
+
+import ConfigurationSupport
+
+@test
+async fn aLaterProviderOverridesAnEarlierOne() {
+    let configuration = await built([["Http:Port": "80", "Http:Host": "a"], ["Http:Port": "8080"], ["http:host": "b"]])
+    expect(configuration.value("Http:Port") == "8080")
+    expect(configuration.value("Http:Host") == "b")
+}
+
+@test
+async fn keysAreTheSameHoweverTheyAreCased() {
+    let configuration = await built([["Database:Url": "db"]])
+    expect(configuration.value("DATABASE:URL") == "db")
+    expect(configuration.section("database").value("url") == "db")
+    expect(configuration.section("DataBase").key == "DataBase")
+    expect(configuration.children.map(\.key) == ["Database"])
+}
+
+@test
+async fn anArrayIsOverriddenElementByElement() {
+    let configuration = await built([["Hosts:0": "a", "Hosts:1": "b", "Hosts:2": "c"], ["hosts:1": "B"]])
+    let hosts = try! configuration.section("Hosts").bind(String[>..].self)
+    assertEqual(hosts, ["a", "B", "c"])
+}
+
+@test
+async fn anArraysElementsAreInTheOrderOfTheirPositions() {
+    let configuration = await built([["List:10": "k", "List:2": "c", "List:0": "a", "List:1": "b"]])
+    assertEqual(configuration.section("List").children.map(\.key), ["0", "1", "2", "10"])
+    assertEqual(try! configuration.section("List").bind(String[>..].self), ["a", "b", "c", "k"])
+}
+
+@test
+async fn theWholeOfItBinds() {
+    let configuration = await built([["Name": "shop", "Pool:Size": "8"]])
+    let whole = try! configuration.bind(Settings.self)
+    expect(whole.name == "shop" && whole.pool.size == 8)
+}
+
+@test
+async fn aReloadThatChangesSomethingIsANewVersion() {
+    let memory = MemoryConfigurationProvider(["Level": "Info"])
+    let configuration = await builtWith(memory)
+    var changes = configuration.changes()
+    try! await configuration.reload()
+    assertEqual(configuration.version, 0)
+    memory.set("Level", "Debug")
+    try! await configuration.reload()
+    assertEqual(configuration.version, 1)
+    assertEqual(await changes.next(), 1)
+    expect(configuration.value("level") == "Debug")
+}
+
+@test
+async fn aReloadThatFailsLeavesItAsItWas() {
+    let memory = MemoryConfigurationProvider(["Level": "Info"])
+    let failing = Failing()
+    var builder = ConfigurationBuilder()
+    builder.add(memory)
+    builder.add(failing)
+    let configuration = try! await builder.build()
+    memory.set("Level", "Debug")
+    failing.fails.store(true)
+    let error = require(await expectThrows(ConfigurationError.self) { try await configuration.reload() })
+    assertEqual(error, ConfigurationError.Unreadable(source: "failing", reason: "down"))
+    expect(configuration.value("Level") == "Info" && configuration.version == 0)
+}
+
+@test
+async fn aBuildThatFailsSaysWhy() {
+    let failing = Failing()
+    failing.fails.store(true)
+    var builder = ConfigurationBuilder()
+    builder.add(failing)
+    await expectThrows(saying: "failing: not read: down") { _ = try await builder.build() }
+}
+
+@test
+async fn theDebugViewSaysWhereEachValueCameFromAndHidesSecrets() {
+    var builder = ConfigurationBuilder()
+    builder.addValues(["Database:Url": "postgres://a", "Database:Password": "hunter2", "Name": "shop"])
+    builder.add(MemoryConfigurationProvider(["Database:Url": "postgres://b"], name: "override"))
+    builder.add(Vault())
+    let configuration = try! await builder.build()
+    assertEqual(configuration.debugView(), """
+        Api:Endpoint = [redacted] (vault)
+        Database:Password = [redacted] (memory)
+        Database:Url = postgres://b (override)
+        Name = shop (memory)
+
+        """)
+}
+
+@test
+async fn theProvidersAreThoseItWasBuiltWith() {
+    let configuration = await built([["a": "1"], ["b": "2"]])
+    assertEqual(configuration.providers.count, 2)
+    assertEqual(configuration.providers[0].name, "memory")
+}
+
+// ---- Watching files ------------------------------------------------------
+
+@test
+async fn itIsReloadedAfterItsFileChanges() {
+    let directory = try! Temp.directory()
+    let file = directory.path.appending("settings.toml")
+    try! File.write(file, "level = \"Info\"\n")
+    var builder = ConfigurationBuilder()
+    builder.addFile(file, reloadOnChange: true)
+    let configuration = try! await builder.build()
+    let clock = TestClock()
+    var changes = configuration.changes()
+    let watching = try! configuration.watch(delay: Duration.seconds(1), clock: clock)
+    try! File.write(file, "level = \"Debug\"\n")
+    // The watcher has seen a change once something waits out the delay.
+    try! await clock.waitForSleepers(1)
+    await clock.advance(by: Duration.seconds(1))
+    assertEqual(await changes.next(), 1)
+    expect(configuration.value("Level") == "Debug")
+    watching.cancel()
+    await watching.value
+}
+
+@test
+async fn nothingIsWatchedWhereNoFileIsToBe() {
+    let configuration = await built([["a": "1"]])
+    let watching = try! configuration.watch()
+    await watching.value
+    var builder = ConfigurationBuilder()
+    builder.addFile(FilePath("no/such/directory/settings.toml"), optional: true, reloadOnChange: true)
+    let missing = try! await builder.build()
+    await (try! missing.watch()).value
+}

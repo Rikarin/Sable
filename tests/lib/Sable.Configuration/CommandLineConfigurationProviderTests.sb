@@ -1,0 +1,34 @@
+module CommandLineConfigurationProviderTests
+
+import Sable.Configuration
+import Sable.IO
+import Sable.Testing
+
+import ConfigurationSupport
+
+@test(arguments: [
+    (["--a=1"], "a=1"),
+    (["--a", "1"], "a=1"),
+    (["a=1"], "a=1"),
+    (["--flag"], "flag=true"),
+    (["--flag", "--b=2"], "flag=true b=2"),
+    (["-x", "1", "file", "--", "--c=3"], ""),
+    (["--=1", "--"], ""),
+    (["-p", "80", "--port=81"], "Http:Port=81"),
+])
+async fn argumentsAreReadAsDotNetReadsThem(_ arguments: String[>..], _ shown: String) {
+    let values = try! await CommandLineConfigurationProvider(arguments, switches: ["-P": "Http:Port", "--port": "Http:Port"]).load()
+    var all: String[>..] = []
+    for key in values.keys {
+        all.append("\(key)=\(values.value(key)!)")
+    }
+    assertEqual(all.joined(separator: " "), shown)
+}
+
+@test
+fn theCommandLineIsNamedSo() {
+    let provider = CommandLineConfigurationProvider(["a=1"])
+    assertEqual(provider.name, "command line")
+    assertEqual(provider.arguments, ["a=1"])
+    expect(provider.switches.isEmpty && !provider.isSecret && provider.files.isEmpty)
+}

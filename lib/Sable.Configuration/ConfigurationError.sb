@@ -1,0 +1,27 @@
+module Sable.Configuration
+
+/// Why configuration could not be loaded, each with the source it was
+/// loading: a file's path, or a provider's name.
+///
+/// ```sable
+/// let error = ConfigurationError.NotFound(source: "appsettings.toml")
+/// assert(error.description() == "appsettings.toml: not found")
+/// ```
+@derive(Equatable, Debug)
+public union ConfigurationError: Error {
+    /// A file that is not optional is not there.
+    NotFound(source: String)
+    /// It is there, and could not be read: what the system or the
+    /// provider said.
+    Unreadable(source: String, reason: String)
+    /// It was read, and is not in its format: what the parser found.
+    Malformed(source: String, reason: String)
+
+    public fn description() -> String {
+        return match self {
+            case .NotFound(let source)               => "\(source): not found"
+            case .Unreadable(let source, let reason) => "\(source): not read: \(reason)"
+            case .Malformed(let source, let reason)  => "\(source): \(reason)"
+        }
+    }
+}

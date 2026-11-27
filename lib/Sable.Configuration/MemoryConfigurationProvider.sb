@@ -1,0 +1,40 @@
+module Sable.Configuration
+
+import Sable.Concurrency
+
+/// Configuration the program holds itself: defaults, a test's values. They
+/// may be changed, and are taken as they are at each load: a configuration
+/// that has it sees the change once it is reloaded.
+///
+/// ```sable
+/// let memory = MemoryConfigurationProvider(["Level": "Info"])
+/// memory.set("Level", "Debug")
+/// memory.remove("Missing")
+/// assert((try! await memory.load()).value("level") == "Debug")
+/// ```
+@immutable
+public final class MemoryConfigurationProvider: ConfigurationProvider {
+    let held: Mutex<ConfigurationValues>
+    /// What `Configuration.debugView` calls it.
+    public let name: String
+
+    /// One that holds the values.
+    public init(_ values: [String: String] = [:], name: String = "memory") {
+        held = Mutex(ConfigurationValues(values))
+        self.name = name
+    }
+
+    /// The key given the value, from the next load on.
+    public fn set(_ key: String, _ value: String) {
+        held.withLock { $0.set(key, value) }
+    }
+
+    /// The key taken out, from the next load on.
+    public fn remove(_ key: String) {
+        held.withLock { $0.remove(key) }
+    }
+
+    public fn load() async throws(ConfigurationError) -> ConfigurationValues {
+        return held.withLock { (values: inout ConfigurationValues) -> ConfigurationValues in values }
+    }
+}

@@ -1,0 +1,70 @@
+module ConfigurationSupport
+
+// Sable.Configuration, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Configuration
+
+import Sable.Configuration
+import Sable.Serialize
+
+/// A configuration of the layers, each over those before.
+public fn built(_ layers: [String: String][>..]) async -> Configuration {
+    var builder = ConfigurationBuilder()
+    for layer in layers {
+        builder.addValues(layer)
+    }
+    return try! await builder.build()
+}
+
+/// A configuration of the provider alone.
+public fn builtWith<P: ConfigurationProvider>(_ provider: P) async -> Configuration {
+    var builder = ConfigurationBuilder()
+    builder.add(provider)
+    return try! await builder.build()
+}
+
+/// A provider that fails when it is told to.
+@immutable
+public final class Failing: ConfigurationProvider {
+    public let fails: Atomic<Bool>
+
+    public init() {
+        fails = Atomic(false)
+    }
+
+    public var name: String => "failing"
+
+    public fn load() async throws(ConfigurationError) -> ConfigurationValues {
+        if fails.load() {
+            throw ConfigurationError.Unreadable(source: name, reason: "down")
+        }
+        return ConfigurationValues()
+    }
+}
+
+/// A store of secrets: every value one.
+public struct Vault: ConfigurationProvider {
+    public init() { }
+
+    public var name: String => "vault"
+
+    public var isSecret: Bool => true
+
+    public fn load() async throws(ConfigurationError) -> ConfigurationValues {
+        return ConfigurationValues(["Api:Endpoint": "https://internal"])
+    }
+}
+
+@derive(Serializable, Equatable, Debug)
+public struct Pool: Sendable {
+    public var size: Int
+    @serialize(defaulted)
+    public var idle: Bool = false
+    @serialize(defaulted)
+    public var hosts: String[>..] = []
+}
+
+@derive(Serializable)
+public struct Settings: Sendable {
+    public var name: String
+    public var pool: Pool
+}

@@ -1,0 +1,158 @@
+module ConfigurationSectionTests
+
+import Sable.Configuration
+import Sable.Serialize
+import Sable.Testing
+
+import ConfigurationSupport
+
+@derive(Serializable, Equatable, Debug)
+enum Mode {
+    Fast
+    Safe
+}
+
+@derive(Serializable)
+struct Everything {
+    var count: Int
+    var big: U64
+    var ratio: F64
+    var on: Bool
+    var name: String
+    var mode: Mode
+    var maybe: Int?
+    var limits: [String: Int]
+    var pools: Pool[>..]
+}
+
+@test
+async fn aSectionBindsToAStructFieldByField() {
+    let configuration = await built([[
+        "All:Count": " 3 ", "All:Big": "18446744073709551615", "All:Ratio": "0.25", "All:On": "TRUE",
+        "All:Name": "shop", "All:Mode": "Safe",
+        "All:Limits:Reads": "10", "All:Limits:Writes": "2",
+        "All:Pools:0:Size": "1", "All:Pools:1:Size": "2", "All:Pools:1:Hosts:0": "h",
+    ]])
+    let all = try! configuration.section("all").bind(Everything.self)
+    expect(all.count == 3 && all.big == U64.max && all.ratio == 0.25 && all.on && all.name == "shop")
+    expect(all.mode == .Safe && all.maybe == none)
+    expect(all.limits["Reads"] == 10 && all.limits["Writes"] == 2)
+    assertEqual(all.pools, [Pool(size: 1, idle: false, hosts: []), Pool(size: 2, idle: false, hosts: ["h"])])
+}
+
+@test
+async fn anEmptyArrayOrTableBindsEmpty() {
+    let configuration = await built([["Pool:Size": "1", "Pool:Hosts": "", "Map": ""]])
+    assertEqual(try! configuration.section("Pool").bind(Pool.self).hosts, [])
+    expect((try! configuration.section("Map").bind([String: Int].self)).isEmpty)
+}
+
+@test
+async fn aSectionThatIsNotThereBindsAsAnEmptyOne() {
+    let configuration = await built([["Pool:Size": "1"]])
+    expect((try! configuration.section("None").bind([String: Int].self)).isEmpty)
+    expect((try! configuration.section("None").bind(String[>..].self)).isEmpty)
+    expect(try! configuration.section("None").bind(Pool?.self) == none)
+}
+
+@test(arguments: [
+    ("Pool:Size", "many", "Pool:Size: 'many' is not an integer"),
+    ("Pool:Idle", "maybe", "Pool:Idle: 'maybe' is not true or false"),
+])
+async fn aValueOfTheWrongKindNamesItsKey(_ key: String, _ value: String, _ why: String) {
+    var layer: [String: String] = ["Pool:Size": "1"]
+    layer[key] = value
+    let configuration = await built([layer])
+    let error = require(expectThrows(SerializeError.self) { _ = try configuration.section("Pool").bind(Pool.self) })
+    assertEqual(error.description(), why)
+}
+
+@test
+async fn aMissingFieldIsMissing() {
+    let configuration = await built([["Pool:Idle": "true"]])
+    let error = require(expectThrows(SerializeError.self) { _ = try configuration.section("Pool").bind(Pool.self) })
+    assertEqual(error, SerializeError.MissingField(path: "Pool:size"))
+    let absent = require(expectThrows(SerializeError.self) { _ = try configuration.section("Cache").bind(Pool.self) })
+    assertEqual(absent, SerializeError.MissingField(path: "Cache:size"))
+}
+
+@test
+async fn aValueIsNoSectionAndASectionIsNoValue() {
+    let configuration = await built([["Pool": "big", "Name:First": "a"]])
+    let pool = require(expectThrows(SerializeError.self) { _ = try configuration.section("Pool").bind(Pool.self) })
+    assertEqual(pool.description(), "Pool: expected a section (Pool), found 'big'")
+    let name = require(expectThrows(SerializeError.self) { _ = try configuration.section("Name").bind(String.self) })
+    assertEqual(name.description(), "Name: expected a string, found a section")
+}
+
+@test(arguments: [
+    ("U", "-1", "U: '-1' is not an unsigned integer"),
+    ("F", "x", "F: 'x' is not a number"),
+    ("B", "!", "B: '!' is not base64"),
+])
+async fn numbersAndBytesThatAreNotSayWhy(_ key: String, _ value: String, _ why: String) {
+    let configuration = await built([[key: value]])
+    let decoder = ConfigurationDecoder(configuration.section(key))
+    let error = require(expectThrows(SerializeError.self) {
+        match key {
+            case "U" => _ = try decoder.decodeUInt()
+            case "F" => _ = try decoder.decodeFloat()
+            case _   => _ = try decoder.decodeBytes()
+        }
+    })
+    assertEqual(error.description(), why)
+}
+
+@test
+async fn bytesAreTheirBase64() {
+    let configuration = await built([["Key": "AQID"]])
+    assertEqual(try! ConfigurationDecoder(configuration.section("key")).decodeBytes(), [1, 2, 3])
+}
+
+@test
+async fn theDecoderSaysWhatItHolds() {
+    let configuration = await built([["List:0": "a", "Map:a": "1", "Value": "v"]])
+    let root = ConfigurationDecoder(configuration.section(""))
+    assertEqual(root.path, "$")
+    expect(root.kind == .Map && !root.isNull)
+    expect(root.field("list").kind == .Sequence && root.field("map").kind == .Map && root.field("value").kind == .String)
+    expect(root.field("none").kind == .Missing && root.field("none").isMissing)
+    expect(root.hasField("LIST") && !root.hasField("none"))
+    expect(try! root.field("list").element(0).decodeString() == "a")
+    expect(root.field("list").element(1).isMissing)
+    expect(try! root.excluding(["List", "map"]).decodeMap().map(\.key) == ["Value"])
+    expect(!root.excluding(["value"]).hasField("Value"))
+    assertEqual(root.invalid("no").description(), "$: no")
+    assertEqual(root.unknownCase("X").description(), "$: no case 'X'")
+}
+
+@derive(Serializable, Equatable, Debug)
+union Store {
+    Memory
+    Disk(path: String)
+}
+
+@test
+async fn aUnionsCaseIsItsNameOrItsOneKey() {
+    let configuration = await built([["A": "Memory", "B:Disk:Path": "/var/db", "C:x": "1", "C:y": "2"]])
+    expect(try! configuration.section("A").bind(Store.self) == Store.Memory)
+    expect(try! configuration.section("B").bind(Store.self) == Store.Disk(path: "/var/db"))
+    let c = ConfigurationDecoder(configuration.section("C"))
+    expectThrows(SerializeError.self) { _ = try c.caseName() }
+    expect(c.casePayload().isMissing)
+    expect(ConfigurationDecoder(configuration.section("A")).casePayload().isMissing)
+}
+
+@test
+async fn aSectionSaysWhereItIs() {
+    let configuration = await built([["Database:Url": "db", "Database:Pool:Size": "4"]])
+    let pool = configuration.section("Database").section("pool")
+    assertEqual(pool.path, "Database:pool")
+    assertEqual(pool.key, "pool")
+    expect(pool.exists && pool.value == none)
+    expect(pool.value("SIZE") == "4")
+    expect(pool.section("Size").value == "4")
+    expect(pool.children.map(\.path) == ["Database:Pool:Size"])
+    expect(configuration.section("Cache").children.isEmpty)
+    expect(ConfigurationSection(configuration: configuration, path: "Database:Url").value == "db")
+}

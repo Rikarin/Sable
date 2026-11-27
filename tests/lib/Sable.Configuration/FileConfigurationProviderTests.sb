@@ -1,0 +1,59 @@
+module FileConfigurationProviderTests
+
+import Sable.Configuration
+import Sable.IO
+import Sable.Testing
+
+import ConfigurationSupport
+
+@test
+async fn aFileIsReadInTheFormatItsNameSays() {
+    let directory = try! Temp.directory()
+    let toml = directory.path.appending("a.toml")
+    let json = directory.path.appending("b.json")
+    let yaml = directory.path.appending("c.yml")
+    let env = directory.path.appending(".env")
+    try! File.write(toml, "[Http]\nPort = 1\n")
+    try! File.write(json, "{\"Http\": {\"Host\": \"b\"}}")
+    try! File.write(yaml, "Http:\n  Path: /c\n")
+    try! File.write(env, "Http__Port=4\n")
+    var builder = ConfigurationBuilder()
+    builder.addFile(toml)
+    builder.addFile(json)
+    builder.addFile(yaml)
+    let configuration = try! await builder.build()
+    expect(configuration.value("Http:Port") == "1" && configuration.value("Http:Host") == "b" && configuration.value("Http:Path") == "/c")
+    expect((try! await FileConfigurationProvider(env).load()).value("Http:Port") == "4")
+}
+
+@test
+async fn aFileOfAnotherNameIsReadInTheFormatGiven() {
+    let directory = try! Temp.directory()
+    let file = directory.path.appending("settings.conf")
+    try! File.write(file, "{\"a\": 1}")
+    let given = FileConfigurationProvider(file, format: .Json)
+    expect((try! await given.load()).value("a") == "1")
+    assertEqual(FileConfigurationProvider(file).format, ConfigurationFormat.Toml)
+    expect(given.files.isEmpty && FileConfigurationProvider(file, reloadOnChange: true).files == [file])
+    assertEqual(given.name, "\(file)")
+}
+
+@test
+async fn aFileThatIsNotThereIsAnErrorUnlessItIsOptional() {
+    let directory = try! Temp.directory()
+    let missing = directory.path.appending("missing.toml")
+    let error = require(await expectThrows(ConfigurationError.self) { _ = try await FileConfigurationProvider(missing).load() })
+    assertEqual(error, ConfigurationError.NotFound(source: "\(missing)"))
+    expect((try! await FileConfigurationProvider(missing, optional: true).load()).isEmpty)
+}
+
+@test
+async fn aFileThatCannotBeReadOrParsedSaysSo() {
+    let directory = try! Temp.directory()
+    let bad = directory.path.appending("bad.json")
+    try! File.write(bad, "{")
+    let malformed = require(await expectThrows(ConfigurationError.self) { _ = try await FileConfigurationProvider(bad).load() })
+    expect(malformed.description().hasPrefix("\(bad): not JSON"), malformed.description())
+    let unreadable = require(await expectThrows(ConfigurationError.self) { _ = try await FileConfigurationProvider(directory.path).load() })
+    expect(unreadable.description().hasPrefix("\(directory.path): not read: "), unreadable.description())
+}

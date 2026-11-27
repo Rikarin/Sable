@@ -1,0 +1,62 @@
+module Sable.Configuration
+
+import Sable.IO
+
+/// Configuration from a file: TOML, JSON, YAML or `.env`, as its name says
+/// or as it is told (`ConfigurationFormat`). One that is optional and not
+/// there gives nothing. `ConfigurationBuilder.addFile` adds one.
+///
+/// ```sable
+/// let directory = try! Temp.directory()
+/// let file = directory.path.appending("appsettings.toml")
+/// try! File.write(file, "[Http]\nPort = 8080\n")
+/// let values = try! await FileConfigurationProvider(file).load()
+/// assert(values.value("Http:Port") == "8080")
+/// let absent = FileConfigurationProvider(directory.path.appending("none.json"), optional: true)
+/// assert((try! await absent.load()).isEmpty)
+/// ```
+public struct FileConfigurationProvider: ConfigurationProvider {
+    /// Where the file is.
+    public let path: FilePath
+    /// What it is written in.
+    public let format: ConfigurationFormat
+    /// Whether it may be missing.
+    public let optional: Bool
+    /// Whether `Configuration.watch` reloads at its changes.
+    public let reloadOnChange: Bool
+
+    /// The file, in the format its name says, else the one given; TOML if
+    /// it says none.
+    public init(_ path: FilePath, format: ConfigurationFormat? = none, optional: Bool = false, reloadOnChange: Bool = false) {
+        self.path = path
+        self.format = format ?? ConfigurationFormat.of(path) ?? ConfigurationFormat.Toml
+        self.optional = optional
+        self.reloadOnChange = reloadOnChange
+    }
+
+    /// Its path.
+    public var name: String => "\(path)"
+
+    /// Its path, if it is reloaded at its changes.
+    public var files: FilePath[>..] => reloadOnChange ? [path] : []
+
+    public fn load() async throws(ConfigurationError) -> ConfigurationValues {
+        return try readNow()
+    }
+
+    fn readNow() throws(ConfigurationError) -> ConfigurationValues {
+        var text = ""
+        do {
+            text = try File.read(path)
+        } catch {
+            if case .NotFound(_) = error {
+                if optional {
+                    return ConfigurationValues()
+                }
+                throw ConfigurationError.NotFound(source: name)
+            }
+            throw ConfigurationError.Unreadable(source: name, reason: error.description())
+        }
+        return try format.parse(text, source: name)
+    }
+}

@@ -1,0 +1,18 @@
+module MemoryConfigurationProviderTests
+
+import Sable.Configuration
+import Sable.IO
+import Sable.Testing
+
+import ConfigurationSupport
+
+@test
+async fn memoryIsWhatItHoldsAtEachLoad() {
+    let memory = MemoryConfigurationProvider(["a": "1", "b": "2"], name: "defaults")
+    memory.set("A", "3")
+    memory.remove("b")
+    let values = try! await memory.load()
+    assertEqual(values.keys, ["A"])
+    expect(values.value("a") == "3")
+    assertEqual(memory.name, "defaults")
+}

@@ -1,0 +1,30 @@
+module Sable.Configuration
+
+/// A program's options of one kind, as they were when it was given them:
+/// what a service takes in its initialiser to be configured, .NET's
+/// `IOptions<T>`. `ServiceCollection.configure` registers it, bound from a
+/// section and checked as the provider is built; options that are to
+/// follow the configuration as it is reloaded are an `OptionsMonitor`'s.
+///
+/// ```sable
+/// @derive(Serializable)
+/// struct Smtp: Sendable {
+///     var host: String
+///     var port: Int
+/// }
+///
+/// let options = Options(Smtp(host: "mail", port: 25))
+/// assert(options.value.host == "mail" && options.name == "")
+/// ```
+public struct Options<T: Sendable>: Sendable {
+    /// The options.
+    public let value: T
+    /// Which of the kind's they are: "" for the one without a name.
+    public let name: String
+
+    /// The options, of the name.
+    public init(_ value: T, name: String = "") {
+        self.value = value
+        self.name = name
+    }
+}

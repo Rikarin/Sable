@@ -1,0 +1,90 @@
+module ConfigurationFormatTests
+
+import Sable.Configuration
+import Sable.IO
+import Sable.Testing
+
+fn shown(_ values: ConfigurationValues) -> String {
+    var all: String[>..] = []
+    for key in values.keys {
+        all.append("\(key)=\(values.value(key)!)")
+    }
+    return all.joined(separator: " ")
+}
+
+@test
+fn tomlTablesAndArraysAreFlattened() {
+    let values = try! ConfigurationFormat.Toml.parse("name = \"shop\"\n[Http]\nport = 8080\nratio = 0.5\non = true\nhosts = [\"a\", \"b\"]\nempty = []\n[Http.Tls]\nday = 2026-11-24\n")
+    assertEqual(shown(values), "name=shop Http:port=8080 Http:ratio=0.5 Http:on=true Http:hosts:0=a Http:hosts:1=b Http:empty= Http:Tls:day=2026-11-24")
+}
+
+@test
+fn jsonMayHaveCommentsAndTrailingCommas() {
+    let values = try! ConfigurationFormat.Json.parse("{\n  // the port\n  \"Http\": {\"Port\": 80, \"Big\": 18446744073709551615, \"Off\": false, \"None\": null, \"Rate\": 1.25, \"Map\": {},},\n  \"List\": [{\"a\": 1}, [2]],\n}")
+    assertEqual(shown(values), "Http:Port=80 Http:Big=18446744073709551615 Http:Off=false Http:None= Http:Rate=1.25 Http:Map= List:0:a=1 List:1:0=2")
+}
+
+@test
+fn yamlMappingsAndSequencesAreFlattened() {
+    let values = try! ConfigurationFormat.Yaml.parse("http:\n  port: 8080\n  hosts:\n    - a\n    - b\n  secure: yes\nlevel: ~\n")
+    assertEqual(shown(values), "http:port=8080 http:hosts:0=a http:hosts:1=b http:secure=yes level=")
+}
+
+@test
+fn aDotEnvFileIsNamesAndValues() {
+    let text = "# settings\n\nexport Database__Url=postgres://db # the primary\nNAME = 'it''s'\nQUOTED=\"a\\tb\\n\\\"c\\\"\\\\\"\nBARE=a#b\nEMPTY=\n"
+    let values = try! ConfigurationFormat.DotEnv.parse(text)
+    expect(values.value("Database:Url") == "postgres://db")
+    expect(values.value("name") == "it")
+    expect(values.value("QUOTED") == "a\tb\n\"c\"\\")
+    expect(values.value("BARE") == "a#b")
+    expect(values.value("EMPTY") == "")
+}
+
+@test(arguments: [
+    ("NAME", "line 1: no '=' after the name"),
+    ("=value", "line 1: no name before '='"),
+    ("A='open", "line 1: a quote is not closed"),
+    ("\nA=\"open", "line 2: a quote is not closed"),
+])
+fn aDotEnvLineThatIsNotOneIsRefused(_ text: String, _ why: String) {
+    let error = require(expectThrows(ConfigurationError.self) { _ = try ConfigurationFormat.DotEnv.parse(text, source: ".env") })
+    assertEqual(error, ConfigurationError.Malformed(source: ".env", reason: why))
+}
+
+@test(arguments: [
+    (ConfigurationFormat.Toml, "a = "),
+    (ConfigurationFormat.Json, "{"),
+    (ConfigurationFormat.Json, "[1]"),
+    (ConfigurationFormat.Yaml, "a: [b"),
+    (ConfigurationFormat.Yaml, "just text"),
+])
+fn whatIsNotInItsFormatIsMalformed(_ format: ConfigurationFormat, _ text: String) {
+    let error = require(expectThrows(ConfigurationError.self) { _ = try format.parse(text, source: "settings") })
+    expect(error.description().hasPrefix("settings: "), error.description())
+}
+
+@test
+fn anEmptyDocumentHasNoValues() {
+    expect((try! ConfigurationFormat.Yaml.parse("")).isEmpty)
+    expect((try! ConfigurationFormat.Toml.parse("")).isEmpty)
+    expect((try! ConfigurationFormat.Json.parse("{}")).isEmpty)
+}
+
+@test(arguments: [
+    ("settings.toml", ConfigurationFormat.Toml),
+    ("Settings.JSON", ConfigurationFormat.Json),
+    ("a.yaml", ConfigurationFormat.Yaml),
+    ("a.yml", ConfigurationFormat.Yaml),
+    (".env", ConfigurationFormat.DotEnv),
+    ("local.env", ConfigurationFormat.DotEnv),
+])
+fn theFormatIsTheNames(_ name: String, _ format: ConfigurationFormat) {
+    expect(ConfigurationFormat.of(FilePath(name)) == format)
+}
+
+@test
+fn aNameOfNoFormatIsNone() {
+    expect(ConfigurationFormat.of(FilePath("notes.txt")) == none)
+    expect(ConfigurationFormat.of(FilePath("/")) == none)
+}

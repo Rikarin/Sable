@@ -1,0 +1,53 @@
+module Sable.Configuration
+
+import Sable.IO
+
+/// Configuration from the environment's variables whose names begin with
+/// the prefix, however it is cased: the rest of the name is the key, its
+/// every `__` a ':' — `SHOP_Database__Url` is "Database:Url" after the
+/// prefix "SHOP_". With no prefix, every variable is a key.
+///
+/// ```sable
+/// unsafe {
+///     Environment.set("SHOP_Database__Url", "postgres://db")
+/// }
+/// let values = try! await EnvironmentConfigurationProvider(prefix: "shop_").load()
+/// assert(values.value("database:url") == "postgres://db")
+/// ```
+public struct EnvironmentConfigurationProvider: ConfigurationProvider {
+    /// What the names it takes begin with: the prefix.
+    public let start: String
+
+    /// The variables whose names begin with the prefix.
+    public init(prefix start: String = "") {
+        self.start = start
+    }
+
+    /// "environment", and the prefix.
+    public var name: String => start.isEmpty ? "environment" : "environment \(start)*"
+
+    public fn load() async throws(ConfigurationError) -> ConfigurationValues {
+        return EnvironmentConfigurationProvider.values(Environment.variables(), prefix: start)
+    }
+
+    /// The variables of the dictionary, as it takes those of the environment.
+    ///
+    /// ```sable
+    /// let values = EnvironmentConfigurationProvider.values(["APP_Http__Port": "80", "PATH": "/bin"], prefix: "APP_")
+    /// assert(values.value("Http:Port") == "80" && values.count == 1)
+    /// ```
+    public static fn values(_ variables: [String: String], prefix start: String) -> ConfigurationValues {
+        var values = ConfigurationValues()
+        let folded = start.lowercased()
+        for (variable, value) in variables {
+            if !variable.lowercased().hasPrefix(folded) {
+                continue
+            }
+            let key = variable.slice(from: start.count, to: variable.count).replacing("__", with: ConfigurationPath.separator)
+            if !key.isEmpty {
+                values.set(key, value)
+            }
+        }
+        return values
+    }
+}

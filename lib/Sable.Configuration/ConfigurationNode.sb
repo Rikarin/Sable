@@ -1,0 +1,90 @@
+module Sable.Configuration
+
+// A section of a configuration's values, as a tree: its key, its value if
+// it has one, and the sections in it in their order (ConfigurationPath
+// .precedes). Made once for each version, and only read after.
+@immutable
+final class ConfigurationNode: Sendable {
+    let key: String
+    let path: String
+    let value: String?
+    let children: ConfigurationNode[>..]
+    // A child's position by its key lowercased.
+    let positions: [String: Int]
+
+    init(key: String, path: String, value: String?, children: ConfigurationNode[>..]) {
+        self.key = key
+        self.path = path
+        self.value = value
+        self.children = children
+        var positions: [String: Int] = [:]
+        for (i, child) in children.enumerated() {
+            positions[child.key.lowercased()] = i
+        }
+        self.positions = positions
+    }
+
+    fn child(_ key: String) -> ConfigurationNode? {
+        if let at = positions[key.lowercased()] {
+            return children[at]
+        }
+        return none
+    }
+
+    // The section at the path under this one.
+    fn find(_ path: String) -> ConfigurationNode? {
+        var node: ConfigurationNode? = self
+        for part in ConfigurationPath.parts(of: path) {
+            node = node?.child(part)
+        }
+        return node
+    }
+
+    // The tree of the values: a path's every part a section.
+    static fn tree(_ values: ConfigurationValues) -> ConfigurationNode {
+        let root = Draft("", "")
+        for (_, entry) in values.entries {
+            var node = root
+            for part in ConfigurationPath.parts(of: entry.0) {
+                node = node.child(part)
+            }
+            node.value = entry.1
+        }
+        return root.frozen()
+    }
+}
+
+// A section as the tree is made.
+final class Draft {
+    let key: String
+    let path: String
+    var value: String? = none
+    var children: Draft[>..] = []
+    var positions: [String: Int] = [:]
+
+    init(_ key: String, _ path: String) {
+        self.key = key
+        self.path = path
+    }
+
+    fn child(_ key: String) -> Draft {
+        let folded = key.lowercased()
+        if let at = positions[folded] {
+            return children[at]
+        }
+        let made = Draft(key, ConfigurationPath.combine(path, key))
+        positions[folded] = children.count
+        children.append(made)
+        return made
+    }
+
+    fn frozen() -> ConfigurationNode {
+        var sorted = children
+        sorted.sort(by: { a, b in ConfigurationPath.precedes(a.key, b.key) })
+        var made: ConfigurationNode[>..] = []
+        for child in sorted {
+            made.append(child.frozen())
+        }
+        return ConfigurationNode(key: key, path: path, value: value, children: made)
+    }
+}

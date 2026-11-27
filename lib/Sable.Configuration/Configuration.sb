@@ -1,0 +1,337 @@
+module Sable.Configuration
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Serialize
+import Sable.Time
+
+/// A program's settings, by key: what its providers gave, each one's over
+/// those before it (`ConfigurationBuilder`), a key the same however it is
+/// cased. .NET's `IConfigurationRoot`. A section of it binds to a
+/// Serializable type of the program's (`ConfigurationSection.bind`), and
+/// `reload` reads every provider again, as a SIGHUP has a host do;
+/// `changes` says when what they gave changed, and `watch` reloads it as
+/// its files change.
+///
+/// ```sable
+/// var builder = ConfigurationBuilder()
+/// builder.addValues(["Http:Port": "80", "Http:Hosts:0": "a"])
+/// builder.addValues(["http:port": "8080"])
+/// let configuration = try! await builder.build()
+/// assert(configuration.value("Http:Port") == "8080")
+/// assert(configuration.section("Http").section("Hosts").children[0].value == "a")
+/// ```
+@immutable
+public final class Configuration: Sendable {
+    /// What it is made of, in order: the last's values over those before.
+    public let providers: (any ConfigurationProvider)[>..]
+    let current: Watch<ConfigurationSnapshot>
+    // Told after each change, until they say they are gone.
+    let listeners: Mutex<ConfigurationListener[>..]>
+    // One reload at a time.
+    let reloading: AsyncMutex
+
+    init(_ providers: (any ConfigurationProvider)[>..], _ loaded: ConfigurationValues[>..]) {
+        self.providers = providers
+        current = Watch(ConfigurationSnapshot.of(loaded, version: 0))
+        let empty: ConfigurationListener[>..] = []
+        listeners = Mutex(empty)
+        reloading = AsyncMutex()
+    }
+
+    // ---- Values ------------------------------------------------------------
+
+    /// The key's value, when it has one: "Database:Url".
+    public fn value(_ key: String) -> String? {
+        return current.value.merged.value(key)
+    }
+
+    /// The section at the path: one there is not is empty, and has no value.
+    public fn section(_ path: String) -> ConfigurationSection {
+        return ConfigurationSection(configuration: self, path: path)
+    }
+
+    /// The sections at the root, in order.
+    public var children: ConfigurationSection[>..] => section("").children
+
+    /// The whole of it as a value of the type, as `ConfigurationSection.bind`
+    /// makes one.
+    public fn bind<T: Serializable>(_ type: T.Type) throws(SerializeError) -> T {
+        return try section("").bind(type)
+    }
+
+    /// How many times what it holds has changed: 0 as it was built.
+    public var version: Int => current.value.version
+
+    /// The versions from now on, as they come: for 'for await', which ends
+    /// once the task is cancelled. A reload that changed nothing is none.
+    ///
+    /// ```sable
+    /// let memory = MemoryConfigurationProvider(["Level": "Info"])
+    /// var builder = ConfigurationBuilder()
+    /// builder.add(memory)
+    /// let configuration = try! await builder.build()
+    /// var changes = configuration.changes()
+    /// memory.set("Level", "Debug")
+    /// try! await configuration.reload()
+    /// assert(await changes.next() == 1)
+    /// assert(configuration.value("level") == "Debug")
+    /// ```
+    public fn changes() -> ConfigurationChanges {
+        return ConfigurationChanges(receiver: current.subscribe())
+    }
+
+    // ---- Reloading ---------------------------------------------------------
+
+    /// Every provider read again, in order. If what they give is not what
+    /// they gave, it is the new version: its changes are told of, and the
+    /// options that follow it bound again (`OptionsMonitor`), before this
+    /// returns. What a provider throws, this throws, and the configuration
+    /// stays as it was.
+    public async fn reload() throws(ConfigurationError) {
+        await reloading.lock()
+        do {
+            let loaded = try await Configuration.load(providers)
+            let before = current.value
+            let after = ConfigurationSnapshot.of(loaded, version: before.version + 1)
+            if !after.merged.sameValues(before.merged) {
+                current.send(after)
+                await tellListeners()
+            }
+        } catch {
+            reloading.unlock()
+            throw error
+        }
+        reloading.unlock()
+    }
+
+    static async fn load(_ providers: (any ConfigurationProvider)[>..]) throws(ConfigurationError) -> ConfigurationValues[>..] {
+        var loaded: ConfigurationValues[>..] = []
+        for provider in providers {
+            loaded.append(try await provider.load())
+        }
+        return loaded
+    }
+
+    // The listener added: run after each change, until it says it is gone.
+    fn listen(_ listener: ConfigurationListener) {
+        listeners.withLock { $0.append(listener) }
+    }
+
+    fn tellListeners() async {
+        let all = listeners.withLock { (all: inout ConfigurationListener[>..]) -> ConfigurationListener[>..] in all }
+        var gone = 0
+        for listener in all {
+            if !(await listener.tell()) {
+                gone += 1
+            }
+        }
+        if gone > 0 {
+            var kept: ConfigurationListener[>..] = []
+            for listener in all {
+                if listener.isHeld {
+                    kept.append(listener)
+                }
+            }
+            listeners.withLock { (all: inout ConfigurationListener[>..]) -> Void in all = kept }
+        }
+    }
+
+    /// Reloads it after its providers' files change (`ConfigurationProvider
+    /// .files`), on the monotonic clock, as `watch(delay:clock:)` does.
+    @discardable
+    public fn watch(delay: Duration = Duration.milliseconds(250)) throws(IoError) -> Task<Void> {
+        return try watch(delay: delay, clock: MonotonicClock())
+    }
+
+    /// Reloads it after its providers' files change: the directory each is
+    /// in is watched (`FileWatcher`) from now on, and the delay after a
+    /// change — on the clock — waited out, so that the changes of one save
+    /// are one reload. The task this gives does it until it is cancelled;
+    /// one that has nothing to watch ends at once. A file is watched only if
+    /// it is there as this is called. A reload that fails leaves the
+    /// configuration as it was, until the next.
+    ///
+    /// ```sable
+    /// let directory = try! Temp.directory()
+    /// let file = directory.path.appending("settings.toml")
+    /// try! File.write(file, "level = \"Info\"")
+    /// var builder = ConfigurationBuilder()
+    /// builder.addFile(file, reloadOnChange: true)
+    /// let configuration = try! await builder.build()
+    /// let watching = try! configuration.watch(delay: Duration.milliseconds(10))
+    /// watching.cancel()
+    /// ```
+    @discardable
+    public fn watch<C: Clock>(delay: Duration, clock: C) throws(IoError) -> Task<Void> {
+        var directories: FilePath[>..] = []
+        var names: String[>..][>..] = []
+        for provider in providers {
+            for file in provider.files {
+                if !File.exists(file) {
+                    continue
+                }
+                var directory = file.parent ?? FilePath(".")
+                if directory.isEmpty {
+                    directory = FilePath(".")
+                }
+                let name = (file.fileName ?? "").lowercased()
+                var at = -1
+                for (i, each) in directories.enumerated() {
+                    if each == directory {
+                        at = i
+                    }
+                }
+                if at < 0 {
+                    directories.append(directory)
+                    names.append([])
+                    at = directories.count - 1
+                }
+                names[at].append(name)
+            }
+        }
+        var watchers: FileWatcher[>..] = []
+        for directory in directories {
+            watchers.append(try FileWatcher.watch(directory, recursive: false))
+        }
+        if watchers.isEmpty {
+            return Task.detached { await Task.yield() }
+        }
+        let dirty = Watch<Int>(0)
+        let watching = watchers
+        let wanted = names
+        return Task.detached {
+            await withTaskGroup(of: Void.self) { group in
+                for (i, watcher) in watching.enumerated() {
+                    let these = wanted[i]
+                    group.spawn {
+                        for await event in watcher {
+                            if event.kind == .Rescan || these.contains((event.path.fileName ?? "").lowercased()) {
+                                dirty.update { $0 += 1 }
+                            }
+                        }
+                    }
+                }
+                var seen = dirty.subscribe()
+                while true {
+                    if await seen.changed() == none {
+                        break
+                    }
+                    do {
+                        try await clock.sleep(for: delay)
+                    } catch {
+                        break
+                    }
+                    // What came meanwhile is this reload's.
+                    _ = seen.borrowAndMarkSeen()
+                    try? await self.reload()
+                }
+                group.cancelAll()
+            }
+        }
+    }
+
+    // ---- Seeing it ---------------------------------------------------------
+
+    /// Every key, in order, with its value and the provider it came from,
+    /// a line each: `Database:Url = postgres://db (appsettings.toml)`. The
+    /// value of a key that looks secret (`ConfigurationPath.isSecret`), or
+    /// of a provider whose values are all secrets (`isSecret`), is
+    /// "[redacted]".
+    ///
+    /// ```sable
+    /// var builder = ConfigurationBuilder()
+    /// builder.addValues(["Database:Url": "postgres://db", "Database:Password": "hunter2"])
+    /// let configuration = try! await builder.build()
+    /// assert(configuration.debugView() == "Database:Password = [redacted] (memory)\nDatabase:Url = postgres://db (memory)\n")
+    /// ```
+    public fn debugView() -> String {
+        let snapshot = current.value
+        var text = ""
+        Configuration.describe(snapshot.root, snapshot, providers, &text)
+        return text
+    }
+
+    static fn describe(_ node: ConfigurationNode, _ snapshot: ConfigurationSnapshot, _ providers: (any ConfigurationProvider)[>..], _ text: inout String) {
+        if let value = node.value {
+            let source = snapshot.sources[node.path.lowercased()] ?? 0
+            let provider = providers[source]
+            let shown = provider.isSecret || ConfigurationPath.isSecret(node.path) ? "[redacted]" : value
+            text = text + "\(node.path) = \(shown) (\(provider.name))\n"
+        }
+        for child in node.children {
+            Configuration.describe(child, snapshot, providers, &text)
+        }
+    }
+}
+
+/// The versions of a configuration as they come (`Configuration.changes`).
+public struct ConfigurationChanges: AsyncSequence, AsyncIterator {
+    public alias Element = Int
+    public alias Iter = ConfigurationChanges
+
+    var receiver: WatchReceiver<ConfigurationSnapshot>
+
+    /// The next version, waiting for it; none once the task is cancelled.
+    public mutating fn next() async -> Int? {
+        return (await receiver.changed())?.version
+    }
+
+    public fn makeAsyncIterator() -> ConfigurationChanges {
+        return self
+    }
+}
+
+// What a configuration holds at one version.
+struct ConfigurationSnapshot: Sendable {
+    let root: ConfigurationNode
+    let merged: ConfigurationValues
+    // By the key lowercased, the position of the provider its value is from.
+    let sources: [String: Int]
+    let version: Int
+
+    static fn of(_ loaded: ConfigurationValues[>..], version: Int) -> ConfigurationSnapshot {
+        var merged = ConfigurationValues()
+        var sources: [String: Int] = [:]
+        for (i, values) in loaded.enumerated() {
+            for (folded, entry) in values.entries {
+                merged.set(entry.0, entry.1)
+                sources[folded] = i
+            }
+        }
+        return ConfigurationSnapshot { root: ConfigurationNode.tree(merged), merged: merged, sources: sources, version: version }
+    }
+}
+
+// Told of a configuration's changes, while what it tells is held.
+@immutable
+final class ConfigurationListener {
+    // Whether it was still there to be told.
+    let tell: async () -> Bool
+    let held: () -> Bool
+
+    init(tell: @escaping @Sendable async () -> Bool, held: @escaping @Sendable () -> Bool) {
+        self.tell = tell
+        self.held = held
+    }
+
+    var isHeld: Bool => held()
+}
+
+extension ConfigurationValues {
+    fn sameValues(_ other: ConfigurationValues) -> Bool {
+        if entries.count != other.entries.count {
+            return false
+        }
+        for (folded, entry) in entries {
+            if let theirs = other.entries[folded] {
+                if theirs.1 != entry.1 {
+                    return false
+                }
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+}

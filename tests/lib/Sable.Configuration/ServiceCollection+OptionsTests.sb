@@ -1,0 +1,84 @@
+module ServiceCollectionOptionsTests
+
+import Sable.Configuration
+import Sable.DependencyInjection
+import Sable.Serialize
+import Sable.Testing
+import Sable.Validation
+
+import ConfigurationSupport
+
+@derive(Serializable)
+struct Database: Sendable {
+    var url: String
+    @serialize(defaulted)
+    var poolSize: Int = 4
+}
+
+struct DatabaseValidator: Validator<Database> {
+    fn rules(_ r: inout Rules<Database>) {
+        r.field(\.url).notEmpty()
+    }
+}
+
+@immutable
+@injectable(.Singleton)
+final class Repository {
+    let url: String
+    let replica: String
+    init(database: Options<Database>, @keyed("replica") replica: Options<Database>) {
+        url = database.value.url
+        self.replica = replica.value.url
+    }
+}
+
+fn services(_ values: [String: String]) async -> ServiceCollection {
+    var services = ServiceCollection()
+    services.addSingleton(Configuration.self, value: await built([values]))
+    return services
+}
+
+@test
+async fn optionsAreInjectedByTheirNames() {
+    var services = await services(["Database:Url": "primary", "Replica:Url": "replica", "Replica:PoolSize": "8"])
+    services.configure(Database.self, section: "Database")
+    services.configure(Database.self, section: "Replica", named: "replica")
+    services.addSingleton(Repository.self)
+    let provider = try! await services.buildAsync()
+    let repository = try! provider.resolve(Repository.self)
+    expect(repository.url == "primary" && repository.replica == "replica")
+    assertEqual(try! provider.resolve(Options<Database>.self, key: "replica").value.poolSize, 8)
+    assertEqual(try! provider.resolve(OptionsMonitor<Database>.self, key: "replica").name, "replica")
+}
+
+@test
+async fn optionsThatDoNotBindStopTheProviderBeingBuilt() {
+    var services = await services(["Database:PoolSize": "8"])
+    services.configure(Database.self, section: "Database")
+    await expectThrows(saying: "Sable.Configuration.OptionsMonitor<ServiceCollectionOptionsTests.Database> could not be made: Database:url: missing") { _ = try await services.buildAsync() }
+}
+
+@test
+async fn optionsAreValidatedAsTheProviderIsBuilt() {
+    var services = await services(["Database:Url": ""])
+    services.configure(Database.self, section: "Database", validator: DatabaseValidator())
+    await expectThrows(saying: "Sable.Configuration.OptionsMonitor<ServiceCollectionOptionsTests.Database> could not be made: Validation failed:\n -- Database.url: 'Url' must not be empty.") { _ = try await services.buildAsync() }
+}
+
+@test
+async fn optionsMayBeValidatedByAClosure() {
+    var services = await services(["Database:Url": "x", "Database:PoolSize": "0"])
+    services.configure(Database.self, section: "Database", validate: { database in
+        if database.poolSize < 1 {
+            throw ConfigurationError.Malformed(source: "Database", reason: "an empty pool")
+        }
+    })
+    await expectThrows(saying: "Sable.Configuration.OptionsMonitor<ServiceCollectionOptionsTests.Database> could not be made: Database: an empty pool") { _ = try await services.buildAsync() }
+}
+
+@test
+async fn optionsNeedTheConfiguration() {
+    var services = ServiceCollection()
+    services.configure(Database.self, section: "Database")
+    await expectThrows(saying: "the services cannot be provided: nothing provides Sable.Configuration.Configuration: Sable.Configuration.OptionsMonitor<ServiceCollectionOptionsTests.Database> -> Sable.Configuration.Configuration") { _ = try await services.buildAsync() }
+}

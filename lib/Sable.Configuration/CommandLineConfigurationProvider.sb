@@ -1,0 +1,79 @@
+module Sable.Configuration
+
+/// Configuration from a program's arguments, as .NET's command-line
+/// provider reads them: `--Http:Port=8080`, `--Http:Port 8080` or
+/// `Http:Port=8080`. A switch the mappings name — `-p`, or a `--port` —
+/// stands for the key they map it to. A switch with nothing after it, or
+/// another switch, is "true". What is none of these, and everything after
+/// `--`, is left for the program.
+///
+/// ```sable
+/// let arguments: String[>..] = ["--Http:Port=8080", "--verbose", "-e", "Staging", "input.txt", "Cache:Size=4"]
+/// let values = try! await CommandLineConfigurationProvider(arguments, switches: ["-e": "Environment"]).load()
+/// assert(values.value("http:port") == "8080")
+/// assert(values.value("Verbose") == "true")
+/// assert(values.value("Environment") == "Staging")
+/// assert(values.value("Cache:Size") == "4" && values.count == 4)
+/// ```
+public struct CommandLineConfigurationProvider: ConfigurationProvider {
+    /// The arguments, as the program was given them.
+    public let arguments: String[>..]
+    /// Each switch, as it is written ("-p", "--port"), with the key it
+    /// stands for.
+    public let switches: [String: String]
+
+    /// The arguments read, the switches mapped.
+    public init(_ arguments: String[>..], switches: [String: String] = [:]) {
+        self.arguments = arguments
+        var mapped: [String: String] = [:]
+        for (written, key) in switches {
+            mapped[written.lowercased()] = key
+        }
+        self.switches = mapped
+    }
+
+    /// "command line".
+    public var name: String => "command line"
+
+    public fn load() async throws(ConfigurationError) -> ConfigurationValues {
+        var values = ConfigurationValues()
+        var i = 0
+        while i < arguments.count {
+            let argument = arguments[i]
+            i += 1
+            if argument == "--" {
+                break
+            }
+            var written = argument
+            var value: String? = none
+            if let (before, after) = argument.splitOnce("=") {
+                written = before
+                value = after
+            }
+            var key = ""
+            if let mapped = switches[written.lowercased()] {
+                key = mapped
+            } else if written.hasPrefix("--") {
+                key = written.trimmingPrefix("--")
+            } else if written.hasPrefix("-") || value == none {
+                // A switch not mapped, or what the program has for itself.
+                continue
+            } else {
+                key = written
+            }
+            if key.isEmpty {
+                continue
+            }
+            if value == none {
+                if i < arguments.count && !arguments[i].hasPrefix("-") {
+                    value = arguments[i]
+                    i += 1
+                } else {
+                    value = "true"
+                }
+            }
+            values.set(key, value!)
+        }
+        return values
+    }
+}

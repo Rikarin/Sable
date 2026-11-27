@@ -1,0 +1,28 @@
+module EnvironmentConfigurationProviderTests
+
+import Sable.Configuration
+import Sable.IO
+import Sable.Testing
+
+import ConfigurationSupport
+
+@test
+async fn theEnvironmentsVariablesOfThePrefixAreKeys() {
+    unsafe {
+        Environment.set("PROVIDERTESTS_Http__Port", "80")
+        Environment.set("providertests_DATABASE__URL", "db")
+    }
+    let provider = EnvironmentConfigurationProvider(prefix: "ProviderTests_")
+    let values = try! await provider.load()
+    expect(values.value("Http:Port") == "80" && values.value("Database:Url") == "db")
+    assertEqual(values.count, 2)
+    assertEqual(provider.name, "environment ProviderTests_*")
+    assertEqual(EnvironmentConfigurationProvider().name, "environment")
+    expect((try! await EnvironmentConfigurationProvider().load()).value("PROVIDERTESTS_Http:Port") == "80")
+}
+
+@test
+fn aVariableThatIsThePrefixAloneIsNoKey() {
+    let values = EnvironmentConfigurationProvider.values(["APP_": "x", "APP_A": "1", "OTHER": "2"], prefix: "APP_")
+    assertEqual(values.keys, ["A"])
+}

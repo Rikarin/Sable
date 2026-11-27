@@ -6,6 +6,7 @@ A folder for each benchmark, with the Sable program and its ports side by side:
     library/map-int/map-int.cs    .NET
     library/map-int/map-int.rs    Rust
     library/map-int/map-int.c     C, where there is one
+    library/channel-bounded/channel-bounded.go   Go, where there is one
 
 - `library/` — the standard library, a benchmark for each type or function
   worth timing: `@bench` functions (docs/05 §5.1). A port exists where the
@@ -17,9 +18,9 @@ A folder for each benchmark, with the Sable program and its ports side by side:
   [rules of their own](programs/README.md).
 - `concurrency/` — tasks, as jobs of no worker, one and one a core
   (`tools/bench/concurrency.sh`); `sleepers`, whose point is what a process
-  holds, is a program. `compare/` is the same in .NET and Swift.
-- `support/` — the .NET ports' project and runner, and the Rust and C ports'
-  shared sources.
+  holds, is a program. `compare/` is the same in .NET, Swift and Go.
+- `support/` — the .NET ports' project and runner, and the Rust, C and Go
+  ports' shared sources.
 - `history.tsv` — the programs' times and ARC counts by commit, of the whole
   process (`tools/bench/run.py --record`): the date, the commit, with `+` for
   uncommitted changes, the program, milliseconds, allocations, retains and
@@ -44,7 +45,8 @@ built elsewhere; `--compare master` would build the benchmarks as they are at
 ## How it is measured
 
 The same way in each language: Sable's by the harness, and the ports by
-`support/dotnet/Program.cs`, `support/rust/bench.rs` and `support/c/bench.h`,
+`support/dotnet/Program.cs`, `support/rust/bench.rs`, `support/c/bench.h` and
+`support/go/bench.go`,
 which do what the harness does and print their samples for `compare.py`.
 
 - Each benchmark runs in a process of its own. Its input is made once, and is
@@ -62,7 +64,8 @@ which do what the harness does and print their samples for `compare.py`.
   samples: for Sable, objects and buffers as the allocator rounds them; for
   .NET, `GC.GetTotalAllocatedBytes`; for Rust, by a global allocator, and for C,
   by `malloc` and its like as the port calls them, of the sizes asked for, in a
-  build of the port that is not timed. What a block grows to counts whole.
+  build of the port that is not timed; for Go, by `runtime.ReadMemStats`, in a
+  run that is not timed. What a block grows to counts whole.
 - Every port computes something that depends on all its work, and it must be
   what the Sable benchmark's `check` is.
 - *Whole processes* is another thing: the processor time of a process from its
@@ -77,11 +80,11 @@ which do what the harness does and print their samples for `compare.py`.
 | column | |
 |:--|:--|
 | benchmark | the folder's name, and the case's arguments |
-| Sable, .NET, Rust, C | processor time an operation, with its unit, three digits; the fastest in bold; `—` without a port; what went wrong, where it did |
-| vs .NET, vs Rust, vs C | Sable's time over the other's |
+| Sable, .NET, Rust, C, Go | processor time an operation, with its unit, three digits; the fastest in bold; `—` without a port; what went wrong, where it did |
+| vs .NET, vs Rust, vs C, vs Go | Sable's time over the other's |
 
 `### Memory: Standard library` and `### Memory: Programs` have the bytes an operation
-allocates, in the same columns, and how many allocations Sable's, Rust's and
+allocates, in the same columns, and how many allocations Sable's, Rust's, Go's and
 C's are (.NET does not say; Sable's are objects, without their buffers). A dash under *vs* is where the other allocates
 nothing; the means are of those where both allocate more than 1 KB, as less is
 mostly the line the benchmark returns.
@@ -118,6 +121,10 @@ write, they write in the directory they are run in, and remove.
 - Rust: `bench::run(|| ...)` in `main`, after what makes the input.
 - C: `BENCH_MAIN(run)`, or `BENCH_MAIN_WITH(run, setup)`; the line is said
   with `bench_printf`.
+- Go: `package main`, built with `support/go/bench.go` beside it, and
+  `benchRun(func() string { ... })` in `main`, after what makes the input. A
+  task is a goroutine, and its awaited value a channel of room for one. Go
+  checks bounds but does not trap on overflow.
 
 A port run without arguments does its work once and prints the line.
 

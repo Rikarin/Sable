@@ -1,0 +1,63 @@
+module TlsSupport
+
+// What the server, loopback and interop tests of Sable.Net.Tls share: a
+// test CA and a server certificate it issued, and connections driven by
+// hand against each other.
+
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Net.Tls
+import Sable.Time
+
+/// A CA and a server certificate it issued for the host, of the key
+/// given, both good from 2026 to 2036; clients check them at the middle of
+/// December 2026.
+public struct TestPki {
+    public let root: Certificate
+    public let rootKey: PrivateKey
+    public let leaf: Certificate
+    public let key: PrivateKey
+
+    public init(key: PrivateKey, host: String = "localhost", root name: String = "Sable Test Root", notAfter: UtcDateTime = UtcDateTime.of(year: 2036, month: 1, day: 1, hour: 0, minute: 0, second: 0)!) {
+        rootKey = EcdsaPrivateKey<P256>.generate().anyKey
+        var authority = CertificateBuilder(subject: DistinguishedName(commonName: name), isAuthority: true)
+        authority.notBefore = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        authority.notAfter = UtcDateTime.of(year: 2036, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        root = try! authority.selfSigned(with: rootKey)
+        self.key = key
+        var builder = CertificateBuilder(subject: DistinguishedName(commonName: host), host: host)
+        builder.notBefore = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        builder.notAfter = notAfter
+        builder.purposes = [.serverAuth]
+        leaf = try! builder.issued(to: key.publicKey, by: root, signingKey: rootKey)
+    }
+
+    /// A server of the certificate, its chain the certificate alone.
+    public fn serverOptions() -> TlsServerOptions {
+        return TlsServerOptions(certificateChain: [leaf], privateKey: key)
+    }
+
+    /// A client that trusts the CA.
+    public fn clientOptions() -> TlsClientOptions {
+        var options = TlsClientOptions(trust: .Verified(CertificateVerifier(roots: TrustStore([root]))))
+        options.time = UtcDateTime.of(year: 2026, month: 12, day: 15, hour: 0, minute: 0, second: 0)!
+        return options
+    }
+}
+
+/// What each end has to send given to the other until neither has more.
+public fn exchange(_ client: inout TlsClientConnection, _ server: inout TlsServerConnection) throws(TlsError) {
+    while true {
+        let toServer = client.takeOutgoing()
+        if !toServer.isEmpty {
+            try server.receive(toServer)
+        }
+        let toClient = server.takeOutgoing()
+        if !toClient.isEmpty {
+            try client.receive(toClient)
+        }
+        if toServer.isEmpty && toClient.isEmpty {
+            return
+        }
+    }
+}

@@ -1,0 +1,419 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+import Sable.Crypto.X509
+
+/// The server's end of a TLS 1.3 connection (RFC 8446), with no I/O of its
+/// own: bytes that came from the client go in through `receive`, and what
+/// is to be sent back comes out of `takeOutgoing`. `TlsStream.accept` drives
+/// one over a stream; a test, or another transport, may drive it by hand.
+///
+/// The handshake is the full one, with an ephemeral key exchange of X25519
+/// or P-256, whichever the client offers a share of (X25519 preferred); the
+/// server's certificate chain is sent and the handshake signed by its key.
+/// The client is not asked for a certificate. Every fault found sends the
+/// client its alert and throws.
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let certificate = try! CertificateBuilder(subject: DistinguishedName([]), host: "localhost").selfSigned(with: key)
+/// var server = TlsServerConnection(options: TlsServerOptions(certificateChain: [certificate], privateKey: key))
+/// var client = TlsClientConnection(host: "localhost", options: TlsClientOptions(trust: .Pinned([certificate])))
+/// try! server.receive(client.takeOutgoing())
+/// try! client.receive(server.takeOutgoing())
+/// try! server.receive(client.takeOutgoing())
+/// assert(client.isHandshakeComplete && server.isHandshakeComplete)
+/// assert(server.serverName == "localhost")
+/// try! client.write("hello".utf8Bytes())
+/// try! server.receive(client.takeOutgoing())
+/// assert(server.takeReceived() == "hello".utf8Bytes())
+/// ```
+public struct TlsServerConnection: Sendable {
+    let options: TlsServerOptions
+    let random: U8[>..]
+    let keyShares: TlsKeyShare[>..]
+    var state: ServerState = .WaitClientHello
+    var transcript: U8[>..] = []
+    var records = TlsRecords()
+    var clientApplicationSecret: SymmetricKey? = none
+
+    /// The suite chosen; none before the client's ClientHello.
+    public private(set) var cipherSuite: TlsCipherSuite? = none
+
+    /// The application protocol chosen; none if there was none to choose.
+    public private(set) var applicationProtocol: String? = none
+
+    /// The name the client asked for (server_name); none if it named none.
+    public private(set) var serverName: String? = none
+
+    /// A server that answers as the options say, its random and ephemeral
+    /// key made afresh.
+    public init(options: TlsServerOptions) {
+        self.init(options: options, random: SecureRandom.bytes(32), keyShares: [])
+    }
+
+    /// A server that answers with the random and with the ephemeral key of
+    /// the group it chooses given, as a recorded handshake is replayed; a
+    /// key of a group not given is made afresh.
+    public init(options: TlsServerOptions, random: U8[:], keyShares: TlsKeyShare[:]) {
+        self.options = options
+        self.random = random.toArray()
+        self.keyShares = keyShares.toArray()
+    }
+
+    /// Whether the handshake is over and application data may flow.
+    public var isHandshakeComplete: Bool => records.isConnected
+
+    /// Whether the client has finished writing.
+    public var isPeerClosed: Bool => records.isPeerClosed
+
+    /// Whether this end has finished writing.
+    public var isClosedForWriting: Bool => records.isClosedForWriting
+
+    /// The bytes to send the client, taken: none are left.
+    public mutating fn takeOutgoing() -> U8[>..] {
+        return records.takeOutgoing()
+    }
+
+    /// The application data that has come, taken: none is left.
+    public mutating fn takeReceived() -> U8[>..] {
+        return records.takeReceived()
+    }
+
+    /// Bytes from the client: as many records as they complete are read, and
+    /// what to answer is queued. A fault sends its alert and throws, and the
+    /// connection is of no more use.
+    public mutating fn receive(_ bytes: U8[:]) throws(TlsError) {
+        if records.isFailed {
+            throw TlsError.Closed
+        }
+        records.incoming.append(contentsOf: bytes)
+        do {
+            while true {
+                guard let message = try records.nextMessage() else {
+                    break
+                }
+                let keysBefore = state
+                try readMessage(Int(message[0]), message)
+                if !records.handshakeBytes.isEmpty && keysChange(from: keysBefore) {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message across a change of keys")
+                }
+            }
+        } catch {
+            records.fail(error)
+            throw error
+        }
+    }
+
+    /// Application data sealed into records to send.
+    public mutating fn write(_ bytes: U8[:]) throws(TlsError) {
+        try records.write(bytes)
+    }
+
+    /// close_notify queued to send: this end writes no more, though it may
+    /// read on until the client closes too.
+    public mutating fn close() {
+        records.close()
+    }
+
+    fn keysChange(from before: ServerState) -> Bool {
+        return match before {
+            case .Connected => false
+            default         => true
+        }
+    }
+
+    mutating fn readMessage(_ type: Int, _ message: U8[>..]) throws(TlsError) {
+        var body = TlsReader(message[4..<message.count], "a handshake message")
+        match state {
+            case .WaitClientHello => {
+                if type != 1 {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) where a ClientHello should be")
+                }
+                transcript = message
+                try answer(try ClientHello.read(&body))
+                state = .WaitFinished
+            }
+            case .WaitFinished => {
+                if type != 20 {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) where a Finished should be")
+                }
+                let data = try body.take(body.bytes.count)
+                let wanted = TlsKeySchedule.finishedData(cipherSuite!, trafficSecret: records.peerSecret!, transcriptHash: transcriptHash())
+                if !constantTimeEquals(data, wanted) {
+                    throw TlsError.Failed(.decryptError, reason: "the client's Finished is not the handshake's")
+                }
+                transcript.append(contentsOf: message)
+                records.usePeerKey(clientApplicationSecret!)
+                clientApplicationSecret = none
+                records.isConnected = true
+                state = .Connected
+            }
+            case .Connected => try records.readPostHandshake(type, &body, takesTickets: false)
+        }
+    }
+
+    fn transcriptHash() -> U8[>..] {
+        return cipherSuite!.hashAlgorithm.digest(of: transcript).bytes
+    }
+
+    /// The server's flight, ServerHello to Finished, for the hello.
+    mutating fn answer(_ hello: ClientHello) throws(TlsError) {
+        if !hello.versions.contains(0x0304) {
+            throw TlsError.Failed(.protocolVersion, reason: "a client that does not speak TLS 1.3")
+        }
+        var chosenSuite: TlsCipherSuite? = none
+        for suite in options.cipherSuites {
+            if chosenSuite == none && hello.cipherSuites.contains(suite.code) {
+                chosenSuite = suite
+            }
+        }
+        guard let suite = chosenSuite else {
+            throw TlsError.Failed(.handshakeFailure, reason: "no cipher suite the client offers is taken")
+        }
+        guard let scheme = TlsServerConnection.signatureScheme(for: options.privateKey, offered: hello.signatureSchemes) else {
+            throw TlsError.Failed(.handshakeFailure, reason: "the client takes no signature the server's key makes")
+        }
+        if options.certificateChain.isEmpty {
+            throw TlsError.Failed(.internalError, reason: "a server with no certificate")
+        }
+        var clientShare: (Int, U8[>..])? = none
+        for group in [0x001D, 0x0017] {
+            if clientShare == none {
+                for (offered, key) in hello.keyShares {
+                    if clientShare == none && offered == group {
+                        clientShare = (offered, key)
+                    }
+                }
+            }
+        }
+        guard let (group, clientKey) = clientShare else {
+            throw TlsError.Failed(.handshakeFailure, reason: "the client offers no key share of X25519 or P-256")
+        }
+        if !options.applicationProtocols.isEmpty && !hello.applicationProtocols.isEmpty {
+            for name in options.applicationProtocols {
+                if applicationProtocol == none && hello.applicationProtocols.contains(name) {
+                    applicationProtocol = name
+                }
+            }
+            if applicationProtocol == none {
+                throw TlsError.Failed(.noApplicationProtocol, reason: "no application protocol the client offers is taken")
+            }
+        }
+        serverName = hello.serverName
+        var share: TlsKeyShare? = none
+        for each in keyShares {
+            if share == none && each.group == group {
+                share = each
+            }
+        }
+        let own = share ?? (group == 0x001D ? TlsKeyShare.X25519(X25519PrivateKey.generate()) : TlsKeyShare.P256(EcdhPrivateKey<Sable.Crypto.P256>.generate()))
+        let shared = try own.sharedSecret(with: clientKey)
+        cipherSuite = suite
+        records.suite = suite
+
+        var body: U8[>..] = [3, 3]
+        body.append(contentsOf: random)
+        appendVector(&body, hello.sessionId, 1)
+        appendNumber(&body, suite.code, 2)
+        body.append(0)
+        var extensions: U8[>..] = []
+        var keyShare: U8[>..] = []
+        appendNumber(&keyShare, group, 2)
+        appendVector(&keyShare, own.publicBytes, 2)
+        appendExtension(&extensions, 51, keyShare)
+        appendExtension(&extensions, 43, [3, 4])
+        appendVector(&body, extensions, 2)
+        let serverHello = handshakeMessage(2, body)
+        try records.send(serverHello)
+        if !hello.sessionId.isEmpty {
+            records.outgoing.append(contentsOf: [20, 3, 3, 0, 1, 1])
+        }
+        transcript.append(contentsOf: serverHello)
+
+        var schedule = TlsKeySchedule(suite)
+        schedule.advance(sharedSecret: shared)
+        let helloHash = transcriptHash()
+        records.useKeys(own: schedule.deriveSecret("s hs traffic", transcriptHash: helloHash), peer: schedule.deriveSecret("c hs traffic", transcriptHash: helloHash))
+
+        var flight: U8[>..] = []
+        var encrypted: U8[>..] = []
+        if hello.serverName != none {
+            appendExtension(&encrypted, 0, [])
+        }
+        if let name = applicationProtocol {
+            var names: U8[>..] = []
+            appendVector(&names, name.utf8Bytes(), 1)
+            var list: U8[>..] = []
+            appendVector(&list, names, 2)
+            appendExtension(&encrypted, 16, list)
+        }
+        var encryptedBody: U8[>..] = []
+        appendVector(&encryptedBody, encrypted, 2)
+        add(&flight, handshakeMessage(8, encryptedBody))
+
+        var entries: U8[>..] = []
+        for certificate in options.certificateChain {
+            appendVector(&entries, certificate.der, 3)
+            entries.append(contentsOf: [0, 0])
+        }
+        var certificateBody: U8[>..] = [0]
+        appendVector(&certificateBody, entries, 3)
+        add(&flight, handshakeMessage(11, certificateBody))
+
+        let content = certificateVerifyContent(server: true, transcriptHash: transcriptHash())
+        var verifyBody: U8[>..] = []
+        appendNumber(&verifyBody, scheme, 2)
+        appendVector(&verifyBody, TlsServerConnection.sign(content, scheme: scheme, key: options.privateKey), 2)
+        add(&flight, handshakeMessage(15, verifyBody))
+
+        add(&flight, handshakeMessage(20, TlsKeySchedule.finishedData(suite, trafficSecret: records.ownSecret!, transcriptHash: transcriptHash())))
+        try records.send(flight)
+
+        let finishedHash = transcriptHash()
+        schedule.advance()
+        clientApplicationSecret = schedule.deriveSecret("c ap traffic", transcriptHash: finishedHash)
+        records.useOwnKey(schedule.deriveSecret("s ap traffic", transcriptHash: finishedHash))
+    }
+
+    /// The message added to the transcript and to the flight to send.
+    mutating fn add(_ flight: inout U8[>..], _ message: U8[>..]) {
+        transcript.append(contentsOf: message)
+        flight.append(contentsOf: message)
+    }
+
+    /// The scheme the key signs with that the client takes (RFC 8446
+    /// §4.2.3); none if there is none.
+    static fn signatureScheme(for key: PrivateKey, offered: Int[>..]) -> Int? {
+        let schemes: Int[>..] = match key {
+            case .P256(_)    => [0x0403]
+            case .P384(_)    => [0x0503]
+            case .Ed25519(_) => [0x0807]
+            case .Rsa(_)     => [0x0804, 0x0805, 0x0806]
+            default          => []
+        }
+        for scheme in schemes {
+            if offered.contains(scheme) {
+                return scheme
+            }
+        }
+        return none
+    }
+
+    /// The key's signature of the content by the scheme.
+    static fn sign(_ content: U8[:], scheme: Int, key: PrivateKey) -> U8[>..] {
+        return match key {
+            case .P256(let own)    => own.sign(content, hash: .Sha256).der
+            case .P384(let own)    => own.sign(content, hash: .Sha384).der
+            case .Ed25519(let own) => own.sign(content)
+            case .Rsa(let own)     => own.sign(content, padding: .Pss(scheme == 0x0806 ? .Sha512 : scheme == 0x0805 ? .Sha384 : .Sha256))
+            default                => []
+        }
+    }
+}
+
+/// What a server reads of a ClientHello (RFC 8446 §4.1.2).
+struct ClientHello {
+    var sessionId: U8[>..] = []
+    var cipherSuites: Int[>..] = []
+    var versions: Int[>..] = []
+    var signatureSchemes: Int[>..] = []
+    var keyShares: (Int, U8[>..])[>..] = []
+    var applicationProtocols: String[>..] = []
+    var serverName: String? = none
+
+    init() { }
+
+    static fn read(_ body: inout TlsReader) throws(TlsError) -> ClientHello {
+        var hello = ClientHello()
+        _ = try body.number(2)
+        _ = try body.take(32)
+        hello.sessionId = try body.vector(1)
+        if hello.sessionId.count > 32 {
+            throw TlsError.Failed(.illegalParameter, reason: "a session id of \(hello.sessionId.count) bytes")
+        }
+        var suites = TlsReader(try body.vector(2), "the cipher suites")
+        while !suites.isAtEnd {
+            hello.cipherSuites.append(try suites.number(2))
+        }
+        if try body.vector(1) != [0] {
+            throw TlsError.Failed(.illegalParameter, reason: "a ClientHello with compression")
+        }
+        var extensions = TlsReader(try body.vector(2), "ClientHello's extensions")
+        try body.finish()
+        var seen: Int[>..] = []
+        var sawVersions = false
+        var sawSchemes = false
+        var sawShares = false
+        while !extensions.isAtEnd {
+            let type = try extensions.number(2)
+            if seen.contains(type) {
+                throw TlsError.Failed(.illegalParameter, reason: "a ClientHello with two extensions \(type)")
+            }
+            seen.append(type)
+            var data = TlsReader(try extensions.vector(2), "a ClientHello extension")
+            match type {
+                case 0 => {
+                    var names = TlsReader(try data.vector(2), "server_name")
+                    while !names.isAtEnd {
+                        let kind = try names.number(1)
+                        let name = try names.vector(2)
+                        if kind == 0 {
+                            guard let text = Runtime.decodeUtf8(bytes: name) else {
+                                throw TlsError.Failed(.illegalParameter, reason: "a server name that is not UTF-8")
+                            }
+                            hello.serverName = text
+                        }
+                    }
+                }
+                case 13 => {
+                    sawSchemes = true
+                    var schemes = TlsReader(try data.vector(2), "signature_algorithms")
+                    while !schemes.isAtEnd {
+                        hello.signatureSchemes.append(try schemes.number(2))
+                    }
+                }
+                case 16 => {
+                    var names = TlsReader(try data.vector(2), "application_layer_protocol_negotiation")
+                    while !names.isAtEnd {
+                        let name = try names.vector(1)
+                        if let text = Runtime.decodeUtf8(bytes: name) {
+                            hello.applicationProtocols.append(text)
+                        }
+                    }
+                }
+                case 43 => {
+                    sawVersions = true
+                    var versions = TlsReader(try data.vector(1), "supported_versions")
+                    while !versions.isAtEnd {
+                        hello.versions.append(try versions.number(2))
+                    }
+                }
+                case 51 => {
+                    sawShares = true
+                    var shares = TlsReader(try data.vector(2), "key_share")
+                    while !shares.isAtEnd {
+                        let group = try shares.number(2)
+                        hello.keyShares.append((group, try shares.vector(2)))
+                    }
+                }
+                default => _ = try data.take(data.bytes.count - data.at)
+            }
+            try data.finish()
+        }
+        if !sawVersions {
+            throw TlsError.Failed(.protocolVersion, reason: "a client that does not speak TLS 1.3")
+        }
+        if !sawSchemes || !sawShares {
+            throw TlsError.Failed(.missingExtension, reason: "a ClientHello without \(sawSchemes ? "key_share" : "signature_algorithms")")
+        }
+        return hello
+    }
+}
+
+/// Where a server's handshake is.
+enum ServerState: Sendable {
+    WaitClientHello
+    WaitFinished
+    Connected
+}

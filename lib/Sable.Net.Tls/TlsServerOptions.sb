@@ -1,0 +1,38 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+import Sable.Crypto.X509
+
+/// How a server answers: the certificate chain it sends, its own first,
+/// the private key of that certificate, which signs the handshake, and the
+/// application protocols (ALPN, RFC 7301) and suites it takes, the one it
+/// prefers first. A key of P-256 or P-384 signs with ECDSA, of Ed25519 with
+/// Ed25519, and of RSA with RSA-PSS.
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let certificate = try! CertificateBuilder(subject: DistinguishedName([]), host: "localhost").selfSigned(with: key)
+/// var options = TlsServerOptions(certificateChain: [certificate], privateKey: key)
+/// options.applicationProtocols = ["h2", "http/1.1"]
+/// assert(options.cipherSuites.count == 3)
+/// ```
+public struct TlsServerOptions: Sendable {
+    /// The certificates sent, the server's own first, then each one's
+    /// issuer.
+    public var certificateChain: Certificate[>..]
+
+    /// The key of the first certificate.
+    public var privateKey: PrivateKey
+
+    /// The application protocols taken, the one preferred first; none for a
+    /// server that takes no part in ALPN.
+    public var applicationProtocols: String[>..] = []
+
+    /// The suites taken, the one preferred first.
+    public var cipherSuites: TlsCipherSuite[>..] = TlsCipherSuite.all
+
+    public init(certificateChain: Certificate[:], privateKey: PrivateKey) {
+        self.certificateChain = certificateChain.toArray()
+        self.privateKey = privateKey
+    }
+}

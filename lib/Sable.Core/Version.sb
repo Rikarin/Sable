@@ -1,0 +1,282 @@
+module Sable.Core
+
+/// A semantic version, SemVer 2.0.0's `major.minor.patch[-preRelease][+build]`:
+/// what packages carry and what a `VersionRequirement` matches. Versions are
+/// ordered by SemVer's precedence: by the three numbers, then a pre-release
+/// below its release, its identifiers compared one by one (numbers as
+/// numbers, below words, words in ASCII order), the shorter list first when
+/// one begins the other. Build metadata is kept and written, but ordering
+/// and equality ignore it. The rules are the `sable` package manager's.
+///
+/// ```sable
+/// let v = try! Version.parse("1.4.2-beta.3+build.7")
+/// assert(v.major == 1 && v.minor == 4 && v.patch == 2)
+/// assert(v.preRelease == ["beta", "3"] && v.build == ["build", "7"])
+/// assert(v < Version(1, 4, 2) && Version(1, 4, 2) < Version(1, 5, 0))
+/// assert(v == (try! Version.parse("1.4.2-beta.3")))
+/// assert("\(v)" == "1.4.2-beta.3+build.7")
+/// ```
+public struct Version {
+    /// The first number: raised for a change that breaks what used it.
+    public let major: Int
+    /// The second number: raised for what is added without breaking.
+    public let minor: Int
+    /// The third number: raised for a fix.
+    public let patch: Int
+    /// The dot-separated pre-release identifiers: empty for a release.
+    public let preRelease: String[>..]
+    /// The dot-separated build metadata identifiers: empty when there is none.
+    public let build: String[>..]
+
+    /// The version of these numbers and identifiers. Each number is at
+    /// least 0, and each identifier one or more of `0-9A-Za-z-`, a
+    /// pre-release one of digits alone without a leading zero.
+    ///
+    /// ```sable
+    /// let v = Version(2, 0, 0, preRelease: ["rc", "1"], build: ["sha", "5114f85"])
+    /// assert(v.toString() == "2.0.0-rc.1+sha.5114f85")
+    /// ```
+    public init(_ major: Int, _ minor: Int, _ patch: Int, preRelease: String[>..] = [], build: String[>..] = []) {
+        precondition(major >= 0 && minor >= 0 && patch >= 0, "a version's numbers are at least 0, and not \(major).\(minor).\(patch)")
+        for identifier in preRelease {
+            precondition(Version.isIdentifier(identifier, numericWithoutLeadingZero: true), "'\(identifier)' is not a pre-release identifier")
+        }
+        for identifier in build {
+            precondition(Version.isIdentifier(identifier, numericWithoutLeadingZero: false), "'\(identifier)' is not a build identifier")
+        }
+        self.major = major
+        self.minor = minor
+        self.patch = patch
+        self.preRelease = preRelease
+        self.build = build
+    }
+
+    /// Whether it is a pre-release: whether it has pre-release identifiers.
+    public var isPreRelease: Bool => preRelease.count > 0
+
+    /// The release of its numbers, without pre-release or build.
+    ///
+    /// ```sable
+    /// assert((try! Version.parse("1.2.3-rc.1+b")).release.toString() == "1.2.3")
+    /// ```
+    public var release: Version => Version(major, minor, patch)
+
+    /// The lowest version of its numbers there is, `x.y.z-0`: below every
+    /// pre-release of them.
+    public var firstPreRelease: Version => Version(major, minor, patch, preRelease: ["0"])
+
+    /// The next major release: `2.0.0` after `1.4.2`.
+    public var nextMajor: Version => Version(major + 1, 0, 0)
+
+    /// The next minor release: `1.5.0` after `1.4.2`.
+    public var nextMinor: Version => Version(major, minor + 1, 0)
+
+    /// The next patch release: `1.4.3` after `1.4.2`.
+    public var nextPatch: Version => Version(major, minor, patch + 1)
+
+    static fn isIdentifier(_ text: String, numericWithoutLeadingZero: Bool) -> Bool {
+        let scalars = text.toArray()
+        if scalars.isEmpty {
+            return false
+        }
+        var digits = true
+        for c in scalars {
+            if !c.isAsciiAlphanumeric && c != '-' {
+                return false
+            }
+            digits = digits && c.isAsciiDigit
+        }
+        return !(numericWithoutLeadingZero && digits && scalars.count > 1 && scalars[0] == '0')
+    }
+
+    // The index of the first 'c' in from..<to, or 'to'.
+    static fn find(_ scalars: Char[>..], _ c: Char, _ from: Int, _ to: Int) -> Int {
+        var i = from
+        while i < to && scalars[i] != c {
+            i += 1
+        }
+        return i
+    }
+
+    // The number from..<to writes: digits, no leading zero.
+    static fn number(_ scalars: Char[>..], _ from: Int, _ to: Int) throws(ParseError) -> Int {
+        if from >= to {
+            throw .InvalidDigit(at: from)
+        }
+        if scalars[from] == '0' && to - from > 1 {
+            throw .Invalid(at: from)
+        }
+        var n = 0
+        var i = from
+        while i < to {
+            let c = scalars[i]
+            if !c.isAsciiDigit {
+                throw .InvalidDigit(at: i)
+            }
+            let digit = c.codePoint - 0x30
+            if n > (Int.max - digit) / 10 {
+                throw .Overflow
+            }
+            n = n * 10 + digit
+            i += 1
+        }
+        return n
+    }
+
+    // The dot-separated identifiers from..<to: each one or more of
+    // 0-9A-Za-z-, and a pre-release's numbers without a leading zero.
+    static fn identifiers(_ scalars: Char[>..], _ from: Int, _ to: Int, preRelease: Bool) throws(ParseError) -> String[>..] {
+        var result: String[>..] = []
+        var start = from
+        while true {
+            let stop = Version.find(scalars, '.', start, to)
+            if stop == start {
+                throw .Invalid(at: start)
+            }
+            var digits = true
+            var i = start
+            while i < stop {
+                let c = scalars[i]
+                if !c.isAsciiAlphanumeric && c != '-' {
+                    throw .Invalid(at: i)
+                }
+                digits = digits && c.isAsciiDigit
+                i += 1
+            }
+            if preRelease && digits && stop - start > 1 && scalars[start] == '0' {
+                throw .Invalid(at: start)
+            }
+            result.append(String(scalars[start..<stop]))
+            if stop == to {
+                return result
+            }
+            start = stop + 1
+        }
+    }
+
+    // The version from..<to writes.
+    static fn parseScalars(_ scalars: Char[>..], _ from: Int, _ to: Int) throws(ParseError) -> Version {
+        if from >= to {
+            throw .Empty
+        }
+        let plus = Version.find(scalars, '+', from, to)
+        let dash = Version.find(scalars, '-', from, plus)
+        let first = Version.find(scalars, '.', from, dash)
+        if first == dash {
+            throw .InvalidDigit(at: dash)
+        }
+        let second = Version.find(scalars, '.', first + 1, dash)
+        if second == dash {
+            throw .InvalidDigit(at: dash)
+        }
+        let major = try Version.number(scalars, from, first)
+        let minor = try Version.number(scalars, first + 1, second)
+        let patch = try Version.number(scalars, second + 1, dash)
+        let preRelease = dash < plus ? try Version.identifiers(scalars, dash + 1, plus, preRelease: true) : []
+        let build = plus < to ? try Version.identifiers(scalars, plus + 1, to, preRelease: false) : []
+        return Version(major, minor, patch, preRelease: preRelease, build: build)
+    }
+
+    // A pre-release identifier's order against another's.
+    static fn compareIdentifiers(_ a: String, _ b: String) -> Ordering {
+        let aNumeric = a.toArray().allSatisfy { c in c.isAsciiDigit }
+        let bNumeric = b.toArray().allSatisfy { c in c.isAsciiDigit }
+        if aNumeric && bNumeric {
+            // Without leading zeros, the longer number is the larger, however long.
+            return a.count != b.count ? a.count.compare(b.count) : a.compare(b)
+        }
+        if aNumeric != bNumeric {
+            return aNumeric ? .Less : .Greater
+        }
+        return a.compare(b)
+    }
+
+    /// Its order against another by SemVer's precedence, build metadata
+    /// ignored.
+    ///
+    /// ```sable
+    /// assert(Version(1, 0, 0).compare(try! Version.parse("1.0.0-rc.1")) == .Greater)
+    /// ```
+    public fn compare(_ other: Version) -> Ordering {
+        let numbers = major.compare(other.major).then(minor.compare(other.minor)).then(patch.compare(other.patch))
+        if numbers != .Equal {
+            return numbers
+        }
+        // A release is above every pre-release of it.
+        if !isPreRelease || !other.isPreRelease {
+            return isPreRelease == other.isPreRelease ? .Equal : isPreRelease ? .Less : .Greater
+        }
+        var i = 0
+        while i < preRelease.count && i < other.preRelease.count {
+            let c = Version.compareIdentifiers(preRelease[i], other.preRelease[i])
+            if c != .Equal {
+                return c
+            }
+            i += 1
+        }
+        return preRelease.count.compare(other.preRelease.count)
+    }
+}
+
+extension Version: Comparable, Hashable {
+    /// The same numbers and pre-release: build metadata is ignored.
+    public operator == (lhs: Version, rhs: Version) -> Bool {
+        return lhs.compare(rhs) == .Equal
+    }
+
+    /// Before, by SemVer's precedence.
+    public operator < (lhs: Version, rhs: Version) -> Bool {
+        return lhs.compare(rhs) == .Less
+    }
+
+    /// The numbers and the pre-release: what '==' compares.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(major)
+        hasher.combine(minor)
+        hasher.combine(patch)
+        for identifier in preRelease {
+            hasher.combine(identifier)
+        }
+    }
+}
+
+extension Version: Parsable {
+    /// The version the whole text writes: three numbers without leading
+    /// zeros, then `-` and the pre-release, then `+` and the build, as
+    /// SemVer 2.0.0 has them, and nothing around them.
+    ///
+    /// ```sable
+    /// assert((try? Version.parse("1.2")) == none)
+    /// assert((try? Version.parse("01.2.3")) == none)
+    /// assert((try! Version.parse("1.0.0-x-y-z.--")).preRelease == ["x-y-z", "--"])
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Version {
+        let scalars = text.toString().toArray()
+        return try Version.parseScalars(scalars, 0, scalars.count)
+    }
+}
+
+extension Version: Formattable {
+    /// The version as `parse` reads it.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(toString())
+    }
+
+    /// The version as `parse` reads it: `1.4.2-beta.3+build.7`.
+    public fn toString() -> String {
+        var text = "\(major).\(minor).\(patch)"
+        if isPreRelease {
+            text += "-" + preRelease.joined(separator: ".")
+        }
+        if build.count > 0 {
+            text += "+" + build.joined(separator: ".")
+        }
+        return text
+    }
+}
+
+extension Version: Debug {
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

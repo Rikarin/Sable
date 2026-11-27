@@ -13,6 +13,9 @@ public sealed class SemverTests {
             Assert.True(V(ordered[i]) < V(ordered[i + 1]), $"{ordered[i]} < {ordered[i + 1]}");
         }
 
+        // Numeric identifiers compare as numbers however long, as lib/Sable.Core/Version.sb does.
+        Assert.True(V("1.0.0-99999999999999999999") < V("1.0.0-100000000000000000000"));
+        Assert.True(V("1.0.0-99999999999999999999") < V("1.0.0-a"));
         Assert.Equal(V("1.0.0+build.5"), V("1.0.0"));
         Assert.Equal("1.2.3-rc.1+meta", V("1.2.3-rc.1+meta").ToString());
     }

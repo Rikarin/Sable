@@ -120,10 +120,11 @@ public sealed class SemVersion : IComparable<SemVersion>, IEquatable<SemVersion>
         for (var i = 0; i < Math.Min(Prerelease.Count, other.Prerelease.Count); i++) {
             var a = Prerelease[i];
             var b = other.Prerelease[i];
-            var aNumeric = TryNumber(a, out var x);
-            var bNumeric = TryNumber(b, out var y);
+            // Without leading zeros, the longer number is the larger, however long.
+            var aNumeric = a.All(char.IsAsciiDigit);
+            var bNumeric = b.All(char.IsAsciiDigit);
             c = (aNumeric, bNumeric) switch {
-                (true, true) => x.CompareTo(y),
+                (true, true) => a.Length != b.Length ? a.Length.CompareTo(b.Length) : string.CompareOrdinal(a, b),
                 (true, false) => -1,
                 (false, true) => 1,
                 _ => string.CompareOrdinal(a, b),

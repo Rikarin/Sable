@@ -1,0 +1,362 @@
+module Sable.Core
+
+/// Which versions will do: a version requirement in the syntax the `sable`
+/// package manager reads (Cargo's). A comparator is a version, whole or
+/// partial, after an operator:
+///
+/// - `^1.2.3` or bare `1.2.3`: up to the next change that may break, the
+///   first nonzero number's (`>=1.2.3, <2.0.0`; `^0.2.3` is `<0.3.0`,
+///   `^0.0.3` is `<0.0.4`);
+/// - `~1.2.3`: up to the next minor (`<1.3.0`), `~1` to the next major;
+/// - `=1.2.3`, `>1.2.3`, `>=1.2.3`, `<1.2.3`, `<=1.2.3`; a partial version
+///   stands for all of its versions there: `=1.2` is `>=1.2.0, <1.3.0` and
+///   `>1.2` is `>=1.3.0`;
+/// - `*`, `1.*`, `1.2.x`: any version, or any of those numbers.
+///
+/// Comparators joined with `,` must all hold. An upper bound excludes the
+/// pre-releases of its version too (`<2.0.0` refuses `2.0.0-rc.1`), and a
+/// pre-release matches only when a comparator names one.
+///
+/// ```sable
+/// let req = try! VersionRequirement.parse("^1.2, <1.8")
+/// assert(req.matches(Version(1, 7, 9)))
+/// assert(!req.matches(Version(1, 8, 0)) && !req.matches(Version(1, 1, 0)))
+/// assert(!req.matches(try! Version.parse("1.5.0-rc.1")))
+/// let available = [Version(1, 1, 0), Version(1, 4, 2), Version(1, 9, 0)]
+/// assert(req.best(of: available) == Version(1, 4, 2))
+/// ```
+public struct VersionRequirement {
+    /// The requirement as it was written, without surrounding white space.
+    public let text: String
+
+    // The versions it holds: from 'lower' to 'upper', 'none' for no bound.
+    let lower: Version?
+    let lowerInclusive: Bool
+    let upper: Version?
+    let upperInclusive: Bool
+
+    /// Whether a comparator names a pre-release, which lets the
+    /// requirement match pre-releases.
+    public let mentionsPreRelease: Bool
+
+    init(text: String, lower: Version?, lowerInclusive: Bool, upper: Version?, upperInclusive: Bool, mentionsPreRelease: Bool) {
+        self.text = text
+        self.lower = lower
+        self.lowerInclusive = lowerInclusive
+        self.upper = upper
+        self.upperInclusive = upperInclusive
+        self.mentionsPreRelease = mentionsPreRelease
+    }
+
+    /// Every version: `*`.
+    ///
+    /// ```sable
+    /// assert(VersionRequirement.anyVersion.matches(Version(0, 0, 1)))
+    /// ```
+    public static var anyVersion: VersionRequirement {
+        get {
+            return VersionRequirement(text: "*", lower: none, lowerInclusive: false, upper: none, upperInclusive: false, mentionsPreRelease: false)
+        }
+    }
+
+    /// That version alone: `=1.2.3`.
+    ///
+    /// ```sable
+    /// let req = VersionRequirement.exactly(Version(1, 2, 3))
+    /// assert(req.matches(Version(1, 2, 3)) && !req.matches(Version(1, 2, 4)))
+    /// assert(req.toString() == "=1.2.3")
+    /// ```
+    public static fn exactly(_ version: Version) -> VersionRequirement {
+        return VersionRequirement(text: "=\(version)", lower: version, lowerInclusive: true, upper: version, upperInclusive: true, mentionsPreRelease: version.isPreRelease)
+    }
+
+    /// Whether no version can match it: `>2, <1`.
+    public var isEmpty: Bool {
+        get {
+            if let low = lower {
+                if let high = upper {
+                    return low > high || (low == high && !(lowerInclusive && upperInclusive))
+                }
+            }
+            return false
+        }
+    }
+
+    /// Whether the version is one it allows: between its bounds, and a
+    /// release unless the requirement names a pre-release.
+    ///
+    /// ```sable
+    /// let req = try! VersionRequirement.parse(">=1.0.0-beta")
+    /// assert(req.matches(try! Version.parse("1.0.0-rc.1")) && req.matches(Version(3, 0, 0)))
+    /// ```
+    public fn matches(_ version: Version) -> Bool {
+        if version.isPreRelease && !mentionsPreRelease {
+            return false
+        }
+        if let low = lower {
+            if lowerInclusive ? version < low : version <= low {
+                return false
+            }
+        }
+        if let high = upper {
+            if upperInclusive ? version > high : version >= high {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// The highest of the versions that it matches, or `none` if it matches
+    /// none of them: what a resolver picks.
+    ///
+    /// ```sable
+    /// let req = try! VersionRequirement.parse("~0.3")
+    /// assert(req.best(of: [Version(0, 3, 1), Version(0, 4, 0)]) == Version(0, 3, 1))
+    /// assert(req.best(of: [Version(0, 2, 0)]) == none)
+    /// ```
+    public fn best(of versions: Version[:]) -> Version? {
+        var best: Version? = none
+        for version in versions {
+            if matches(version) {
+                if let so = best {
+                    if version > so {
+                        best = version
+                    }
+                } else {
+                    best = version
+                }
+            }
+        }
+        return best
+    }
+
+    /// What both allow: the two written as one, joined by `,`.
+    ///
+    /// ```sable
+    /// let both = (try! VersionRequirement.parse("^1.2")).intersection(try! VersionRequirement.parse("<1.5"))
+    /// assert(both.toString() == "^1.2, <1.5")
+    /// assert(both.matches(Version(1, 4, 0)) && !both.matches(Version(1, 5, 0)))
+    /// ```
+    public fn intersection(_ other: VersionRequirement) -> VersionRequirement {
+        var lower = self.lower
+        var lowerInclusive = self.lowerInclusive
+        if let theirs = other.lower {
+            if let ours = lower {
+                if theirs > ours || (theirs == ours && !other.lowerInclusive) {
+                    lower = theirs
+                    lowerInclusive = other.lowerInclusive
+                }
+            } else {
+                lower = theirs
+                lowerInclusive = other.lowerInclusive
+            }
+        }
+        var upper = self.upper
+        var upperInclusive = self.upperInclusive
+        if let theirs = other.upper {
+            if let ours = upper {
+                if theirs < ours || (theirs == ours && !other.upperInclusive) {
+                    upper = theirs
+                    upperInclusive = other.upperInclusive
+                }
+            } else {
+                upper = theirs
+                upperInclusive = other.upperInclusive
+            }
+        }
+        return VersionRequirement(text: "\(text), \(other.text)", lower: lower, lowerInclusive: lowerInclusive, upper: upper, upperInclusive: upperInclusive,
+            mentionsPreRelease: mentionsPreRelease || other.mentionsPreRelease)
+    }
+
+    // The versions from 'low' up to, and not with, 'high' and its pre-releases.
+    static fn range(_ low: Version, _ high: Version) -> VersionRequirement {
+        return VersionRequirement(text: "", lower: low, lowerInclusive: true, upper: high.firstPreRelease, upperInclusive: false, mentionsPreRelease: false)
+    }
+
+    static fn bounded(_ lower: Version?, _ lowerInclusive: Bool, _ upper: Version?, _ upperInclusive: Bool) -> VersionRequirement {
+        return VersionRequirement(text: "", lower: lower, lowerInclusive: lowerInclusive, upper: upper, upperInclusive: upperInclusive, mentionsPreRelease: false)
+    }
+
+    // One more than the number, or Overflow: past the largest there is no next version.
+    static fn next(_ n: Int) throws(ParseError) -> Int {
+        if n == Int.max {
+            throw .Overflow
+        }
+        return n + 1
+    }
+
+    // The first version past what a partial version names: past 1.2 is 1.3.0.
+    static fn past(_ numbers: Int[>..]) throws(ParseError) -> Version {
+        if numbers.count == 1 {
+            return Version(try VersionRequirement.next(numbers[0]), 0, 0)
+        }
+        if numbers.count == 2 {
+            return Version(numbers[0], try VersionRequirement.next(numbers[1]), 0)
+        }
+        return Version(numbers[0], numbers[1], try VersionRequirement.next(numbers[2]))
+    }
+
+    // The comparator from..<to writes, white space trimmed.
+    static fn comparator(_ scalars: Char[>..], _ from: Int, _ to: Int) throws(ParseError) -> VersionRequirement {
+        var start = from
+        let c0 = scalars[start]
+        let c1: Char = start + 1 < to ? scalars[start + 1] : ' '
+        var op = ""
+        if (c0 == '>' || c0 == '<') && c1 == '=' {
+            op = c0 == '>' ? ">=" : "<="
+        } else if c0 == '>' || c0 == '<' || c0 == '=' || c0 == '^' || c0 == '~' {
+            op = String([c0])
+        }
+        start += op.count
+        while start < to && scalars[start].isWhitespace {
+            start += 1
+        }
+        if start >= to {
+            throw .Invalid(at: start)
+        }
+        // Build metadata goes first: a '-' in it ('1.0.0+b-2') starts no
+        // pre-release. It is checked, and ignored as a version's is.
+        let plus = Version.find(scalars, '+', start, to)
+        if plus < to {
+            _ = try Version.identifiers(scalars, plus + 1, to, preRelease: false)
+        }
+        let dash = Version.find(scalars, '-', start, plus)
+        var numbers: Int[>..] = []
+        var parts = 0
+        var wildcard = false
+        var at = start
+        while true {
+            let stop = Version.find(scalars, '.', at, dash)
+            parts += 1
+            if parts > 3 {
+                throw .Invalid(at: at)
+            }
+            let c = scalars[at]
+            if stop == at + 1 && (c == '*' || c == 'x' || c == 'X') {
+                wildcard = true
+            } else if wildcard {
+                // Nothing but a wildcard may follow one.
+                throw .Invalid(at: at)
+            } else {
+                numbers.append(try Version.number(scalars, at, stop))
+            }
+            if stop == dash {
+                break
+            }
+            at = stop + 1
+            if at >= dash {
+                throw .InvalidDigit(at: at)
+            }
+        }
+        if dash < plus && numbers.count < 3 {
+            // A pre-release needs major.minor.patch.
+            throw .Invalid(at: dash)
+        }
+        if numbers.count == 0 {
+            if op.count > 0 {
+                throw .Invalid(at: start)
+            }
+            return VersionRequirement.anyVersion
+        }
+        if wildcard && op.count > 0 {
+            throw .Invalid(at: start)
+        }
+        let preRelease = dash < plus ? try Version.identifiers(scalars, dash + 1, plus, preRelease: true) : []
+        let major = numbers[0]
+        let minor = numbers.count > 1 ? numbers[1] : 0
+        let patch = numbers.count > 2 ? numbers[2] : 0
+        let low = Version(major, minor, patch, preRelease: preRelease)
+        let exact = numbers.count == 3
+        var result = VersionRequirement.anyVersion
+        if wildcard {
+            result = VersionRequirement.range(low, try VersionRequirement.past(numbers))
+        } else if op == "" || op == "^" {
+            let high = major > 0 ? Version(try VersionRequirement.next(major), 0, 0)
+                : numbers.count == 1 ? Version(1, 0, 0)
+                : minor > 0 ? Version(0, try VersionRequirement.next(minor), 0)
+                : numbers.count == 2 ? Version(0, 1, 0)
+                : Version(0, 0, try VersionRequirement.next(patch))
+            result = VersionRequirement.range(low, high)
+        } else if op == "~" {
+            result = VersionRequirement.range(low, numbers.count == 1 ? Version(try VersionRequirement.next(major), 0, 0) : Version(major, try VersionRequirement.next(minor), 0))
+        } else if op == "=" {
+            result = exact ? VersionRequirement.bounded(low, true, low, true) : VersionRequirement.range(low, try VersionRequirement.past(numbers))
+        } else if op == ">=" {
+            result = VersionRequirement.bounded(low, true, none, false)
+        } else if op == ">" {
+            result = exact ? VersionRequirement.bounded(low, false, none, false) : VersionRequirement.bounded(try VersionRequirement.past(numbers), true, none, false)
+        } else if op == "<" {
+            result = VersionRequirement.bounded(none, false, exact && low.isPreRelease ? low : low.firstPreRelease, false)
+        } else {
+            result = exact ? VersionRequirement.bounded(none, false, low, true) : VersionRequirement.bounded(none, false, (try VersionRequirement.past(numbers)).firstPreRelease, false)
+        }
+        return VersionRequirement(text: "", lower: result.lower, lowerInclusive: result.lowerInclusive, upper: result.upper, upperInclusive: result.upperInclusive,
+            mentionsPreRelease: low.isPreRelease)
+    }
+}
+
+extension VersionRequirement: Parsable {
+    /// The requirement the whole text writes: comparators joined by `,`,
+    /// white space allowed around each.
+    ///
+    /// ```sable
+    /// assert((try! VersionRequirement.parse(" >= 1.2 , < 2 ")).toString() == ">= 1.2 , < 2")
+    /// assert((try? VersionRequirement.parse("^1.2,")) == none)
+    /// assert((try? VersionRequirement.parse(">=1.*")) == none)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> VersionRequirement {
+        let scalars = text.toString().toArray()
+        var first = 0
+        var last = scalars.count
+        while first < last && scalars[first].isWhitespace {
+            first += 1
+        }
+        while last > first && scalars[last - 1].isWhitespace {
+            last -= 1
+        }
+        if first == last {
+            throw .Empty
+        }
+        var result = VersionRequirement.anyVersion
+        var start = first
+        while true {
+            let comma = Version.find(scalars, ',', start, last)
+            var from = start
+            var to = comma
+            while from < to && scalars[from].isWhitespace {
+                from += 1
+            }
+            while to > from && scalars[to - 1].isWhitespace {
+                to -= 1
+            }
+            if from == to {
+                throw .Invalid(at: from)
+            }
+            result = result.intersection(try VersionRequirement.comparator(scalars, from, to))
+            if comma == last {
+                break
+            }
+            start = comma + 1
+        }
+        return VersionRequirement(text: String(scalars[first..<last]), lower: result.lower, lowerInclusive: result.lowerInclusive, upper: result.upper,
+            upperInclusive: result.upperInclusive, mentionsPreRelease: result.mentionsPreRelease)
+    }
+}
+
+extension VersionRequirement: Formattable {
+    /// The requirement as it was written.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(text)
+    }
+
+    /// The requirement as it was written: what `parse` reads back.
+    public fn toString() -> String {
+        return text
+    }
+}
+
+extension VersionRequirement: Debug {
+    public fn debugDescription() -> String {
+        return text
+    }
+}

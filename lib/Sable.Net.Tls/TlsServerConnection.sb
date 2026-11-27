@@ -9,8 +9,9 @@ import Sable.Time
 /// is to be sent back comes out of `takeOutgoing`. `TlsStream.accept` drives
 /// one over a stream; a test, or another transport, may drive it by hand.
 ///
-/// The handshake has an ephemeral key exchange of X25519 or P-256,
-/// whichever the client offers a share of (X25519 preferred); the server's
+/// The handshake has an ephemeral key exchange of X25519 or P-256, the
+/// first of the options' groups the client takes; a client whose share is
+/// of another is asked for one of it with a HelloRetryRequest. The server's
 /// certificate chain is sent and the handshake signed by its key. After the
 /// handshake a ticket of the session goes to the client, sealed with the
 /// options' ticket key; a client that offers one back resumes the session
@@ -45,6 +46,11 @@ public struct TlsServerConnection: Sendable {
     /// The key schedule at its master secret, once the server's flight is
     /// sent.
     var schedule: TlsKeySchedule? = none
+
+    /// The suite and the group of the HelloRetryRequest sent, if one was:
+    /// the group none.
+    var retriedSuite: TlsCipherSuite? = none
+    var retriedGroup = 0
 
     /// Whether the client resumed a session of a ticket.
     public private(set) var isResumed = false
@@ -149,8 +155,9 @@ public struct TlsServerConnection: Sendable {
                 }
                 let earlier = transcript
                 transcript.append(contentsOf: message)
-                try answer(try ClientHello.read(&body), message, earlier)
-                state = !isResumed && options.clientAuthentication.verifier != none ? .WaitCertificate : .WaitFinished
+                if try answer(try ClientHello.read(&body), message, earlier) {
+                    state = !isResumed && options.clientAuthentication.verifier != none ? .WaitCertificate : .WaitFinished
+                }
             }
             case .WaitCertificate => {
                 if type != 11 {
@@ -264,9 +271,37 @@ public struct TlsServerConnection: Sendable {
         return cipherSuite!.hashAlgorithm.digest(of: transcript).bytes
     }
 
+    /// A HelloRetryRequest for a share of the group (RFC 8446 §4.1.4), and
+    /// the transcript begun again with the hash of the first ClientHello.
+    mutating fn askAgain(_ hello: ClientHello, _ message: U8[:], suite: TlsCipherSuite, group: Int) throws(TlsError) {
+        var body: U8[>..] = [3, 3]
+        body.append(contentsOf: TlsClientConnection.retryRandom)
+        appendVector(&body, hello.sessionId, 1)
+        appendNumber(&body, suite.code, 2)
+        body.append(0)
+        var extensions: U8[>..] = []
+        appendExtension(&extensions, 43, [3, 4])
+        var share: U8[>..] = []
+        appendNumber(&share, group, 2)
+        appendExtension(&extensions, 51, share)
+        appendVector(&body, extensions, 2)
+        let request = handshakeMessage(2, body)
+        try records.send(request)
+        if !hello.sessionId.isEmpty {
+            records.outgoing.append(contentsOf: [20, 3, 3, 0, 1, 1])
+        }
+        let hash = suite.hashAlgorithm.digest(of: message).bytes
+        transcript = [254, 0, 0, U8(hash.count)]
+        transcript.append(contentsOf: hash)
+        transcript.append(contentsOf: request)
+        retriedSuite = suite
+        retriedGroup = group
+    }
+
     /// The server's flight, ServerHello to Finished, for the hello: the
-    /// message, after the transcript before it.
-    mutating fn answer(_ hello: ClientHello, _ message: U8[:], _ earlier: U8[:]) throws(TlsError) {
+    /// message, after the transcript before it. False if a
+    /// HelloRetryRequest was sent instead.
+    mutating fn answer(_ hello: ClientHello, _ message: U8[:], _ earlier: U8[:]) throws(TlsError) -> Bool {
         if !hello.versions.contains(0x0304) {
             throw TlsError.Failed(.protocolVersion, reason: "a client that does not speak TLS 1.3")
         }
@@ -285,18 +320,36 @@ public struct TlsServerConnection: Sendable {
         if options.certificateChain.isEmpty {
             throw TlsError.Failed(.internalError, reason: "a server with no certificate")
         }
-        var clientShare: (Int, U8[>..])? = none
-        for group in [0x001D, 0x0017] {
-            if clientShare == none {
-                for (offered, key) in hello.keyShares {
-                    if clientShare == none && offered == group {
-                        clientShare = (offered, key)
-                    }
-                }
+        if retriedGroup != 0 && suite != retriedSuite {
+            throw TlsError.Failed(.illegalParameter, reason: "a second ClientHello whose suite is not its HelloRetryRequest's")
+        }
+        var takes: Int[>..] = hello.groups
+        if takes.isEmpty {
+            for (offered, _) in hello.keyShares {
+                takes.append(offered)
             }
         }
-        guard let (group, clientKey) = clientShare else {
-            throw TlsError.Failed(.handshakeFailure, reason: "the client offers no key share of X25519 or P-256")
+        var chosenGroup: Int? = none
+        for each in options.groups {
+            if chosenGroup == none && takes.contains(each.code) {
+                chosenGroup = each.code
+            }
+        }
+        guard let group = chosenGroup else {
+            throw TlsError.Failed(.handshakeFailure, reason: "the client takes no group the server does")
+        }
+        var clientShare: U8[>..]? = none
+        for (offered, key) in hello.keyShares {
+            if clientShare == none && offered == group {
+                clientShare = key
+            }
+        }
+        guard let clientKey = clientShare else {
+            if retriedGroup != 0 {
+                throw TlsError.Failed(.illegalParameter, reason: "a second ClientHello without a share of the group asked for")
+            }
+            try askAgain(hello, message, suite: suite, group: group)
+            return false
         }
         if !options.applicationProtocols.isEmpty && !hello.applicationProtocols.isEmpty {
             for name in options.applicationProtocols {
@@ -341,7 +394,7 @@ public struct TlsServerConnection: Sendable {
         appendVector(&body, extensions, 2)
         let serverHello = handshakeMessage(2, body)
         try records.send(serverHello)
-        if !hello.sessionId.isEmpty {
+        if !hello.sessionId.isEmpty && retriedGroup == 0 {
             records.outgoing.append(contentsOf: [20, 3, 3, 0, 1, 1])
         }
         transcript.append(contentsOf: serverHello)
@@ -413,6 +466,7 @@ public struct TlsServerConnection: Sendable {
         clientApplicationSecret = schedule.deriveSecret("c ap traffic", transcriptHash: finishedHash)
         records.useOwnKey(schedule.deriveSecret("s ap traffic", transcriptHash: finishedHash))
         self.schedule = schedule
+        return true
     }
 
     /// The message added to the transcript and to the flight to send.
@@ -460,6 +514,7 @@ struct ClientHello {
     var keyShares: (Int, U8[>..])[>..] = []
     var applicationProtocols: String[>..] = []
     var serverName: String? = none
+    var groups: Int[>..] = []
     var pskModes: Int[>..] = []
     var identities: U8[>..][>..] = []
     var binders: U8[>..][>..] = []
@@ -533,6 +588,12 @@ struct ClientHello {
                     var versions = TlsReader(try data.vector(1), "supported_versions")
                     while !versions.isAtEnd {
                         hello.versions.append(try versions.number(2))
+                    }
+                }
+                case 10 => {
+                    var groups = TlsReader(try data.vector(2), "supported_groups")
+                    while !groups.isAtEnd {
+                        hello.groups.append(try groups.number(2))
                     }
                 }
                 case 45 => {

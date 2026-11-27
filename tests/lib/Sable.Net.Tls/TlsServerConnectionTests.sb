@@ -341,3 +341,88 @@ fn aSecondClientHelloIsUnexpected() throws {
     let error = expectThrows(TlsError.self) { try server.receive(Rfc8448.clientHelloRecord) }
     expect(error?.alert != none)
 }
+
+/// The random of the ServerHello at the front of the bytes: the
+/// HelloRetryRequest's if the server asked again.
+fn serverRandom(_ sent: U8[:]) -> U8[>..] {
+    return sent[5 + 4 + 2..<5 + 4 + 2 + 32].toArray()
+}
+
+/// The random every HelloRetryRequest has (RFC 8446 §4.1.3).
+fn retryRandom() -> U8[>..] {
+    return hex("cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c")
+}
+
+@test(arguments: [[TlsGroup.P256, TlsGroup.X25519], [TlsGroup.P256]])
+fn aShareOfAGroupThatIsNotTheServersFirstIsAskedForAgain(_ groups: TlsGroup[>..]) throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.groups = groups
+    var server = TlsServerConnection(options: options)
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    try server.receive(client.takeOutgoing())
+    let request = server.takeOutgoing()
+    assertEqual(serverRandom(request), retryRandom())
+    expect(!server.isHandshakeComplete)
+    try client.receive(request)
+    try exchange(&client, &server)
+    require(client.isHandshakeComplete && server.isHandshakeComplete)
+    try client.write([9])
+    try server.receive(client.takeOutgoing())
+    assertEqual(server.takeReceived(), [9])
+}
+
+@test
+fn aServerOfTheClientsGroupDoesNotAskAgain() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var server = TlsServerConnection(options: pki.serverOptions())
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    try server.receive(client.takeOutgoing())
+    expect(serverRandom(server.takeOutgoing()) != retryRandom())
+}
+
+@test
+fn aSecondClientHelloWithoutTheShareAskedForIsRefused() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.groups = [.P256]
+    var server = TlsServerConnection(options: options)
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    let first = client.takeOutgoing()
+    try server.receive(first)
+    _ = server.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try server.receive(first) }
+    expect(error?.alert == .illegalParameter, "\(error)")
+}
+
+@test
+fn aServerOfNoGroupTheClientTakesFails() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.groups = []
+    var server = TlsServerConnection(options: options)
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    let error = expectThrows(TlsError.self) { try server.receive(client.takeOutgoing()) }
+    expect(error?.alert == .handshakeFailure)
+}
+
+@test
+fn aSessionIsResumedAfterAHelloRetryRequest() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var clientOptions = pki.clientOptions()
+    clientOptions.sessionCache = TlsSessionCache()
+    var options = pki.serverOptions()
+    options.time = clientOptions.time
+    var first = TlsClientConnection(host: "localhost", options: clientOptions)
+    var firstServer = TlsServerConnection(options: options)
+    try exchange(&first, &firstServer)
+    options.groups = [.P256]
+    var client = TlsClientConnection(host: "localhost", options: clientOptions)
+    var server = TlsServerConnection(options: options)
+    try server.receive(client.takeOutgoing())
+    let request = server.takeOutgoing()
+    assertEqual(serverRandom(request), retryRandom())
+    try client.receive(request)
+    try exchange(&client, &server)
+    expect(client.isResumed && server.isResumed && client.isHandshakeComplete && server.isHandshakeComplete)
+}

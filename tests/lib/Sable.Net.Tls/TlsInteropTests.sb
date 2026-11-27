@@ -406,3 +406,22 @@ fn opensslsClientSendsItsCertificateToTheServer(_ kind: String) async throws {
     expect(seen == "full CN=carol ", seen)
     try? directory.remove()
 }
+
+/// `s_client` sends a share of its first group alone; a server that
+/// prefers another, or takes no other, asks it for a share of that.
+@test(arguments: [("P-256:X25519", "X25519", "X25519"), ("X25519:P-256", "P-256", "ECDH, prime256v1")])
+fn theServerAsksOpensslsClientForAnotherShare(_ offered: String, _ taken: String, _ key: String) async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let directory = try written(pki)
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    var options = pki.serverOptions()
+    options.groups = taken == "X25519" ? [.X25519, .P256] : [.P256]
+    let serving = options
+    let server = Task.spawn { () -> String in await pongEach(listener, serving, 1) }
+    let (output, well) = try await sClient(directory, listener.port, ["-groups", offered])
+    expect(well && output.contains("pong"), output)
+    expect(output.contains("Peer Temp Key: \(key)"), output)
+    expect(await server.value == "full ")
+    try? directory.remove()
+}

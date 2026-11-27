@@ -305,6 +305,16 @@ public static class SilPassManager {
                         if (alloc.ClassType is { HasGenericDeinit: true, DisplayName: { } display } && display.IndexOf('<') is > 0 and var open
                             && module.GenericDeinits.TryGetValue(display[..open], out var genericDeinit)) {
                             pending.Push(genericDeinit);
+
+                            // Code compiled once for every type makes an object
+                            // of whichever instance its metadata says: each
+                            // instance's deinit may be the one run.
+                            var family = display[..(open + 1)];
+                            foreach (var instance in module.Types.OfType<ClassType>()) {
+                                if (instance.Deinit is { } instanceDeinit && instance.DisplayName?.StartsWith(family, StringComparison.Ordinal) == true) {
+                                    pending.Push(instanceDeinit);
+                                }
+                            }
                         }
 
                         if (alloc.ClassType.TypeArguments is [var held] && alloc.ClassType.Name.StartsWith("any$box$of$", StringComparison.Ordinal)) {

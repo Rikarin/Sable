@@ -2136,19 +2136,23 @@ public sealed class SilModule {
 
     /// <summary>Removes the functions that match, from the list and from <see cref="Find" /> both.</summary>
     public int RemoveAll(Predicate<SilFunction> match) {
+        var gone = new HashSet<string>(StringComparer.Ordinal);
         foreach (var function in Functions) {
             if (match(function) && _byName.TryGetValue(function.Name, out var named) && ReferenceEquals(named, function)) {
                 _byName.Remove(function.Name);
+                gone.Add(function.Name);
             }
         }
 
         var removed = Functions.RemoveAll(match);
 
         // A class whose deinit went is one nothing makes (SilPassManager.Reachable):
-        // there is no object of it to run one on.
-        if (removed > 0 && Unit is null) {
+        // there is no object of it to run one on. Only one removed here: a
+        // deinit not made yet — a generic class's instance, specialised
+        // later — is not gone.
+        if (gone.Count > 0 && Unit is null) {
             foreach (var type in Types.OfType<ClassType>()) {
-                if (type.Deinit is { } deinit && !_byName.ContainsKey(deinit)) {
+                if (type.Deinit is { } deinit && gone.Contains(deinit)) {
                     type.Deinit = null;
                 }
             }

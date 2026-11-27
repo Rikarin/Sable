@@ -58,6 +58,7 @@ fn anAllocationIsFoundByWhereItStarts() {
     let a = heap.allocate(100)!
     expect(heap.allocation(at: 0) == a)
     expect(heap.allocation(at: 64) == none)
+    expect(heap.allocation(at: 3) == none && heap.allocation(at: -64) == none && heap.allocation(at: 4096) == none)
     heap.free(at: 0)
     expect(heap.allocation(at: 0) == none)
 }

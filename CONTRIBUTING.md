@@ -79,6 +79,21 @@ whole directories, not single files:
 - Every diagnostic code must have a page in [docs/diagnostics/](docs/diagnostics/).
 - Native programs are also run in the SIL interpreter, and the two must agree.
 
+The whole of `Sable.CodeGen.Tests` takes hours on one machine; what a change
+reaches is far less. `tools/affected-tests.py` maps a branch's changed files
+(since its merge base with `origin/master`, edits and new files included) to
+the test classes, library modules, doc examples and coverage they can affect,
+with the reason for each, and `--run` runs that plan under `nice`:
+
+```bash
+tools/affected-tests.py
+tools/affected-tests.py --run --native
+tools/affected-tests.py --files runtime/tasks.c --modes default
+```
+
+It maps by name and by use, so it is a floor: tests whose expected text a
+change alters still need a grep, and CI runs everything.
+
 `Sable.CodeGen.Tests` is the slow project: most of its tests compile a program
 and run it, natively and in the interpreter. What keeps it quicker:
 

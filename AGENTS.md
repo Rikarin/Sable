@@ -42,6 +42,10 @@ tools/stdlib-coverage.sh Sable.Core
 - Before calling a change done, run unfiltered the CodeGen test classes it
   can touch and every test whose expected text or messages it changed (grep
   `tests/` for the old text). Selected tests alone have let red changes in.
+  `tools/affected-tests.py` prints which classes, library modules (in the
+  three modes), doc examples and coverage a branch's change reaches, and
+  `--run` runs them: start there rather than with a whole project, and add
+  what it cannot know (the old text's tests).
 - Native tests (`SABLE_TEST_NATIVE=all`) build the program and compare it with
   the SIL interpreter; both must agree.
 - The machine may be shared: `nice`, `dotnet build -m:2`, one test run at a

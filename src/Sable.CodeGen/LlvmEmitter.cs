@@ -1298,6 +1298,23 @@ public sealed partial class LlvmEmitter {
     /// <summary>The LLVM struct an object of a class is: the header, then the fields.</summary>
     static string ObjectType(ClassType type) => ObjectLayout(type).Llvm;
 
+    /// <summary>
+    ///     An object's fields alone, as one made in the frame with no header
+    ///     is (<see cref="StackHeaders" />): the parts after the header, which
+    ///     LLVM lays out from the first field's offset as it does the whole.
+    /// </summary>
+    static string FieldsType(ClassType type) => $"{{ {string.Join(", ", TypeLayout.ObjectParts(type).Skip(3).Select(PartType))} }}";
+
+    /// <summary>
+    ///     Whether an object can be its fields alone: laid out as LLVM lays
+    ///     out its parts, no field aligned beyond the heap's alignment, and
+    ///     the header's bytes all before a field so aligned — on wasm32, not
+    ///     when the first field is at 12, right after the header.
+    /// </summary>
+    static bool CanBeFieldsAlone(ClassType type) =>
+        !ObjectLayout(type).Explicit && type.Fields.TrueForAll(static f => TypeLayout.Align(f.Type) <= HeapAlign)
+        && TypeLayout.HeaderlessDropped(type) == (type.Fields.Count > 0 ? ObjectLayout(type).Offsets[3] : ObjectLayout(type).Size);
+
     /// <summary>A name for a type inside a symbol: quoted, so anything but quotes and backslashes may appear.</summary>
     static string Mangled(SilType type) => type.ToString().Replace("\"", "", StringComparison.Ordinal).Replace("\\", "", StringComparison.Ordinal);
 
@@ -1616,13 +1633,14 @@ public sealed partial class LlvmEmitter {
 
     /// <summary>
     ///     What destroys an object made in the frame with no header
-    ///     (<see cref="StackHeaders" />), <paramref name="dropped" /> bytes of
-    ///     the header left out: as the class's destroy does, its deinits and
-    ///     then its fields, last first — its initialiser finished, as only
-    ///     one that cannot throw makes an object in the frame. Null when that
+    ///     (<see cref="StackHeaders" />) — its fields alone (<see cref="FieldsType" />),
+    ///     or the object whole — as the class's destroy does, its deinits and
+    ///     then its fields, last first: its initialiser finished, as only one
+    ///     that cannot throw makes an object in the frame. A slot it was taken
+    ///     out of holds nothing, which is nothing to destroy. Null when that
     ///     is nothing.
     /// </summary>
-    string? HeaderlessDestroy(ClassType type, int dropped) {
+    string? HeaderlessDestroy(ClassType type, bool fieldsAlone) {
         var deinits = new List<string>();
         for (var level = type; level is not null; level = level.Superclass) {
             if (level.Deinit is { } deinit) {
@@ -1634,27 +1652,29 @@ public sealed partial class LlvmEmitter {
             return null;
         }
 
-        var name = $"@\"sable.headerless.{type.Name}.{dropped}\"";
+        var name = $"@\"sable.headerless.{type.Name}.{(fieldsAlone ? "fields" : "whole")}\"";
         if (!_emitted.Add(name)) {
             return name;
         }
 
         var body = new StringBuilder($"define internal void {name}(ptr %o) {{\nentry:\n");
+        body.Append("  %none = icmp eq ptr %o, null\n  br i1 %none, label %done, label %held\nheld:\n");
         foreach (var deinit in deinits) {
             body.Append($"  call void @{Global(deinit)}(ptr %o)\n");
         }
 
-        var layout = ObjectLayout(type);
         for (var i = type.Fields.Count - 1; i >= 0; i--) {
             if (type.Fields[i].Type.IsTrivial) {
                 continue;
             }
 
-            body.Append($"  %a{i} = getelementptr inbounds i8, ptr %o, i64 {layout.Offsets[i + 3] - dropped}\n");
+            body.Append(fieldsAlone
+                ? $"  %a{i} = getelementptr inbounds {FieldsType(type)}, ptr %o, i32 0, i32 {i}\n"
+                : $"  %a{i} = getelementptr inbounds {ObjectType(type)}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n");
             OwnershipAt(body, Witnessing.Destroy, type.Fields[i].Type, $"%a{i}", $"%f{i}");
         }
 
-        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        _helpers.Append(body.Append("  br label %done\ndone:\n  ret void\n}\n\n"));
         return name;
     }
 
@@ -2166,8 +2186,8 @@ public sealed partial class LlvmEmitter {
 
         HeaderlessObjects? _headerless;
 
-        /// <summary>The bytes of its header an object made with none leaves out of the frame: none when a callee is handed it, which expects the object whole.</summary>
-        int Dropped(AllocRefInst alloc) => Headerless.Objects.TryGetValue(alloc, out var lent) && !lent ? TypeLayout.HeaderlessDropped(alloc.ClassType) : 0;
+        /// <summary>Whether an object made with no header is its fields alone: not when a callee is handed it, which expects the object whole.</summary>
+        bool FieldsAlone(AllocRefInst alloc) => Headerless.Objects.TryGetValue(alloc, out var lent) && !lent && CanBeFieldsAlone(alloc.ClassType);
 
         /// <summary>The uncounted destroy of a closure: of the object its context is, which nothing else holds.</summary>
         void DestroyContext(SilInstruction destroy, string closure) {
@@ -2184,7 +2204,7 @@ public sealed partial class LlvmEmitter {
                 return false;
             }
 
-            if (module.HeaderlessDestroy(alloc.ClassType, Dropped(alloc)) is { } helper) {
+            if (module.HeaderlessDestroy(alloc.ClassType, FieldsAlone(alloc)) is { } helper) {
                 Line($"call void {helper}(ptr {pointer})");
             }
 
@@ -4043,16 +4063,21 @@ public sealed partial class LlvmEmitter {
                     // callee is handed it, else the object whole, the header
                     // never written. Its fields start empty.
                     if (alloc.OnStack && Headerless.Objects.ContainsKey(alloc)) {
-                        var dropped = Dropped(alloc);
-                        var whole = ObjectLayout(alloc.ClassType).Size;
-                        var start = dropped > 0 ? 0 : TypeLayout.ObjectHeaderSize;
-                        _names[alloc] = Scratch(dropped > 0 ? $"[{Math.Max(1, whole - dropped)} x i8]" : ObjectType(alloc.ClassType), HeapAlign);
-                        if (whole - dropped - start > 0) {
-                            var empty = Fresh();
-                            Line($"{empty} = getelementptr inbounds i8, ptr {_names[alloc]}, i64 {start}");
-                            Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {empty}, i8 0, i64 {whole - dropped - start}, i1 false)");
+                        if (FieldsAlone(alloc)) {
+                            var fieldsType = FieldsType(alloc.ClassType);
+                            _names[alloc] = Scratch(fieldsType, HeapAlign);
+                            if (alloc.ClassType.Fields.Count > 0) {
+                                Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {_names[alloc]}, i8 0, i64 ptrtoint (ptr getelementptr ({fieldsType}, ptr null, i32 1) to i64), i1 false)");
+                            }
+
+                            return;
                         }
 
+                        _names[alloc] = Scratch(ObjectType(alloc.ClassType), HeapAlign);
+                        var empty = Fresh();
+                        // Past the header, whose size is the target's.
+                        Line($"{empty} = getelementptr inbounds %SableObjectHeader, ptr {_names[alloc]}, i32 1");
+                        Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {empty}, i8 0, i64 sub (i64 {size}, i64 ptrtoint (ptr getelementptr (%SableObjectHeader, ptr null, i32 1) to i64)), i1 false)");
                         return;
                     }
 
@@ -4086,8 +4111,8 @@ public sealed partial class LlvmEmitter {
                     }
 
                     // One with no header, its fields alone: where they are from the first byte kept.
-                    if (Headerless.Holders.TryGetValue(element.Reference, out var headerless) && Dropped(headerless) is > 0 and var dropped) {
-                        Line($"{name} = getelementptr inbounds i8, ptr {Name(element.Reference)}, i64 {ObjectLayout(classType).Offsets[element.Field + 3] - dropped}");
+                    if (Headerless.Holders.TryGetValue(element.Reference, out var headerless) && FieldsAlone(headerless)) {
+                        Line($"{name} = getelementptr inbounds {FieldsType(classType)}, ptr {Name(element.Reference)}, i32 0, i32 {element.Field}");
                         return;
                     }
 

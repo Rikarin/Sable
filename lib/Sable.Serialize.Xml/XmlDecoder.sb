@@ -1,0 +1,324 @@
+module Sable.Serialize.Xml
+
+import Sable.Serialize
+import Sable.Text
+
+/// The Decoder that reads XML as XmlEncoder writes it: an element, or an
+/// attribute's value, at a path (`$.items[3].name`) that every error names.
+/// A field is the first child element of its local name, an attribute for
+/// `@name`, or the element's text for `#text`; a sequence is an element's
+/// child elements, whatever their names; a map's entries are its child
+/// elements, each keyed by its `key` attribute or else by its name.
+/// Everything is text, so an untagged union reads the first case whose
+/// payload its text can be. What `Xml.decode` uses.
+///
+/// ```sable
+/// let root = try! XmlDecoder.parse("<p x='1'><q>2</q></p>")
+/// assert(try! root.field("@x").decodeInt() == 1)
+/// assert(try! root.field("q").decodeInt() == 2)
+/// assert(root.field("r").isMissing)
+/// assert(root.field("q").path == "$.q")
+/// ```
+public final class XmlDecoder: Decoder {
+    /// The element it reads; none for an attribute, text or a field that
+    /// is not there.
+    public let element: XmlElement?
+    let scalarText: String?
+    let parent: XmlDecoder?
+    let key: String?
+    let index: Int
+    let excluded: String[>..]?
+
+    init(_ element: XmlElement?, text: String?, parent: XmlDecoder?, key: String?, index: Int, excluded: String[>..]? = none) {
+        self.element = element
+        self.scalarText = text
+        self.parent = parent
+        self.key = key
+        self.index = index
+        self.excluded = excluded
+    }
+
+    /// A decoder of the element.
+    public init(_ element: XmlElement) {
+        self.init(element, text: none, parent: none, key: none, index: -1)
+    }
+
+    /// A decoder of the root element of the document the text is, white
+    /// space between elements left out; SerializeError.Syntax when it is not
+    /// well-formed.
+    public static fn parse(_ text: String, _ options: XmlOptions = XmlOptions()) throws(SerializeError) -> XmlDecoder {
+        var reading = options
+        reading.ignoresWhitespace = true
+        do {
+            return XmlDecoder(try Xml.parse(text, reading).root)
+        } catch {
+            throw SerializeError.Syntax(reason: "not XML: " + error.description())
+        }
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + xmlPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    // ---- What it holds ---------------------------------------------------
+
+    public var isMissing: Bool => element == none && scalarText == none
+
+    /// Whether it is an element of `xsi:nil="true"`.
+    public var isNull: Bool {
+        get {
+            if let element = element {
+                return element.attribute("nil", namespace: xmlNamespaceXsi) == "true"
+            }
+            return false
+        }
+    }
+
+    public var kind: DecodedKind {
+        get {
+            if scalarText != none {
+                return .String
+            }
+            guard let element = element else {
+                return .Missing
+            }
+            if isNull {
+                return .Null
+            }
+            if element.hasElements {
+                return .Map
+            }
+            for attribute in element.attributes {
+                if !attribute.isNamespaceDeclaration {
+                    return .Map
+                }
+            }
+            return .String
+        }
+    }
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if isMissing {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: isNull ? "nil" : element != none && element!.hasElements ? "elements" : "text")
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    // The text here: an attribute's, or an element's that holds no elements.
+    fn text(_ expected: String) throws(SerializeError) -> String {
+        if let text = scalarText {
+            return text
+        }
+        guard let element = element else {
+            throw mismatch(expected)
+        }
+        if element.hasElements || isNull {
+            throw mismatch(expected)
+        }
+        return element.text
+    }
+
+    fn trimmed(_ expected: String) throws(SerializeError) -> String {
+        return xmlTrimmed(try text(expected))
+    }
+
+    // ---- Values ----------------------------------------------------------
+
+    /// `true` or `1`, `false` or `0`.
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        let text = try trimmed("a Bool")
+        if text == "true" || text == "1" {
+            return true
+        }
+        if text == "false" || text == "0" {
+            return false
+        }
+        throw invalid("'\(text)' is not a Bool")
+    }
+
+    public fn decodeInt() throws(SerializeError) -> Int {
+        let text = try trimmed("an integer")
+        guard let value = try? Int.parse(text) else {
+            throw invalid("'\(text)' is not an Int")
+        }
+        return value
+    }
+
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        let text = try trimmed("an unsigned integer")
+        guard let value = try? U64.parse(text) else {
+            throw invalid("'\(text)' is not a U64")
+        }
+        return value
+    }
+
+    /// A number, `INF`, `-INF` or `NaN`.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        let text = try trimmed("a number")
+        if text == "INF" {
+            return F64.infinity
+        }
+        if text == "-INF" {
+            return -F64.infinity
+        }
+        if text == "NaN" {
+            return F64.nan
+        }
+        guard let value = try? F64.parse(text) else {
+            throw invalid("'\(text)' is not a number")
+        }
+        return value
+    }
+
+    public fn decodeString() throws(SerializeError) -> String {
+        return try text("text")
+    }
+
+    /// Bytes, from base64.
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        let text = try trimmed("base64")
+        guard let bytes = try? Base64.decode(text) else {
+            throw invalid("'\(text)' is not base64")
+        }
+        return bytes
+    }
+
+    // ---- Sequences -------------------------------------------------------
+
+    public fn decodeSequence() throws(SerializeError) -> XmlDecoder[>..] {
+        guard let element = element else {
+            throw mismatch("a sequence")
+        }
+        if isNull {
+            throw mismatch("a sequence")
+        }
+        var all: XmlDecoder[>..] = []
+        for child in element.elements {
+            all.append(XmlDecoder(child, text: none, parent: self, key: none, index: all.count))
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> XmlDecoder {
+        var child: XmlElement? = none
+        if let element = element {
+            let all = element.elements
+            if index >= 0 && index < all.count {
+                child = all[index]
+            }
+        }
+        return XmlDecoder(child, text: none, parent: self, key: none, index: index)
+    }
+
+    // ---- Maps and structs ------------------------------------------------
+
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<XmlDecoder>[>..] {
+        guard let element = element else {
+            throw mismatch("a map")
+        }
+        var all: DecodedMember<XmlDecoder>[>..] = []
+        for child in element.elements {
+            let key = child.attribute("key") ?? child.localName
+            if !excludes(key) {
+                all.append(DecodedMember { key: key, value: XmlDecoder(child, text: none, parent: self, key: key, index: -1) })
+            }
+        }
+        return all
+    }
+
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        if element == none || isNull {
+            throw mismatch("an element (\(name))")
+        }
+    }
+
+    public fn field(_ key: String) -> XmlDecoder {
+        var child: XmlElement? = none
+        var text: String? = none
+        if let element = element {
+            if !excludes(key) {
+                if key.hasPrefix("@") {
+                    text = element.attribute(xmlSlice(key, 1, key.utf8Count))
+                } else if key == "#text" {
+                    text = element.text
+                } else {
+                    for each in element.elements {
+                        if each.localName == key {
+                            child = each
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        return XmlDecoder(child, text: text, parent: self, key: key, index: -1)
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        if let excluded = excluded {
+            return excluded.contains(key)
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> XmlDecoder {
+        var all = excluded ?? []
+        for key in keys {
+            all.append(key)
+        }
+        return XmlDecoder(element, text: scalarText, parent: parent, key: key, index: index, excluded: all)
+    }
+
+    // ---- Unions ----------------------------------------------------------
+
+    /// The name of the one child element, or the text.
+    public fn caseName() throws(SerializeError) -> String {
+        if let element = element {
+            let all = element.elements
+            if !all.isEmpty {
+                return all[0].localName
+            }
+        }
+        return try trimmed("a case's name")
+    }
+
+    public fn casePayload() -> XmlDecoder {
+        if let element = element {
+            let all = element.elements
+            if !all.isEmpty {
+                return XmlDecoder(all[0], text: none, parent: self, key: all[0].localName, index: -1)
+            }
+        }
+        return XmlDecoder(none, text: none, parent: self, key: none, index: -1)
+    }
+}
+
+// A key as JSONPath writes it: '.name' for a plain name, ['…'] otherwise.
+fn xmlPathKey(_ key: String) -> String {
+    var plain = !key.isEmpty
+    for c in key {
+        plain = plain && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_')
+    }
+    return plain ? "." + key : "['" + key.replacing("'", with: "\\'") + "']"
+}

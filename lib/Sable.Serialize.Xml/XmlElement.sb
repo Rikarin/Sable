@@ -1,0 +1,170 @@
+module Sable.Serialize.Xml
+
+/// An element of a document: its name, the namespace it is in, its
+/// attributes and its children, which may be changed. A child element is
+/// found by its name as written, or by its local name in a namespace.
+///
+/// ```sable
+/// let feed = try! Xml.parse("<feed xmlns='http://www.w3.org/2005/Atom'><title>News</title><entry id='1'/><entry id='2'/></feed>").root
+/// let atom = "http://www.w3.org/2005/Atom"
+/// assert(feed.element("title", namespace: atom)!.text == "News")
+/// assert(feed.elements("entry").map({ $0.attribute("id")! }) == ["1", "2"])
+/// feed.append(XmlElement("entry"))
+/// assert(feed.elements("entry").count == 3)
+/// ```
+public final class XmlElement {
+    /// The name as written, `p:item`; its parts; and its namespace, "" for none.
+    public var name: String
+    public var localName: String
+    public var `prefix`: String
+    public var namespace: String
+    /// The attributes in order, namespace declarations among them.
+    public var attributes: XmlAttribute[>..] = []
+    public var children: XmlNode[>..] = []
+
+    /// An element of that name, in that namespace.
+    public init(_ name: String, namespace: String = "") {
+        self.name = name
+        self.localName = xmlLocalName(name)
+        self.prefix = xmlPrefix(name)
+        self.namespace = namespace
+    }
+
+    // ---- Attributes ------------------------------------------------------
+
+    /// The value of the attribute of that name as written, or of that local
+    /// name in that namespace; none if it has none.
+    public fn attribute(_ name: String, namespace: String? = none) -> String? {
+        for attribute in attributes {
+            if let namespace = namespace {
+                if attribute.localName == name && attribute.namespace == namespace {
+                    return attribute.value
+                }
+            } else if attribute.name == name {
+                return attribute.value
+            }
+        }
+        return none
+    }
+
+    /// Gives the attribute of that name the value, adding it if there is none.
+    public fn setAttribute(_ name: String, _ value: String, namespace: String = "") {
+        for i in 0..<attributes.count {
+            if attributes[i].name == name {
+                attributes[i].value = value
+                attributes[i].namespace = namespace
+                return
+            }
+        }
+        attributes.append(XmlAttribute(name, value, namespace: namespace))
+    }
+
+    /// Takes away the attribute of that name; whether it had one.
+    public fn removeAttribute(_ name: String) -> Bool {
+        var kept: XmlAttribute[>..] = []
+        for attribute in attributes {
+            if attribute.name != name {
+                kept.append(attribute)
+            }
+        }
+        let removed = kept.count < attributes.count
+        attributes = kept
+        return removed
+    }
+
+    // ---- Children --------------------------------------------------------
+
+    /// Adds the node after the children there are.
+    public fn append(_ node: XmlNode) {
+        children.append(node)
+    }
+
+    /// Adds the element after the children there are.
+    public fn append(_ element: XmlElement) {
+        children.append(.Element(element))
+    }
+
+    /// Adds text after the children there are.
+    public fn append(text: String) {
+        children.append(.Text(text))
+    }
+
+    /// The child elements, in order.
+    public var elements: XmlElement[>..] {
+        get {
+            var all: XmlElement[>..] = []
+            for child in children {
+                if let element = child.element {
+                    all.append(element)
+                }
+            }
+            return all
+        }
+    }
+
+    fn matches(_ name: String, _ namespace: String?) -> Bool {
+        if let namespace = namespace {
+            return localName == name && self.namespace == namespace
+        }
+        return self.name == name
+    }
+
+    /// The first child element of that name as written, or of that local
+    /// name in that namespace.
+    public fn element(_ name: String, namespace: String? = none) -> XmlElement? {
+        for child in children {
+            if let element = child.element {
+                if element.matches(name, namespace) {
+                    return element
+                }
+            }
+        }
+        return none
+    }
+
+    /// The child elements of that name as written, or of that local name
+    /// in that namespace.
+    public fn elements(_ name: String, namespace: String? = none) -> XmlElement[>..] {
+        var all: XmlElement[>..] = []
+        for child in children {
+            if let element = child.element {
+                if element.matches(name, namespace) {
+                    all.append(element)
+                }
+            }
+        }
+        return all
+    }
+
+    /// The text of the element and every element in it, CDATA's too, in order.
+    public var text: String {
+        get {
+            var made: U8[>..] = []
+            appendText(&made)
+            return xmlString(made)
+        }
+    }
+
+    fn appendText(_ made: inout U8[>..]) {
+        for child in children {
+            match child {
+                case .Text(let text)       => made.append(utf8: text)
+                case .CData(let text)      => made.append(utf8: text)
+                case .Element(let element) => element.appendText(&made)
+                default                    => { }
+            }
+        }
+    }
+
+    /// Whether the element has child elements.
+    var hasElements: Bool {
+        get {
+            for child in children {
+                if child.element != none {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+}

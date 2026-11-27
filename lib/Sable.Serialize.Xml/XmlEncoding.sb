@@ -1,0 +1,134 @@
+module Sable.Serialize.Xml
+
+// The bytes of a document as UTF-8 without a byte order mark, whichever
+// encoding they are in (Appendix F): told by a byte order mark, by the
+// zeros around the first '<', or by the declaration's encoding. UTF-8,
+// UTF-16, US-ASCII and ISO-8859-1 are read; another is an error.
+fn xmlUtf8(_ bytes: U8[>..], _ encoding: inout String) throws(XmlError) -> U8[>..] {
+    let count = bytes.count
+    let b0 = count > 0 ? Int(bytes[0]) : 256
+    let b1 = count > 1 ? Int(bytes[1]) : 256
+    let b2 = count > 2 ? Int(bytes[2]) : 256
+    let b3 = count > 3 ? Int(bytes[3]) : 256
+    if b0 == 0xFE && b1 == 0xFF || b0 == 0 && b1 == 0x3C && b2 == 0 && b3 == 0x3F {
+        encoding = "UTF-16BE"
+        return try xmlFromUtf16(bytes, bigEndian: true, skip: b0 == 0xFE ? 2 : 0)
+    }
+    if b0 == 0xFF && b1 == 0xFE || b0 == 0x3C && b1 == 0 && b2 == 0x3F && b3 == 0 {
+        encoding = "UTF-16LE"
+        return try xmlFromUtf16(bytes, bigEndian: false, skip: b0 == 0xFF ? 2 : 0)
+    }
+    if b0 == 0xEF && b1 == 0xBB && b2 == 0xBF {
+        encoding = "UTF-8"
+        return try xmlCheckedUtf8(bytes[3..<count])
+    }
+    let declared = xmlLower(xmlDeclaredEncoding(bytes))
+    if declared == "iso-8859-1" || declared == "latin1" || declared == "iso_8859-1" {
+        encoding = "ISO-8859-1"
+        var written: U8[>..] = []
+        written.reserveCapacity(count)
+        for byte in bytes {
+            xmlAppend(Int(byte), to: &written)
+        }
+        return written
+    }
+    if declared == "us-ascii" || declared == "ascii" {
+        encoding = "US-ASCII"
+        var i = 0
+        while i < count {
+            if bytes[i] >= 0x80 {
+                throw XmlError { line: 0, column: 0, reason: "a byte of \(bytes[i]) in US-ASCII text, at \(i)" }
+            }
+            i += 1
+        }
+        return bytes
+    }
+    if declared != "" && declared != "utf-8" && declared != "utf8" {
+        throw XmlError { line: 0, column: 0, reason: "the encoding '\(declared)', which is not read: UTF-8, UTF-16, US-ASCII and ISO-8859-1 are" }
+    }
+    encoding = "UTF-8"
+    return try xmlCheckedUtf8(bytes[0..<count])
+}
+
+fn xmlCheckedUtf8(_ bytes: U8[:]) throws(XmlError) -> U8[>..] {
+    let bad = Runtime.validateUtf8(bytes: bytes)
+    if bad >= 0 {
+        throw XmlError { line: 0, column: 0, reason: "ill-formed UTF-8 at byte \(bad)" }
+    }
+    var all: U8[>..] = []
+    all.append(contentsOf: bytes)
+    return all
+}
+
+// What `encoding="…"` of the declaration says, or "" (ASCII only).
+fn xmlDeclaredEncoding(_ bytes: U8[>..]) -> String {
+    if bytes.count < 6 || bytes[0] != 0x3C || bytes[1] != 0x3F || bytes[2] != 0x78 || bytes[3] != 0x6D || bytes[4] != 0x6C {
+        return ""
+    }
+    var end = 5
+    while end + 1 < bytes.count && end < 512 && !(bytes[end] == 0x3F && bytes[end + 1] == 0x3E) {
+        end += 1
+    }
+    var text: U8[>..] = []
+    var i = 0
+    while i < end {
+        text.append(bytes[i] < 0x80 ? bytes[i] : 0x20)
+        i += 1
+    }
+    var word: U8[>..] = []
+    word.append(utf8: "encoding")
+    var at = 0
+    while at + word.count <= end && !xmlMatches(text, at, word) {
+        at += 1
+    }
+    if at + word.count > end {
+        return ""
+    }
+    at += word.count
+    var name: U8[>..] = []
+    var quote: U8 = 0
+    while at < end {
+        let b = text[at]
+        if quote == 0 {
+            if b == 0x22 || b == 0x27 {
+                quote = b
+            }
+        } else if b == quote {
+            break
+        } else {
+            name.append(b)
+        }
+        at += 1
+    }
+    return xmlString(name)
+}
+
+fn xmlFromUtf16(_ bytes: U8[>..], bigEndian: Bool, skip: Int) throws(XmlError) -> U8[>..] {
+    if bytes.count % 2 != 0 {
+        throw XmlError { line: 0, column: 0, reason: "UTF-16 text of \(bytes.count) bytes" }
+    }
+    var written: U8[>..] = []
+    written.reserveCapacity(bytes.count)
+    var i = skip
+    while i < bytes.count {
+        let start = i
+        var code = xmlUnit(bytes, i, bigEndian)
+        i += 2
+        if code >= 0xD800 && code <= 0xDBFF && i < bytes.count {
+            let low = xmlUnit(bytes, i, bigEndian)
+            if low >= 0xDC00 && low <= 0xDFFF {
+                code = 0x10000 + (code - 0xD800) * 1024 + (low - 0xDC00)
+                i += 2
+            }
+        }
+        if code >= 0xD800 && code <= 0xDFFF {
+            throw XmlError { line: 0, column: 0, reason: "ill-formed UTF-16 at byte \(start)" }
+        }
+        xmlAppend(code, to: &written)
+    }
+    return written
+}
+
+fn xmlUnit(_ bytes: U8[>..], _ at: Int, _ bigEndian: Bool) -> Int {
+    return bigEndian ? Int(bytes[at]) << 8 | Int(bytes[at + 1]) : Int(bytes[at + 1]) << 8 | Int(bytes[at])
+}

@@ -1,0 +1,45 @@
+module Sable.Serialize.Xml
+
+/// An attribute of an element: its name as written, the parts of it, its
+/// namespace and its value, references replaced. A namespace declaration
+/// (`xmlns`, `xmlns:p`) is one too, in the namespace of `xmlns`.
+///
+/// ```sable
+/// let root = try! Xml.parse("<a xmlns:p='urn:p' p:b='1'/>").root
+/// let b = root.attributes[1]
+/// assert(b.name == "p:b" && b.localName == "b" && b.prefix == "p")
+/// assert(b.namespace == "urn:p" && b.value == "1")
+/// assert(root.attributes[0].isNamespaceDeclaration)
+/// ```
+@derive(Equatable, Debug)
+public struct XmlAttribute {
+    /// The name as written: `p:b`.
+    public var name: String
+    /// The name's part after the colon, or all of it.
+    public var localName: String
+    /// The name's part before the colon, or "".
+    public var `prefix`: String
+    /// The namespace the prefix is bound to; "" for none.
+    public var namespace: String
+    public var value: String
+
+    /// An attribute of that name and value, in that namespace.
+    public init(_ name: String, _ value: String, namespace: String = "") {
+        self.name = name
+        self.prefix = xmlPrefix(name)
+        self.localName = xmlLocalName(name)
+        self.namespace = namespace
+        self.value = value
+    }
+
+    init(name: String, bound: String, local: String, namespace: String, value: String) {
+        self.name = name
+        self.prefix = bound
+        self.localName = local
+        self.namespace = namespace
+        self.value = value
+    }
+
+    /// Whether it declares a namespace: `xmlns` or `xmlns:p`.
+    public var isNamespaceDeclaration: Bool => name == "xmlns" || self.prefix == "xmlns"
+}

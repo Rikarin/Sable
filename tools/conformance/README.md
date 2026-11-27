@@ -12,6 +12,7 @@ python3 -I tools/conformance/publickey/run.py data/wycheproof
 python3 -I tools/conformance/x509/run.py data/limbo.json
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
+python3 -I tools/conformance/xml/run.py data/xmlconf
 python3 -I tools/conformance/json/run.py data/JSONTestSuite
 python3 -I tools/conformance/compression/run.py data/compression [corpus file ...]
 python3 -I tools/conformance/hashing/run.py data/xxhash
@@ -133,6 +134,18 @@ https://github.com/yaml/yaml-test-suite, the `data` branch at
 `6ad3d2c62885d82fc349026c136ef560838fdf3d`, MIT. `run.py` lists the files that
 are not as the suite has them, by design, under `KNOWN`: the same key twice in
 a mapping is read as events and makes no nodes.
+
+## xml: the W3C XML Conformance Test Suite
+
+https://www.w3.org/XML/Test/xmlts20130923.tar.gz (SHA-256
+`9b61db9f…6cf6fc1f`), W3C Software Notice and License; its directory
+`xmlconf`. Every case of XML 1.0 (fifth edition) and Namespaces 1.0 that
+reads no external entity: a `valid` or `invalid` document must be
+well-formed (the reader does not validate) and read the same once it is
+written again, and a `not-wf` one must be an error. XML 1.1, editions before
+the fifth, the optional `error` cases and cases that need an external
+entity or subset read are skipped, by their reason. At this writing 1727
+pass, none fail and 858 are skipped.
 
 ## json: JSONTestSuite
 

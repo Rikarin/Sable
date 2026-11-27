@@ -1,0 +1,59 @@
+module XmlConformance
+
+// Answers what run.py asks of Sable.Serialize.Xml: a request a line, "ns"
+// or "plain" (namespaces read or not) and the path of an XML file. The
+// answer is "ok" when the file is well-formed and, read as an XmlDocument,
+// written and read again, gives the same nodes; "error" and why otherwise.
+
+import Sable.IO
+import Sable.Serialize.Xml
+
+// Every node of the reader, as a line of text each.
+fn nodes(_ reader: XmlReader) throws(XmlError) -> String[>..] {
+    var all: String[>..] = []
+    while let kind = try reader.next() {
+        if kind == .Declaration || kind == .DocumentType {
+            continue
+        }
+        var line = "\(kind) \(reader.name) {\(reader.namespace)} \(reader.value)"
+        for attribute in reader.attributes {
+            line += " \(attribute.name)=\(attribute.value)"
+        }
+        all.append(line)
+    }
+    return all
+}
+
+// The nodes, text that follows text made one.
+fn merged(_ lines: String[>..]) -> String {
+    return lines.joined(separator: "\n").replacing("\nText  {} ", with: "")
+}
+
+fn answer(_ mode: String, _ path: String) -> String {
+    let bytes = try! File.readBytes(path)
+    let options = XmlOptions(namespaces: mode == "ns")
+    do {
+        let read = try nodes(try XmlReader(bytes: bytes, options))
+        let document = try Xml.parse(bytes: bytes, options)
+        let written = try Xml.print(document)
+        let again = try nodes(XmlReader(written, options))
+        if merged(read) != merged(again) {
+            return "reprinted as another document"
+        }
+        return "ok"
+    } catch {
+        return "error " + error.description().replacing("\n", with: " ")
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let output = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        let words = line.split(separator: ' ')
+        var text: U8[>..] = []
+        text.append(utf8: answer(words[0], words[1]) + "\n")
+        try! output.write(text)
+    }
+    try! output.flush()
+}

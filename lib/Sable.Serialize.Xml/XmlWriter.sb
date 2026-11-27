@@ -1,0 +1,350 @@
+module Sable.Serialize.Xml
+
+/// Writes XML as it is told, a node at a time, and checks that what it
+/// writes is well-formed: names are names, every element is ended in turn,
+/// a comment holds no `--`, and text is escaped — `&`, `<` and `>`, and in
+/// an attribute's value `"` and the white space a reader would make a
+/// space of. A CDATA section that holds `]]>` is written as two.
+///
+/// An element or an attribute given a namespace is in it: if the prefix
+/// of its name is not bound to that namespace where it is, the element
+/// declares it (`xmlns:p="…"`, or `xmlns="…"` for an element of no prefix).
+///
+/// ```sable
+/// let writer = XmlWriter(XmlPrintOptions(indent: "  "))
+/// try! writer.startElement("feed", namespace: "http://www.w3.org/2005/Atom")
+/// try! writer.startElement("title")
+/// try! writer.attribute("type", "text")
+/// try! writer.text("Fish & chips")
+/// try! writer.endElement()
+/// try! writer.endElement()
+/// let expected = "<feed xmlns=\"http://www.w3.org/2005/Atom\">\n  <title type=\"text\">Fish &amp; chips</title>\n</feed>"
+/// assert(try! writer.finish() == expected)
+/// ```
+public final class XmlWriter {
+    let options: XmlPrintOptions
+    var written: U8[>..] = []
+    var openNames: String[>..] = []
+    // For each element openNames: whether it holds text, and whether anything.
+    var mixed: Bool[>..] = []
+    var filled: Bool[>..] = []
+    var tagOpen: Bool = false
+    var tagAttributes: String[>..] = []
+    var scopePrefixes: String[>..] = []
+    var scopeUris: String[>..] = []
+    var scopeCounts: Int[>..] = []
+    var started: Bool = false
+    var rooted: Bool = false
+
+    public init(_ options: XmlPrintOptions = XmlPrintOptions()) {
+        self.options = options
+    }
+
+    fn fail(_ reason: String) -> XmlError {
+        return XmlError { line: 0, column: 0, reason: reason }
+    }
+
+    /// The XML written, all its elements ended.
+    public fn finish() throws(XmlError) -> String {
+        if !openNames.isEmpty {
+            throw fail("<\(openNames[openNames.count - 1])> is not ended")
+        }
+        return xmlString(written)
+    }
+
+    /// `<?xml version="1.0" encoding="UTF-8"?>`, before anything else.
+    public fn declaration(standalone: Bool? = none) throws(XmlError) {
+        if started {
+            throw fail("a declaration after the start")
+        }
+        written.append(utf8: "<?xml version=\"1.0\" encoding=\"UTF-8\"")
+        if let standalone = standalone {
+            written.append(utf8: standalone ? " standalone=\"yes\"" : " standalone=\"no\"")
+        }
+        written.append(utf8: "?>")
+        started = true
+    }
+
+    /// `<!DOCTYPE name PUBLIC "…" "…" [subset]>`, before the root element;
+    /// with no identifiers that are "".
+    public fn documentType(_ name: String, publicId: String = "", systemId: String = "", internalSubset: String = "") throws(XmlError) {
+        if rooted {
+            throw fail("a DOCTYPE after the root element")
+        }
+        if publicId.contains("\"") || systemId.contains("\"") || !publicId.isEmpty && systemId.isEmpty {
+            throw fail("a DOCTYPE's identifiers that cannot be written")
+        }
+        try checkName(name)
+        try beforeMarkup()
+        written.append(utf8: "<!DOCTYPE ")
+        written.append(utf8: name)
+        if !publicId.isEmpty {
+            written.append(utf8: " PUBLIC \"")
+            written.append(utf8: publicId)
+            written.append(0x22)
+        } else if !systemId.isEmpty {
+            written.append(utf8: " SYSTEM")
+        }
+        if !systemId.isEmpty {
+            written.append(utf8: " \"")
+            written.append(utf8: systemId)
+            written.append(0x22)
+        }
+        if !internalSubset.isEmpty {
+            written.append(utf8: " [")
+            written.append(utf8: internalSubset)
+            written.append(0x5D)
+        }
+        written.append(0x3E)
+    }
+
+    fn checkName(_ name: String) throws(XmlError) {
+        if !xmlIsName(name, colons: true) {
+            throw fail("'\(name)' is not a name")
+        }
+    }
+
+    fn lookup(_ p: String) -> String? {
+        if p == "xml" {
+            return xmlNamespaceXml
+        }
+        var i = scopePrefixes.count - 1
+        while i >= 0 {
+            if scopePrefixes[i] == p {
+                return scopeUris[i]
+            }
+            i -= 1
+        }
+        return p.isEmpty ? "" : none
+    }
+
+    // Ends the start tag that is openNames, if one is.
+    fn closeTag() {
+        if tagOpen {
+            written.append(0x3E)
+            tagOpen = false
+        }
+    }
+
+    // A new line and the indentation of where the next node goes, unless
+    // the element it goes in holds text.
+    fn beforeMarkup() throws(XmlError) {
+        closeTag()
+        if !openNames.isEmpty {
+            filled[filled.count - 1] = true
+        }
+        if !options.indent.isEmpty && started && (openNames.isEmpty || !mixed[mixed.count - 1]) {
+            written.append(0x0A)
+            for _ in 0..<openNames.count {
+                written.append(utf8: options.indent)
+            }
+        }
+        started = true
+    }
+
+    /// Starts an element of the name; in the namespace, if one is given.
+    public fn startElement(_ name: String, namespace: String? = none) throws(XmlError) {
+        try checkName(name)
+        if openNames.isEmpty && rooted {
+            throw fail("a second root element, <\(name)>")
+        }
+        try beforeMarkup()
+        written.append(0x3C)
+        written.append(utf8: name)
+        openNames.append(name)
+        mixed.append(false)
+        filled.append(false)
+        scopeCounts.append(0)
+        tagOpen = true
+        tagAttributes = []
+        rooted = true
+        if let namespace = namespace {
+            let p = xmlPrefix(name)
+            if lookup(p) != namespace {
+                try declareNamespace(p, namespace)
+            }
+        }
+    }
+
+    /// Declares the prefix ("" for the default namespace) bound to the
+    /// namespace on the element just started.
+    public fn declareNamespace(_ p: String, _ uri: String) throws(XmlError) {
+        if !p.isEmpty && (uri.isEmpty || !xmlIsName(p, colons: false) || p == "xmlns") {
+            throw fail("the prefix '\(p)' cannot be bound to '\(uri)'")
+        }
+        try attribute(p.isEmpty ? "xmlns" : "xmlns:" + p, uri)
+        scopePrefixes.append(p)
+        scopeUris.append(uri)
+        scopeCounts[scopeCounts.count - 1] += 1
+    }
+
+    /// An attribute of the element just started; in the namespace, if one
+    /// is given, which its name's prefix is bound to.
+    public fn attribute(_ name: String, _ value: String, namespace: String? = none) throws(XmlError) {
+        if !tagOpen {
+            throw fail("the attribute \(name) after the start tag")
+        }
+        try checkName(name)
+        if tagAttributes.contains(name) {
+            throw fail("the attribute \(name) twice")
+        }
+        if let namespace = namespace {
+            let p = xmlPrefix(name)
+            if p.isEmpty && !namespace.isEmpty {
+                throw fail("the attribute \(name) in a namespace with no prefix")
+            }
+            if !p.isEmpty && lookup(p) != namespace {
+                try declareNamespace(p, namespace)
+            }
+        }
+        tagAttributes.append(name)
+        written.append(0x20)
+        written.append(utf8: name)
+        written.append(utf8: "=\"")
+        try escape(value, attribute: true)
+        written.append(0x22)
+    }
+
+    /// Text, escaped.
+    public fn text(_ value: String) throws(XmlError) {
+        if openNames.isEmpty {
+            throw fail("text outside the root element")
+        }
+        closeTag()
+        mixed[mixed.count - 1] = true
+        filled[filled.count - 1] = true
+        try escape(value, attribute: false)
+    }
+
+    /// A CDATA section of the text; two where it holds `]]>`.
+    public fn cdata(_ value: String) throws(XmlError) {
+        if openNames.isEmpty {
+            throw fail("CDATA outside the root element")
+        }
+        closeTag()
+        mixed[mixed.count - 1] = true
+        filled[filled.count - 1] = true
+        try checkCharacters(value)
+        written.append(utf8: "<![CDATA[")
+        written.append(utf8: value.replacing("]]>", with: "]]]]><![CDATA[>"))
+        written.append(utf8: "]]>")
+    }
+
+    /// A comment of the text, which holds no `--` and ends with no `-`.
+    public fn comment(_ value: String) throws(XmlError) {
+        if value.contains("--") || value.hasSuffix("-") {
+            throw fail("a comment that holds '--' or ends with '-'")
+        }
+        try checkCharacters(value)
+        try beforeMarkup()
+        written.append(utf8: "<!--")
+        written.append(utf8: value)
+        written.append(utf8: "-->")
+    }
+
+    /// A processing instruction of the target and data.
+    public fn processingInstruction(_ target: String, _ data: String = "") throws(XmlError) {
+        if !xmlIsName(target, colons: true) || xmlLower(target) == "xml" {
+            throw fail("'\(target)' is not a processing instruction's target")
+        }
+        if data.contains("?>") {
+            throw fail("a processing instruction's data that holds '?>'")
+        }
+        try checkCharacters(data)
+        try beforeMarkup()
+        written.append(utf8: "<?")
+        written.append(utf8: target)
+        if !data.isEmpty {
+            written.append(0x20)
+            written.append(utf8: data)
+        }
+        written.append(utf8: "?>")
+    }
+
+    /// A reference to an entity, `&name;`, which a reader may not know.
+    public fn entityReference(_ name: String) throws(XmlError) {
+        if openNames.isEmpty {
+            throw fail("a reference outside the root element")
+        }
+        try checkName(name)
+        closeTag()
+        mixed[mixed.count - 1] = true
+        filled[filled.count - 1] = true
+        written.append(0x26)
+        written.append(utf8: name)
+        written.append(0x3B)
+    }
+
+    /// Ends the element started last: `<a/>` if nothing is in it.
+    public fn endElement() throws(XmlError) {
+        if openNames.isEmpty {
+            throw fail("an end with no element open")
+        }
+        let name = openNames.removeLast()
+        let isMixed = mixed.removeLast()
+        let isFilled = filled.removeLast()
+        var declared = scopeCounts.removeLast()
+        while declared > 0 {
+            _ = scopePrefixes.removeLast()
+            _ = scopeUris.removeLast()
+            declared -= 1
+        }
+        if tagOpen {
+            written.append(utf8: "/>")
+            tagOpen = false
+            return
+        }
+        if isFilled && !isMixed && !options.indent.isEmpty {
+            written.append(0x0A)
+            for _ in 0..<openNames.count {
+                written.append(utf8: options.indent)
+            }
+        }
+        written.append(utf8: "</")
+        written.append(utf8: name)
+        written.append(0x3E)
+    }
+
+    fn checkCharacters(_ value: String) throws(XmlError) {
+        for byte in value.utf8 {
+            if byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D {
+                throw fail("the control character \(byte), which XML does not have")
+            }
+        }
+    }
+
+    fn escape(_ value: String, attribute: Bool) throws(XmlError) {
+        var run = 0
+        var i = 0
+        let bytes = value.utf8
+        let count = value.utf8Count
+        while i < count {
+            let b = bytes[i]
+            var replacement = ""
+            if b == 0x26 {
+                replacement = "&amp;"
+            } else if b == 0x3C {
+                replacement = "&lt;"
+            } else if b == 0x3E && !attribute {
+                replacement = "&gt;"
+            } else if b == 0x22 && attribute {
+                replacement = "&quot;"
+            } else if b == 0x0D {
+                replacement = "&#xD;"
+            } else if b == 0x0A && attribute {
+                replacement = "&#xA;"
+            } else if b == 0x09 && attribute {
+                replacement = "&#x9;"
+            } else if b < 0x20 && b != 0x09 && b != 0x0A {
+                throw fail("the control character \(b), which XML does not have")
+            }
+            if !replacement.isEmpty {
+                written.append(utf8: value, from: run, to: i)
+                written.append(utf8: replacement)
+                run = i + 1
+            }
+            i += 1
+        }
+        written.append(utf8: value, from: run, to: count)
+    }
+}

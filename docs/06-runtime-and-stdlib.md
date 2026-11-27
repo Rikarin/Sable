@@ -1236,6 +1236,14 @@ Sable.Serialize.Yaml YAML 1.2: YamlParser (events, linear in the text,
                     YamlStream (edited with its comments and formatting
                     kept, unedited byte for byte), YamlEncoder and
                     YamlDecoder, Yaml.encode/decode
+Sable.Serialize.Xml XML 1.0 and Namespaces 1.0: XmlReader (a node at a
+                    time; errors by line and column; UTF-8, UTF-16,
+                    US-ASCII, ISO-8859-1; the internal subset's entities
+                    within depth and size bounds, external ones never
+                    fetched), XmlWriter (escaping, namespaces, indents),
+                    XmlDocument and XmlElement, XmlEncoder and XmlDecoder
+                    (fields as elements, `@name` attributes, `#text`),
+                    Xml.encode/decode. Not yet: XPath, XSD, XSLT (#120)
 Sable.Serialize.Asn1 ASN.1 (X.690): AsnReader and AsnWriter by BER, CER
                     and DER, as .NET's, for every universal type (REAL, the
                     ISO 8601 times, RELATIVE-OID and the IRIs too), tagged

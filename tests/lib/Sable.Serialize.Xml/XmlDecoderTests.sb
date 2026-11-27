@@ -1,0 +1,119 @@
+module XmlDecoderTests
+
+// XmlDecoder (Sable.Serialize.Xml), asked directly: run with
+//     tools/stdlib-coverage.sh Sable.Serialize.Xml
+
+import Sable.Serialize
+import Sable.Serialize.Xml
+import Sable.Testing
+
+fn root(_ text: String) -> XmlDecoder {
+    return try! XmlDecoder.parse(text)
+}
+
+fn failure(_ body: () throws(SerializeError) -> Void) -> String {
+    do {
+        try body()
+        return "none"
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn kindsAreWhatTheElementHolds() {
+    let r = root("<r a='1'><e/><t>x</t><n xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xsi:nil='true'/><s><q/></s></r>")
+    expect(r.kind == .Map)
+    expect(r.field("e").kind == .String && r.field("t").kind == .String)
+    expect(r.field("n").kind == .Null && r.field("n").isNull)
+    expect(r.field("s").kind == .Map && r.field("@a").kind == .String)
+    expect(r.field("z").kind == .Missing && r.field("z").isMissing && !r.field("z").isNull)
+    expect(r.hasField("t") && !r.hasField("z") && r.hasField("@a"))
+    expect(root("<r xmlns='urn:r'/>").kind == .String)
+}
+
+@test
+fn sequencesAndElementsAreTheChildElements() {
+    let r = root("<r><a>1</a><b>2</b></r>")
+    let all = try! r.decodeSequence()
+    expect(all.count == 2 && all[1].path == "$[1]")
+    expect(try! r.element(1).decodeInt() == 2)
+    expect(r.element(2).isMissing && r.element(-1).isMissing)
+    expect(r.field("z").element(0).isMissing)
+    expect(failure({ _ = try r.field("z").decodeSequence() }) == "$.z: missing")
+    expect(failure({ _ = try r.field("z").decodeMap() }) == "$.z: missing")
+}
+
+@test
+fn excludedFieldsAreNotThere() {
+    let r = root("<r><a>1</a><b>2</b></r>").excluding(["a"])
+    expect(r.field("a").isMissing && !r.field("b").isMissing)
+    let members = try! r.excluding(["b"]).decodeMap()
+    expect(members.isEmpty)
+}
+
+@test
+fn unionsAreReadByTheirCase() {
+    let unit = root("<r> Idle </r>")
+    expect(try! unit.caseName() == "Idle" && unit.casePayload().isMissing)
+    let payload = root("<r><Key><code>1</code></Key></r>")
+    expect(try! payload.caseName() == "Key")
+    expect(try! payload.casePayload().field("code").decodeInt() == 1)
+    expect(payload.unknownCase("Key").description() == "$: no case 'Key'")
+}
+
+@test
+fn valuesThatAreNotTheTypeAreErrors() {
+    let r = root("<r><u>-1</u><f>x</f><b>!!</b><e/><n xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xsi:nil='true'/><s><q/></s></r>")
+    expect(failure({ _ = try r.field("u").decodeUInt() }) == "$.u: '-1' is not a U64")
+    expect(failure({ _ = try r.field("f").decodeFloat() }) == "$.f: 'x' is not a number")
+    expect(failure({ _ = try r.field("b").decodeBytes() }) == "$.b: '!!' is not base64")
+    expect(try! r.field("e").decodeBytes().isEmpty)
+    expect(failure({ _ = try r.field("n").decodeString() }) == "$.n: expected text, found nil")
+    expect(failure({ _ = try r.field("n").decodeSequence() }) == "$.n: expected a sequence, found nil")
+    expect(failure({ try r.field("n").beginStruct("T") }) == "$.n: expected an element (T), found nil")
+    expect(failure({ _ = try r.field("s").decodeString() }) == "$.s: expected text, found elements")
+    expect(failure({ _ = try r.field("z").decodeString() }) == "$.z: missing")
+    expect(r.field("u").invalid("no").description() == "$.u: no")
+    expect(r.field("a b").path == "$['a b']")
+    expect(r.field("@x").isMissing)
+}
+
+@test
+fn floatsAndUnsignedIntegersAreRead() {
+    expect(try! root("<f>INF</f>").decodeFloat() == F64.infinity)
+    expect(try! root("<f>NaN</f>").decodeFloat().isNaN)
+    expect(try! root("<f> 2.5 </f>").decodeFloat() == 2.5)
+    expect(try! root("<u>18446744073709551615</u>").decodeUInt() == 18446744073709551615)
+    expect(try! root("<b>AP8=</b>").decodeBytes() == [0, 255])
+    let decoder = XmlDecoder(try! Xml.parse("<a>1</a>").root)
+    expect(try! decoder.decodeInt() == 1 && decoder.element!.name == "a")
+}
+
+@test
+fn encodingWhatXmlCannotHoldIsAnError() {
+    let encoder = XmlEncoder()
+    expect((try? encoder.text()) == none)
+    try! encoder.encodeInt(1)
+    expect((try? encoder.encodeInt(2)) == none)
+    let flattening = XmlEncoder()
+    try! flattening.beginStruct("S", count: 1)
+    try! flattening.flattenNext()
+    expect((try? flattening.encodeInt(1)) == none)
+    let attribute = XmlEncoder()
+    try! attribute.beginStruct("S", count: 1)
+    try! attribute.encodeField("@a")
+    expect((try? attribute.beginSequence(count: 0)) == none)
+    let text = XmlEncoder()
+    try! text.beginStruct("S", count: 1)
+    try! text.encodeField("#text")
+    try! text.encodeNull()
+    try! text.encodeField("#text")
+    try! text.encodeUInt(5)
+    try! text.encodeField("b")
+    try! text.encodeBool(true)
+    try! text.encodeField("@c")
+    try! text.encodeNull()
+    try! text.endStruct()
+    expect(try! text.text() == "<S>5<b>true</b></S>")
+}

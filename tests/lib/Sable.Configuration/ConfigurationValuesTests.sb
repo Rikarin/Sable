@@ -1,0 +1,25 @@
+module ConfigurationValuesTests
+
+import Sable.Configuration
+import Sable.Testing
+
+@test
+fn aKeyIsTheSameHoweverItIsCased() {
+    var values = ConfigurationValues()
+    expect(values.isEmpty)
+    values.set("Http:Port", "80")
+    values.set("Http:Host", "a")
+    values.set("HTTP:PORT", "8080")
+    assertEqual(values.keys, ["HTTP:PORT", "Http:Host"])
+    expect(values.value("http:port") == "8080" && values.count == 2)
+    values.remove("http:host")
+    values.remove("none")
+    assertEqual(values.keys, ["HTTP:PORT"])
+    expect(values.value("Http:Host") == none && !values.isEmpty)
+}
+
+@test
+fn valuesMayBeGivenAsADictionary() {
+    let values = ConfigurationValues(["a": "1", "b": "2"])
+    assertEqual(values.keys, ["a", "b"])
+}

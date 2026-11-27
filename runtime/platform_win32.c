@@ -16,6 +16,7 @@
 #include <io.h>
 #include <shellapi.h>
 #include <psapi.h>
+#include <winsvc.h>
 
 #include "wide.h"
 

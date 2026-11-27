@@ -1,0 +1,149 @@
+module Sable.Configuration
+
+import Sable.Concurrency
+import Sable.Serialize
+import Sable.Validation
+
+/// Options bound from a section that follow it as the configuration is
+/// reloaded: .NET's `IOptionsMonitor<T>`. `value` is the latest options
+/// that were bound and passed their checks; a reload that gives options
+/// that do not is refused, and the options stay as they were (`refusal`
+/// says why). Gone through with 'for await', it gives each new value as it
+/// is taken, from then on.
+///
+/// Named options are monitors of one type and different names, bound from
+/// different sections: `ServiceCollection.configure` registers each under
+/// its name.
+///
+/// ```sable
+/// @derive(Serializable)
+/// struct Logging: Sendable {
+///     var level: String
+/// }
+///
+/// let memory = MemoryConfigurationProvider(["Logging:Level": "Info"])
+/// var builder = ConfigurationBuilder()
+/// builder.add(memory)
+/// let configuration = try! await builder.build()
+/// let logging = try! await OptionsMonitor.bind(Logging.self, from: configuration.section("Logging"))
+/// var changes = logging.makeAsyncIterator()
+/// memory.set("Logging:Level", "Debug")
+/// try! await configuration.reload()
+/// assert(logging.value.level == "Debug")
+/// assert((await changes.next())!.level == "Debug")
+/// ```
+@immutable
+public final class OptionsMonitor<T: Serializable & Sendable>: AsyncSequence {
+    public alias Element = T
+    public alias Iter = WatchReceiver<T>
+
+    /// Where the options are bound from.
+    public let section: ConfigurationSection
+    /// Which of the type's they are: "" for the one without a name.
+    public let name: String
+    let check: async (T) throws -> Void
+    let values: Watch<T>
+    let refused: Mutex<String?>
+
+    init(_ section: ConfigurationSection, _ name: String, _ check: @escaping @Sendable async (T) throws -> Void, _ value: T) {
+        self.section = section
+        self.name = name
+        self.check = check
+        values = Watch(value)
+        let nothing: String? = none
+        refused = Mutex(nothing)
+    }
+
+    /// Options bound from the section now, and again at each change of its
+    /// configuration. What binding throws, this throws.
+    public static fn bind(_ type: T.Type, from section: ConfigurationSection, named name: String = "") async throws -> OptionsMonitor<T> {
+        return try await OptionsMonitor.bind(type, from: section, named: name, validate: { _options in })
+    }
+
+    /// Options bound from the section, which the validator's rules must
+    /// pass now (ValidationError, its failures' paths after the section's)
+    /// and at each change.
+    ///
+    /// ```sable
+    /// @derive(Serializable)
+    /// struct Server: Sendable {
+    ///     var port: Int
+    /// }
+    /// struct ServerValidator: Validator<Server> {
+    ///     fn rules(_ r: inout Rules<Server>) { r.field(\.port).inRange(1...65535) }
+    /// }
+    ///
+    /// var builder = ConfigurationBuilder()
+    /// builder.addValues(["Server:Port": "0"])
+    /// let configuration = try! await builder.build()
+    /// do {
+    ///     _ = try await OptionsMonitor.bind(Server.self, from: configuration.section("Server"), validator: ServerValidator())
+    /// } catch {
+    ///     assert(error.description().contains("between 1 and 65535"))
+    /// }
+    /// ```
+    public static fn bind<V: Validator<T> & Sendable>(_ type: T.Type, from section: ConfigurationSection, named name: String = "", validator: V) async throws -> OptionsMonitor<T> {
+        let label = section.path
+        return try await OptionsMonitor.bind(type, from: section, named: name, validate: { options in
+            _ = try await validatedOptions(options, named: label, by: validator)
+        })
+    }
+
+    /// Options bound from the section, which the closure must not throw
+    /// for, now or at a change: what it throws, this throws.
+    public static fn bind(_ type: T.Type, from section: ConfigurationSection, named name: String = "", validate: @escaping @Sendable async (T) throws -> Void) async throws -> OptionsMonitor<T> {
+        let value = try section.bind(type)
+        try await validate(value)
+        let monitor = OptionsMonitor<T>(section, name, validate, value)
+        section.configuration.listen(ConfigurationListener(tell: [weak monitor] () => {
+            guard let monitor = monitor else {
+                return false
+            }
+            await monitor.refresh()
+            return true
+        }, held: [weak monitor] () => monitor != none))
+        return monitor
+    }
+
+    /// The latest options taken.
+    public var value: T => values.value
+
+    /// How many times they have been taken again since they were first.
+    public var version: Int => values.version
+
+    /// Why the latest change of the configuration was not taken: its
+    /// binding's or its check's error, in words; none once one is.
+    public var refusal: String? => refused.withLock { (why: inout String?) -> String? in why }
+
+    /// The options as they are now, and their name.
+    public var options: Options<T> => Options(value, name: name)
+
+    // Bound and checked again: taken, or refused.
+    fn refresh() async {
+        var bound: T? = none
+        do {
+            bound = try section.bind(T.self)
+        } catch {
+            refuse(error.description())
+            return
+        }
+        let value = bound!
+        do {
+            try await check(value)
+        } catch {
+            refuse(error.description())
+            return
+        }
+        values.send(value)
+        refused.withLock { (why: inout String?) -> Void in why = none }
+    }
+
+    fn refuse(_ said: String) {
+        refused.withLock { (why: inout String?) -> Void in why = said }
+    }
+
+    /// The options taken from now on, as they are.
+    public fn makeAsyncIterator() -> WatchReceiver<T> {
+        return values.subscribe()
+    }
+}

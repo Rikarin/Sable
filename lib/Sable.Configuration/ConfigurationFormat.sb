@@ -1,0 +1,198 @@
+module Sable.Configuration
+
+import Sable.IO
+import Sable.Serialize
+import Sable.Serialize.Yaml
+
+/// What a configuration file is written in. A table's (an object's, a
+/// mapping's) keys are a path's parts, and an array's elements are keyed by
+/// their positions: `[Servers]` of TOML with `hosts = ["a", "b"]` is
+/// `Servers:hosts:0` and `Servers:hosts:1`. Every value is text: a number
+/// as it is written, a Bool as "true" or "false", a null, an empty table or
+/// an empty array as "".
+///
+/// ```sable
+/// let values = try! ConfigurationFormat.Json.parse("{\"Http\": {\"Port\": 80, \"Hosts\": [\"a\", \"b\"]}}")
+/// assert(values.value("Http:Port") == "80")
+/// assert(values.value("http:hosts:1") == "b")
+/// ```
+@derive(Equatable, Debug)
+public enum ConfigurationFormat: Sendable {
+    /// TOML 1.0.
+    Toml
+    /// JSON, with comments and trailing commas, as .NET's settings files
+    /// may have them.
+    Json
+    /// YAML 1.2: its first document.
+    Yaml
+    /// A `.env` file: `NAME=value` a line, `export` before it or not, a
+    /// value bare (a `#` after white space begins a comment), in single
+    /// quotes as it is, or in double quotes with `\n`, `\t`, `\"` and `\\`.
+    /// A name's `__` is a path's ':', as an environment variable's is.
+    DotEnv
+
+    /// The format a file's name says: `.toml`, `.json`, `.yaml` or `.yml`,
+    /// and `.env` (or a name that ends so); none for any other.
+    ///
+    /// ```sable
+    /// assert(ConfigurationFormat.of(FilePath("appsettings.json")) == .Json)
+    /// assert(ConfigurationFormat.of(FilePath(".env")) == .DotEnv)
+    /// assert(ConfigurationFormat.of(FilePath("notes.txt")) == none)
+    /// ```
+    public static fn of(_ path: FilePath) -> ConfigurationFormat? {
+        let name = (path.fileName ?? "").lowercased()
+        if name.hasSuffix(".toml") {
+            return .Toml
+        }
+        if name.hasSuffix(".json") {
+            return .Json
+        }
+        if name.hasSuffix(".yaml") || name.hasSuffix(".yml") {
+            return .Yaml
+        }
+        if name == ".env" || name.hasSuffix(".env") {
+            return .DotEnv
+        }
+        return none
+    }
+
+    /// The text's values; Malformed, saying the source, when it is not in
+    /// the format.
+    public fn parse(_ text: String, source: String = "") throws(ConfigurationError) -> ConfigurationValues {
+        var values = ConfigurationValues()
+        do {
+            match self {
+                case .Toml   => try flattenRoot(TomlDecoder.parse(text), &values)
+                case .Json   => try flattenRoot(JsonDecoder.parse(text, options: relaxed()), &values)
+                case .Yaml   => try flattenRoot(YamlDecoder.parse(text), &values)
+                case .DotEnv => try parseDotEnv(text, &values)
+            }
+        } catch {
+            throw ConfigurationError.Malformed(source: source, reason: error.description())
+        }
+        return values
+    }
+}
+
+// A document's values: a table's, or none for an empty one.
+fn flattenRoot<D: Decoder>(_ decoder: D, _ values: inout ConfigurationValues) throws(SerializeError) {
+    match decoder.kind {
+        case .Map     => try flatten(decoder, "", &values)
+        case .Missing => { }
+        case .Null    => { }
+        case _        => throw decoder.mismatch("a table")
+    }
+}
+
+// The decoder's value, its every scalar at its path.
+fn flatten<D: Decoder>(_ decoder: D, _ path: String, _ values: inout ConfigurationValues) throws(SerializeError) {
+    match decoder.kind {
+        case .Map => {
+            let members = try decoder.decodeMap()
+            if members.isEmpty && !path.isEmpty {
+                values.set(path, "")
+            }
+            for member in members {
+                try flatten(member.value, ConfigurationPath.combine(path, member.key), &values)
+            }
+        }
+        case .Sequence => {
+            let elements = try decoder.decodeSequence()
+            if elements.isEmpty && !path.isEmpty {
+                values.set(path, "")
+            }
+            for (i, element) in elements.enumerated() {
+                try flatten(element, ConfigurationPath.combine(path, "\(i)"), &values)
+            }
+        }
+        case .Missing => { }
+        case _        => values.set(path, try scalarText(decoder))
+    }
+}
+
+fn scalarText<D: Decoder>(_ decoder: D) throws(SerializeError) -> String {
+    return match decoder.kind {
+        case .Null   => ""
+        case .Bool   => (try decoder.decodeBool()) ? "true" : "false"
+        case .Number => numberText(decoder)
+        case _       => try decoder.decodeString()
+    }
+}
+
+fn numberText<D: Decoder>(_ decoder: D) -> String {
+    if let whole = try? decoder.decodeInt() {
+        return "\(whole)"
+    }
+    if let unsigned = try? decoder.decodeUInt() {
+        return "\(unsigned)"
+    }
+    if let float = try? decoder.decodeFloat() {
+        return "\(float)"
+    }
+    return ""
+}
+
+// ---- .env ----------------------------------------------------------------
+
+fn parseDotEnv(_ text: String, _ values: inout ConfigurationValues) throws(SerializeError) {
+    for (i, raw) in text.lines().enumerated() {
+        var line = raw.trimmed()
+        if line.isEmpty || line.hasPrefix("#") {
+            continue
+        }
+        if line.hasPrefix("export ") {
+            line = line.trimmingPrefix("export ").trimmed()
+        }
+        guard let (name, rest) = line.splitOnce("=") else {
+            throw SerializeError.Syntax(reason: "line \(i + 1): no '=' after the name")
+        }
+        let key = name.trimmed()
+        if key.isEmpty {
+            throw SerializeError.Syntax(reason: "line \(i + 1): no name before '='")
+        }
+        values.set(key.replacing("__", with: ConfigurationPath.separator), try dotEnvValue(rest.trimmed(), i + 1))
+    }
+}
+
+fn dotEnvValue(_ text: String, _ line: Int) throws(SerializeError) -> String {
+    if text.hasPrefix("'") {
+        let inside = text.trimmingPrefix("'")
+        guard let (value, _) = inside.splitOnce("'") else {
+            throw SerializeError.Syntax(reason: "line \(line): a quote is not closed")
+        }
+        return value
+    }
+    if text.hasPrefix("\"") {
+        var value = ""
+        var escaped = false
+        var first = true
+        for c in text {
+            if first {
+                first = false
+                continue
+            }
+            if escaped {
+                value = value + (c == 'n' ? "\n" : c == 't' ? "\t" : c == 'r' ? "\r" : "\(c)")
+                escaped = false
+            } else if c == '\\' {
+                escaped = true
+            } else if c == '"' {
+                return value
+            } else {
+                value = value + "\(c)"
+            }
+        }
+        throw SerializeError.Syntax(reason: "line \(line): a quote is not closed")
+    }
+    // A comment begins at a '#' after white space.
+    var value = ""
+    var spaced = false
+    for c in text {
+        if c == '#' && spaced {
+            break
+        }
+        spaced = c == ' ' || c == '\t'
+        value = value + "\(c)"
+    }
+    return value.trimmed()
+}

@@ -1,0 +1,41 @@
+module Sable.Hosting
+
+/// What a Windows service tells the Service Control Manager, which started
+/// it: .NET's `UseWindowsService`. `ApplicationBuilder.useWindowsService`
+/// has the host connect to it as it runs and say when it is running,
+/// stopping and stopped; a stop or a shutdown the manager asks for comes
+/// as SIGTERM. The service is installed as any is (`sc.exe create shop
+/// binPath= C:\shop\shop.exe`), as its own process.
+///
+/// There are services on Windows alone: elsewhere — macOS, Linux, WASI —
+/// `isSupported` is false and the host does nothing of this.
+///
+/// ```sable
+/// let builder = ApplicationBuilder()
+/// builder.useWindowsService()
+/// #if !os(windows)
+/// assert(!WindowsService.isSupported)
+/// #endif
+/// ```
+public struct WindowsService {
+    static let running: Int = 1
+    static let stopping: Int = 2
+    static let stopped: Int = 3
+
+    /// Whether the system has Windows services.
+    public static var isSupported: Bool {
+        get {
+            #if os(windows)
+            return true
+            #else
+            return false
+            #endif
+        }
+    }
+
+    // Connects to the manager, waiting until it has: whether the program is
+    // a service. Once a program is not, it is not.
+    static fn connect() -> Bool {
+        return Runtime.windowsService(0) == 0
+    }
+}

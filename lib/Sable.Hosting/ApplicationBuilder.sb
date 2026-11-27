@@ -1,5 +1,6 @@
 module Sable.Hosting
 
+import Sable.Configuration
 import Sable.DependencyInjection
 import Sable.Diagnostics
 import Sable.IO
@@ -15,19 +16,25 @@ import Sable.Time
 /// builder.services.addWorker("once") { context, _cancellation in
 ///     context.lifetime.requestStop()
 /// }
-/// let host = try! builder.build()
+/// let host = try! await builder.build()
 /// try! await host.run()
 /// ```
 public final class ApplicationBuilder {
     /// The services to run.
     public let services: HostedServices
     /// What they are made from, for those that say what that is
-    /// (`HostedServices.add(_:_:)` of a type). The host's environment,
-    /// configuration, logging, lifetime and clock are registered as it is
-    /// built, unless something else is; it disposes the rest as it stops.
+    /// (`HostedServices.add(_:_:)` of a type), and the options they are
+    /// configured by (`ServiceCollection.configure`). The host's
+    /// environment, configuration, logging, lifetime and clock are
+    /// registered as it is built, unless something else is; it disposes the
+    /// rest as it stops.
     public var container: ServiceCollection
-    /// What they are configured by: the environment's variables, if not set.
-    public var configuration: any HostConfiguration
+    /// What they are configured by, as .NET's host has it: the optional
+    /// files `appsettings.toml` and `appsettings.<environment>.toml` of the
+    /// current directory, reloaded as they change; the environment's
+    /// variables; and the arguments given, last. More are added here, and
+    /// those there are may be taken out.
+    public var configuration: ConfigurationBuilder
     /// How they log.
     public var logging: HostLogging
     /// Where they run.
@@ -35,18 +42,27 @@ public final class ApplicationBuilder {
     /// How the host starts and stops.
     public var options: HostOptions
     /// The time it goes by: the system's, if not set.
-    public var clock: any HostClock
+    public var clock: HostClock
     var systemd: Bool = false
+    var windowsService: Bool = false
 
-    /// A builder with the usual settings. SABLE_LOG's level is the logging's.
-    public init() {
+    /// A builder with the usual settings, configured by the arguments (as
+    /// `CommandLineConfigurationProvider` reads them) over the rest.
+    /// SABLE_LOG's level is the logging's.
+    public init(arguments: String[>..] = []) {
         services = HostedServices()
         container = ServiceCollection()
-        configuration = EnvironmentConfiguration()
         logging = HostLogging(minimumLevel: ApplicationBuilder.levelFromEnvironment())
         environment = HostEnvironment.current()
         options = HostOptions()
-        clock = SystemHostClock()
+        clock = HostClock.system
+        configuration = ConfigurationBuilder()
+        configuration.addFile(FilePath("appsettings.toml"), optional: true, reloadOnChange: true)
+        configuration.addFile(FilePath("appsettings.\(environment.name).toml"), optional: true, reloadOnChange: true)
+        configuration.addEnvironment()
+        if !arguments.isEmpty {
+            configuration.addCommandLine(arguments)
+        }
     }
 
     static fn levelFromEnvironment() -> Level? {
@@ -65,46 +81,55 @@ public final class ApplicationBuilder {
         systemd = true
     }
 
-    /// The host, its services made, each from its closure in order. What a
-    /// closure throws, this throws; and ServiceError where the container has
-    /// something wrong, or must be waited for (`buildAsync`).
-    public fn build() throws -> Host {
-        let lifetime = ApplicationLifetime()
-        return try host(lifetime, try registered(lifetime).build())
+    /// Runs the host as a Windows service when the Service Control Manager
+    /// started the program (`WindowsService`): it is told when the host is
+    /// running, stopping and stopped, and the stop it asks for is the
+    /// host's SIGTERM, which `HostOptions.handleSignals` has it hear.
+    /// Anywhere else, and in a program the manager did not start, nothing.
+    public fn useWindowsService() {
+        windowsService = true
     }
 
-    /// The host, as `build` makes it, with what in its container must be
-    /// waited for.
+    /// The host: its configuration loaded, its container's provider built
+    /// with what in it must be waited for (the options it binds among
+    /// them), and its services made, each from its closure in order. What
+    /// a closure throws, this throws; ConfigurationError where the
+    /// configuration could not be loaded, and ServiceError where the
+    /// container has something wrong.
     ///
     /// ```sable
     /// let builder = ApplicationBuilder()
+    /// builder.configuration.addValues(["Http:Port": "8080"])
     /// builder.container.addSingleton(Int.self) { _services in
     ///     await Task.yield()
     ///     return 8080
     /// }
-    /// let host = try! await builder.buildAsync()
+    /// let host = try! await builder.build()
     /// assert(try! host.context.container.resolve(Int.self) == 8080)
+    /// assert(host.configuration.value("http:port") == "8080")
     /// ```
-    public async fn buildAsync() throws -> Host {
+    public async fn build() throws -> Host {
         let lifetime = ApplicationLifetime()
-        return try host(lifetime, try await registered(lifetime).buildAsync())
+        let configured = try await configuration.build()
+        let provider = try await registered(lifetime, configured).buildAsync()
+        return try host(lifetime, configured, provider)
     }
 
     // What the container has, with the host's own.
-    fn registered(_ lifetime: ApplicationLifetime) -> ServiceCollection {
+    fn registered(_ lifetime: ApplicationLifetime, _ configured: Configuration) -> ServiceCollection {
         var all = container
         all.tryAdd(ServiceDescriptor.of(HostEnvironment.self, none, environment))
-        all.tryAdd(ServiceDescriptor.of((any HostConfiguration).self, none, configuration))
+        all.tryAdd(ServiceDescriptor.of(Configuration.self, none, configured))
         all.tryAdd(ServiceDescriptor.of(HostLogging.self, none, logging))
         all.tryAdd(ServiceDescriptor.of(ApplicationLifetime.self, none, lifetime))
-        all.tryAdd(ServiceDescriptor.of((any HostClock).self, none, clock))
+        all.tryAdd(ServiceDescriptor.of(HostClock.self, none, clock))
         return all
     }
 
-    fn host(_ lifetime: ApplicationLifetime, _ provider: ServiceProvider) throws -> Host {
+    fn host(_ lifetime: ApplicationLifetime, _ configured: Configuration, _ provider: ServiceProvider) throws -> Host {
         let context = HostContext {
             environment: environment,
-            configuration: configuration,
+            configuration: configured,
             logging: logging,
             lifetime: lifetime,
             clock: clock,
@@ -115,6 +140,6 @@ public final class ApplicationBuilder {
             let service = try entry.make(context)
             runs.append(ServiceRun(name: entry.name, service: service, onFailure: entry.onFailure ?? options.onServiceFailure))
         }
-        return Host(context: context, options: options, runs: runs, systemd: systemd && Systemd.isActive)
+        return Host(context: context, options: options, runs: runs, systemd: systemd && Systemd.isActive, windowsService: windowsService)
     }
 }

@@ -31,7 +31,7 @@ final class RecurringJob: HostedService {
             var failure: (any Error)? = none
             var running = 0
             var waiting = 0
-            var last = self.context.clock.now
+            var last = self.context.clock.now()
             if self.options.runAtStart {
                 running += 1
                 group.spawn { await self.runOnce(token) }
@@ -47,8 +47,8 @@ final class RecurringJob: HostedService {
                     }
                     case .Due => {
                         // Not yet, after all: the clock was set back.
-                        if self.schedule.isCron && self.context.clock.now < due! {
-                            due = self.schedule.next(after: due!, now: self.context.clock.now, zone: self.options.zone)
+                        if self.schedule.isCron && self.context.clock.now() < due! {
+                            due = self.schedule.next(after: due!, now: self.context.clock.now(), zone: self.options.zone)
                             if let time = due {
                                 group.spawn { await self.wait(until: time, token) }
                             }
@@ -63,7 +63,7 @@ final class RecurringJob: HostedService {
                         } else {
                             self.log(Level.Warning, "a run was skipped: the one before has not ended", [])
                         }
-                        due = self.schedule.next(after: last, now: self.context.clock.now, zone: self.options.zone)
+                        due = self.schedule.next(after: last, now: self.context.clock.now(), zone: self.options.zone)
                         if let time = due {
                             group.spawn { await self.wait(until: time, token) }
                         }

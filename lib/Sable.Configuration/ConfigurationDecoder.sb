@@ -1,0 +1,240 @@
+module Sable.Configuration
+
+import Sable.Serialize
+import Sable.Text
+
+/// The Decoder that reads a configuration's section, as
+/// `ConfigurationSection.bind` does: a field is the key of that name,
+/// however it is cased; a sequence the sections in it, by their positions;
+/// and every scalar text, which an Int, a float or a Bool is parsed from
+/// (white space about it let be). A section with nothing in it, "" — an
+/// empty array or table of a file — is an empty sequence, map or struct,
+/// and so is one that is not there: a struct's fields are each missing,
+/// and say so by their keys, where they are not `@serialize(defaulted)`.
+/// Errors name the key: `Pool:Size: 'many' is not an integer`.
+///
+/// ```sable
+/// var builder = ConfigurationBuilder()
+/// builder.addValues(["Pool:Size": "4", "Pool:Hosts:0": "a"])
+/// let configuration = try! await builder.build()
+/// let pool = ConfigurationDecoder(configuration.section("pool"))
+/// assert(try! pool.field("SIZE").decodeInt() == 4)
+/// assert(try! pool.field("hosts").decodeSequence()[0].decodeString() == "a")
+/// assert(pool.field("idle").isMissing)
+/// ```
+public final class ConfigurationDecoder: Decoder {
+    let node: ConfigurationNode?
+    let at: String
+    let excluded: String[>..]
+
+    /// A decoder of what the section holds now.
+    public init(_ section: ConfigurationSection) {
+        self.init(section.node, path: section.path)
+    }
+
+    init(_ node: ConfigurationNode?, path: String, excluded: String[>..] = []) {
+        self.node = node
+        self.at = path
+        self.excluded = excluded
+    }
+
+    /// The key it reads: "Pool:Size"; "$" for the root.
+    public var path: String => at.isEmpty ? "$" : at
+
+    public var isMissing: Bool => node == none
+
+    /// False: a configuration has no null.
+    public var isNull: Bool => false
+
+    /// A Sequence where every key in it is a position, a Map where some
+    /// key is not; a String for a value.
+    public var kind: DecodedKind {
+        get {
+            guard let node = node else {
+                return .Missing
+            }
+            if node.children.isEmpty {
+                return .String
+            }
+            for child in node.children {
+                if ConfigurationPath.index(child.key) == none {
+                    return .Map
+                }
+            }
+            return .Sequence
+        }
+    }
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        guard let node = node else {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: node.children.isEmpty ? "'\(node.value ?? "")'" : "a section")
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    // The value, when this is one; a mismatch otherwise.
+    fn text(_ expected: String) throws(SerializeError) -> String {
+        if let node = node {
+            if node.children.isEmpty {
+                return node.value ?? ""
+            }
+        }
+        throw mismatch(expected)
+    }
+
+    // ---- Values ------------------------------------------------------------
+
+    /// "true" or "false", however cased.
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        let value = try text("a Bool").trimmed().lowercased()
+        if value == "true" {
+            return true
+        }
+        if value == "false" {
+            return false
+        }
+        throw invalid("'\(value)' is not true or false")
+    }
+
+    public fn decodeInt() throws(SerializeError) -> Int {
+        let value = try text("an integer").trimmed()
+        guard let parsed = try? Int.parse(value) else {
+            throw invalid("'\(value)' is not an integer")
+        }
+        return parsed
+    }
+
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        let value = try text("an unsigned integer").trimmed()
+        guard let parsed = try? U64.parse(value) else {
+            throw invalid("'\(value)' is not an unsigned integer")
+        }
+        return parsed
+    }
+
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        let value = try text("a number").trimmed()
+        guard let parsed = try? F64.parse(value) else {
+            throw invalid("'\(value)' is not a number")
+        }
+        return parsed
+    }
+
+    public fn decodeString() throws(SerializeError) -> String {
+        return try text("a string")
+    }
+
+    /// Bytes, from their base64 (RFC 4648; the padding may be left off).
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        let value = try text("a base64 string").trimmed()
+        guard let bytes = try? Base64.decode(value) else {
+            throw invalid("'\(value)' is not base64")
+        }
+        return bytes
+    }
+
+    // ---- Sections ----------------------------------------------------------
+
+    // The sections in it; none for "", or for a section that is not there.
+    fn sections(_ expected: String) throws(SerializeError) -> ConfigurationNode[>..] {
+        guard let node = node else {
+            return []
+        }
+        if node.children.isEmpty && (node.value ?? "") != "" {
+            throw mismatch(expected)
+        }
+        return node.children
+    }
+
+    /// The sections in it, in order of their positions.
+    public fn decodeSequence() throws(SerializeError) -> ConfigurationDecoder[>..] {
+        var all: ConfigurationDecoder[>..] = []
+        for child in try sections("a sequence") {
+            all.append(ConfigurationDecoder(child, path: child.path))
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> ConfigurationDecoder {
+        return field("\(index)")
+    }
+
+    /// The sections in it, by their keys.
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<ConfigurationDecoder>[>..] {
+        var all: DecodedMember<ConfigurationDecoder>[>..] = []
+        for child in try sections("a section") {
+            if !excludes(child.key) {
+                all.append(DecodedMember { key: child.key, value: ConfigurationDecoder(child, path: child.path) })
+            }
+        }
+        return all
+    }
+
+    /// Throws unless it is a section, or "".
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        _ = try sections("a section (\(name))")
+    }
+
+    /// The key in it, however cased; a missing decoder where there is none.
+    public fn field(_ key: String) -> ConfigurationDecoder {
+        let found = excludes(key) ? none : node?.child(key)
+        return ConfigurationDecoder(found, path: ConfigurationPath.combine(at, found?.key ?? key))
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        let folded = key.lowercased()
+        for each in excluded {
+            if each.lowercased() == folded {
+                return true
+            }
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> ConfigurationDecoder {
+        var all = excluded
+        for key in keys {
+            all.append(key)
+        }
+        return ConfigurationDecoder(node, path: at, excluded: all)
+    }
+
+    // ---- Unions ------------------------------------------------------------
+
+    /// The value, for a case that carries nothing; or the one key of a
+    /// section of one, whose section is the payload.
+    public fn caseName() throws(SerializeError) -> String {
+        if let node = node {
+            if node.children.isEmpty {
+                return (node.value ?? "").trimmed()
+            }
+            if node.children.count == 1 {
+                return node.children[0].key
+            }
+        }
+        throw mismatch("a case's name, or a section of one")
+    }
+
+    /// The one section's; missing for a case given as a value.
+    public fn casePayload() -> ConfigurationDecoder {
+        if let node = node {
+            if node.children.count == 1 {
+                let only = node.children[0]
+                return ConfigurationDecoder(only, path: only.path)
+            }
+        }
+        return ConfigurationDecoder(none, path: at)
+    }
+}

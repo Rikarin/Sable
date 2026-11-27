@@ -1,0 +1,46 @@
+module Sable.Configuration
+
+import Sable.IO
+
+/// Where configuration comes from: what a `ConfigurationBuilder` is made of,
+/// each provider's values over those before it. A package that reads a
+/// secret store, a database or a remote service conforms a type of its
+/// own, which is loaded and reloaded as the library's are.
+///
+/// ```sable
+/// struct Fixed: ConfigurationProvider {
+///     var name: String => "fixed"
+///     fn load() async throws(ConfigurationError) -> ConfigurationValues {
+///         return ConfigurationValues(["Http:Port": "8080"])
+///     }
+/// }
+///
+/// var builder = ConfigurationBuilder()
+/// builder.add(Fixed())
+/// let configuration = try! await builder.build()
+/// assert(configuration.value("http:port") == "8080")
+/// ```
+public protocol ConfigurationProvider: Sendable {
+    /// What `Configuration.debugView` says a value came from: a file's
+    /// path, "environment", "command line".
+    var name: String { get }
+
+    /// Its values, as they are now: read as the configuration is built,
+    /// and again as it is reloaded.
+    fn load() async throws(ConfigurationError) -> ConfigurationValues
+
+    /// The files whose changes it is to be reloaded at
+    /// (`Configuration.watch`); none, by default.
+    var files: FilePath[>..] { get }
+
+    /// Whether every value it gives is a secret, never to be printed:
+    /// false, by default, when only keys that look secret are
+    /// (`ConfigurationPath.isSecret`).
+    var isSecret: Bool { get }
+}
+
+extension ConfigurationProvider {
+    public var files: FilePath[>..] => []
+
+    public var isSecret: Bool => false
+}

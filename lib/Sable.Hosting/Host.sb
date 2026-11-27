@@ -1,6 +1,7 @@
 module Sable.Hosting
 
 import Sable.Concurrency
+import Sable.Configuration
 import Sable.DependencyInjection
 import Sable.Diagnostics
 import Sable.Process
@@ -18,7 +19,8 @@ import Sable.Time
 /// It stops when SIGTERM or SIGINT comes, a service fails whose policy that
 /// is, `ApplicationLifetime.requestStop` is called, or the task that runs it
 /// is cancelled. A SIGINT that comes while it is stopping ends the program
-/// there, with status 130.
+/// there, with status 130. While it runs, its configuration is reloaded as
+/// the files it is read from change (`HostOptions.reloadOnChange`).
 ///
 /// ```sable
 /// let builder = ApplicationBuilder()
@@ -26,7 +28,7 @@ import Sable.Time
 /// builder.services.addWorker("work") { _context, cancellation in
 ///     _ = await cancellation.cancellationRequested()
 /// }
-/// let host = try! builder.build()
+/// let host = try! await builder.build()
 /// _ = host.lifetime.started.register { host.lifetime.requestStop() }
 /// try! await host.run()
 /// ```
@@ -36,13 +38,18 @@ public final class Host {
     let options: HostOptions
     let runs: ServiceRun[>..]
     let systemd: Bool
+    // Whether to be a Windows service, and whether it is one.
+    let windowsService: Bool
+    let isService: Atomic<Bool>
     let begun: Atomic<Bool>
 
-    init(context: HostContext, options: HostOptions, runs: ServiceRun[>..], systemd: Bool) {
+    init(context: HostContext, options: HostOptions, runs: ServiceRun[>..], systemd: Bool, windowsService: Bool) {
         self.context = context
         self.options = options
         self.runs = runs
         self.systemd = systemd
+        self.windowsService = windowsService
+        isService = Atomic(false)
         begun = Atomic(false)
     }
 
@@ -51,7 +58,7 @@ public final class Host {
     /// Where it runs.
     public var environment: HostEnvironment => context.environment
     /// What it is configured by.
-    public var configuration: any HostConfiguration => context.configuration
+    public var configuration: Configuration => context.configuration
     /// How it logs.
     public var logging: HostLogging => context.logging
 
@@ -87,8 +94,19 @@ public final class Host {
 
     // The host's life, and what went wrong in it.
     fn serve() async -> HostError? {
+        if windowsService {
+            isService.store(await Task.blocking { WindowsService.connect() })
+        }
         let signals = listen()
-        return await withTaskGroup(of: Void.self) { group in
+        var watching: Task<Void>? = none
+        if options.reloadOnChange {
+            do {
+                watching = try configuration.watch(delay: Duration.milliseconds(250), clock: context.clock)
+            } catch {
+                log(Level.Warning, "the configuration's files are not watched", [field("error", error.description())])
+            }
+        }
+        let failure = await withTaskGroup(of: Void.self) { group in
             if let heard = signals {
                 group.spawn { await self.answer(heard) }
             }
@@ -99,6 +117,10 @@ public final class Host {
             group.cancelAll()
             return failure
         }
+        watching?.cancel()
+        _ = await watching?.value
+        await tellWindows(WindowsService.stopped)
+        return failure
     }
 
     fn startAndStop() async -> HostError? {
@@ -110,7 +132,7 @@ public final class Host {
         let deadline = CancellationTokenSource()
         let timer = Task.detached {
             if await stopping.cancellationRequested() {
-                try? await self.context.clock.sleep(until: self.context.clock.now.adding(self.options.shutdownTimeout))
+                try? await self.context.clock.sleep(until: self.context.clock.now().adding(self.options.shutdownTimeout))
                 if !Task.isCancelled {
                     deadline.cancel()
                     current.abandon()
@@ -160,7 +182,7 @@ public final class Host {
         if let most = options.startupTimeout {
             let clock = context.clock
             limit = Task.detached {
-                try? await clock.sleep(until: clock.now.adding(most))
+                try? await clock.sleep(until: clock.now().adding(most))
                 if !Task.isCancelled {
                     timedOut.store(true)
                     step.abandon()
@@ -319,9 +341,15 @@ public final class Host {
         }
     }
 
-    // ---- systemd -----------------------------------------------------------
+    // ---- Service managers --------------------------------------------------
 
+    // What systemd is told, and a Windows service's manager as it can be.
     fn notify(_ state: String) async {
+        if state == Systemd.ready {
+            await tellWindows(WindowsService.running)
+        } else if state == Systemd.stopping {
+            await tellWindows(WindowsService.stopping)
+        }
         if !systemd {
             return
         }
@@ -331,12 +359,22 @@ public final class Host {
         }
     }
 
+    fn tellWindows(_ call: Int) async {
+        if !isService.load() {
+            return
+        }
+        let told = await Task.blocking { Runtime.windowsService(call) }
+        if told != 0 {
+            log(Level.Warning, "the service's manager was not told", [field("state", "\(call)")])
+        }
+    }
+
     // Told twice in each of the watchdog's intervals.
     fn keepAlive() async {
         guard let interval = Systemd.watchdogInterval else { return }
         while true {
             do {
-                try await context.clock.sleep(until: context.clock.now.adding(interval / 2))
+                try await context.clock.sleep(until: context.clock.now().adding(interval / 2))
             } catch {
                 return
             }

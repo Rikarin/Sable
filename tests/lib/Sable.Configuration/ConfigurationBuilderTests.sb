@@ -1,0 +1,31 @@
+module ConfigurationBuilderTests
+
+import Sable.Configuration
+import Sable.IO
+import Sable.Testing
+
+@test
+fn eachAddIsAProviderInOrder() {
+    var builder = ConfigurationBuilder()
+    builder.addFile(FilePath("a.json"), optional: true)
+    builder.addEnvironment(prefix: "APP_")
+    builder.addCommandLine(["--a=1"], switches: ["-a": "a"])
+    builder.addValues(["a": "1"])
+    builder.addUserSecrets(id: "app")
+    builder.add(MemoryConfigurationProvider(name: "last"))
+    assertEqual(builder.providers.map { $0.name }.toArray(), ["a.json", "environment APP_*", "command line", "memory", "user secrets app", "last"])
+}
+
+@test
+async fn anEmptyBuilderBuildsAnEmptyConfiguration() {
+    let configuration = try! await ConfigurationBuilder().build()
+    expect(configuration.children.isEmpty && configuration.value("a") == none && configuration.version == 0)
+    assertEqual(configuration.debugView(), "")
+}
+
+@test
+fn everyErrorSaysWhereItWas() {
+    assertEqual(ConfigurationError.NotFound(source: "a.toml").description(), "a.toml: not found")
+    assertEqual(ConfigurationError.Unreadable(source: "vault", reason: "down").description(), "vault: not read: down")
+    assertEqual(ConfigurationError.Malformed(source: "a.json", reason: "not JSON").description(), "a.json: not JSON")
+}

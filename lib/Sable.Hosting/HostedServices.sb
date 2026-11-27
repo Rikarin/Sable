@@ -51,7 +51,7 @@ public final class HostedServices {
     ///
     /// let builder = ApplicationBuilder()
     /// builder.services.add("greeter", Greeter.self)
-    /// _ = try! builder.build()
+    /// _ = try! await builder.build()
     /// ```
     public fn add<T: HostedService & Injectable>(_ name: String, _ type: T.Type, onFailure: ServiceFailurePolicy? = none) {
         add(name, onFailure: onFailure, make: { context in try context.container.make(type) })

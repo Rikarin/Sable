@@ -1,0 +1,110 @@
+module Sable.Configuration
+
+/// How configuration keys are spelled: the parts of a path parted by ':'
+/// ("Database:Primary:Url"), compared without regard to case, an array's
+/// elements keyed by their positions ("Servers:0"). .NET's
+/// `ConfigurationPath`.
+///
+/// ```sable
+/// assert(ConfigurationPath.combine("Database", "Url") == "Database:Url")
+/// assert(ConfigurationPath.key(of: "Database:Url") == "Url")
+/// assert(ConfigurationPath.parent(of: "Database:Url") == "Database")
+/// assert(ConfigurationPath.parent(of: "Database") == none)
+/// ```
+public struct ConfigurationPath {
+    /// What parts a path: ':'.
+    public static let separator: String = ":"
+
+    /// The paths joined, the empty ones left out.
+    public static fn combine(_ first: String, _ second: String) -> String {
+        if first.isEmpty {
+            return second
+        }
+        if second.isEmpty {
+            return first
+        }
+        return first + separator + second
+    }
+
+    /// The path's last part: the key of the section it names.
+    public static fn key(of path: String) -> String {
+        if let (_, last) = path.splitLastOnce(separator) {
+            return last
+        }
+        return path
+    }
+
+    /// The path of the section the path's is in; none for one at the root.
+    public static fn parent(of path: String) -> String? {
+        if let (first, _) = path.splitLastOnce(separator) {
+            return first
+        }
+        return none
+    }
+
+    /// The path's parts.
+    public static fn parts(of path: String) -> String[>..] {
+        return path.isEmpty ? [] : path.split(separator: ':')
+    }
+
+    /// Whether the two paths are one, however they are cased.
+    public static fn equal(_ a: String, _ b: String) -> Bool {
+        return a.lowercased() == b.lowercased()
+    }
+
+    /// Whether the first key goes before the second among a section's
+    /// keys: numbers first, by their values, then the rest without regard
+    /// to case.
+    ///
+    /// ```sable
+    /// assert(ConfigurationPath.precedes("2", "10"))
+    /// assert(ConfigurationPath.precedes("10", "a"))
+    /// assert(ConfigurationPath.precedes("apple", "Banana"))
+    /// ```
+    public static fn precedes(_ a: String, _ b: String) -> Bool {
+        let first = ConfigurationPath.index(a)
+        let second = ConfigurationPath.index(b)
+        if let x = first {
+            if let y = second {
+                return x < y
+            }
+            return true
+        }
+        if second != none {
+            return false
+        }
+        return a.lowercased() < b.lowercased()
+    }
+
+    /// Whether a value at the path is one a person should not see printed:
+    /// its key names a password, a secret, a token, a credential, a
+    /// connection string or a private or API key.
+    ///
+    /// ```sable
+    /// assert(ConfigurationPath.isSecret("Database:Password"))
+    /// assert(ConfigurationPath.isSecret("Stripe:ApiKey"))
+    /// assert(!ConfigurationPath.isSecret("Database:Url"))
+    /// ```
+    public static fn isSecret(_ path: String) -> Bool {
+        let key = ConfigurationPath.key(of: path).lowercased().replacing("_", with: "").replacing("-", with: "")
+        for word in ["password", "passwd", "pwd", "secret", "token", "credential", "connectionstring", "apikey", "privatekey", "accesskey"] {
+            if key.contains(word) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // The key as an array's position, when it is one.
+    static fn index(_ key: String) -> Int? {
+        if key.isEmpty {
+            return none
+        }
+        for c in key {
+            if c < '0' || c > '9' {
+                return none
+            }
+        }
+        return try? Int.parse(key)
+    }
+}

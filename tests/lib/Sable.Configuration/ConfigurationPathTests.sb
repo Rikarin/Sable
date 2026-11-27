@@ -1,0 +1,46 @@
+module ConfigurationPathTests
+
+import Sable.Configuration
+import Sable.Testing
+
+@test
+fn pathsAreJoinedAndTakenApart() {
+    assertEqual(ConfigurationPath.combine("", "a"), "a")
+    assertEqual(ConfigurationPath.combine("a", ""), "a")
+    assertEqual(ConfigurationPath.combine("a", "b:c"), "a:b:c")
+    assertEqual(ConfigurationPath.key(of: "a"), "a")
+    assertEqual(ConfigurationPath.key(of: "a:b:c"), "c")
+    expect(ConfigurationPath.parent(of: "a:b:c") == "a:b")
+    assertEqual(ConfigurationPath.parts(of: "a:b"), ["a", "b"])
+    expect(ConfigurationPath.parts(of: "").isEmpty)
+    expect(ConfigurationPath.equal("Http:Port", "HTTP:port"))
+}
+
+@test(arguments: [
+    ("1", "2", true),
+    ("2", "1", false),
+    ("9", "10", true),
+    ("10", "b", true),
+    ("b", "10", false),
+    ("a", "B", true),
+    ("B", "a", false),
+    ("", "a", true),
+])
+fn keysAreOrderedNumbersFirst(_ a: String, _ b: String, _ before: Bool) {
+    assertEqual(ConfigurationPath.precedes(a, b), before)
+}
+
+@test(arguments: [
+    ("Database:Password", true),
+    ("db:connection_string", true),
+    ("Auth:client-secret", true),
+    ("Github:Token", true),
+    ("Aws:AccessKey", true),
+    ("Tls:PrivateKey", true),
+    ("Smtp:Pwd", true),
+    ("Http:Port", false),
+    ("Secrets:Count:Name", false),
+])
+fn aKeyThatLooksSecretIsOne(_ path: String, _ secret: Bool) {
+    assertEqual(ConfigurationPath.isSecret(path), secret)
+}

@@ -1,0 +1,92 @@
+module Sable.Configuration
+
+import Sable.Serialize
+
+/// A part of a configuration: the values whose keys begin with its path.
+/// What it holds is the configuration's as it is when asked, the latest
+/// reload's. .NET's `IConfigurationSection`.
+///
+/// ```sable
+/// var builder = ConfigurationBuilder()
+/// builder.addValues(["Database:Url": "postgres://db", "Database:Pool:Size": "4"])
+/// let configuration = try! await builder.build()
+/// let database = configuration.section("Database")
+/// assert(database.key == "Database" && database.exists)
+/// assert(database.value("pool:size") == "4")
+/// assert(database.children.map(\.key) == ["Pool", "Url"])
+/// assert(!configuration.section("Cache").exists)
+/// ```
+public struct ConfigurationSection: Sendable {
+    /// The configuration it is a part of.
+    public let configuration: Configuration
+    /// Its path from the root: "" for the root itself.
+    public let path: String
+
+    /// The section at the path of the configuration.
+    public init(configuration: Configuration, path: String) {
+        self.configuration = configuration
+        self.path = path
+    }
+
+    /// Its path's last part.
+    public var key: String => ConfigurationPath.key(of: path)
+
+    var node: ConfigurationNode? => configuration.current.value.root.find(path)
+
+    /// Its own value, when it has one: a section with sections in it has none.
+    public var value: String? => node?.value
+
+    /// Whether there is anything at its path: a value, or sections.
+    public var exists: Bool => node != none
+
+    /// The value of the key in it: "Pool:Size".
+    public fn value(_ key: String) -> String? {
+        return configuration.value(ConfigurationPath.combine(path, key))
+    }
+
+    /// The section at the path in it.
+    public fn section(_ key: String) -> ConfigurationSection {
+        return ConfigurationSection(configuration: configuration, path: ConfigurationPath.combine(path, key))
+    }
+
+    /// The sections in it, in order: an array's by their positions, the
+    /// rest by their keys without regard to case.
+    public var children: ConfigurationSection[>..] {
+        get {
+            var all: ConfigurationSection[>..] = []
+            if let node = node {
+                for child in node.children {
+                    all.append(ConfigurationSection(configuration: configuration, path: child.path))
+                }
+            }
+            return all
+        }
+    }
+
+    /// What it holds, as a value of the type: a struct's fields its keys,
+    /// however they are cased, an array's elements its sections by their
+    /// positions, and a number or a Bool its text. A field it has no key
+    /// for keeps its initial value if it is `@serialize(defaulted)`, is none
+    /// if it is optional, and is an error otherwise; an error names the
+    /// key, "Database:Pool:Size". A section that is not there binds as an
+    /// empty one.
+    ///
+    /// ```sable
+    /// @derive(Serializable)
+    /// struct Pool {
+    ///     var size: Int
+    ///     @serialize(defaulted)
+    ///     var idle: Bool = false
+    ///     var hosts: String[>..]? = none
+    /// }
+    ///
+    /// var builder = ConfigurationBuilder()
+    /// builder.addValues(["Pool:Size": "4", "Pool:Hosts:0": "a", "Pool:Hosts:1": "b"])
+    /// let configuration = try! await builder.build()
+    /// let pool = try! configuration.section("Pool").bind(Pool.self)
+    /// assert(pool.size == 4 && !pool.idle && pool.hosts! == ["a", "b"])
+    /// ```
+    public fn bind<T: Serializable>(_ type: T.Type) throws(SerializeError) -> T {
+        return try T.decode(from: ConfigurationDecoder(node, path: path))
+    }
+}

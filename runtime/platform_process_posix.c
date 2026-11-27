@@ -762,3 +762,11 @@ static void signal_let_go(int number) {
 static bool signal_raise(int number) {
     return kill(getpid(), number) == 0;
 }
+
+// ---- Service managers ------------------------------------------------------
+
+// Windows' alone.
+static int service_control(int call) {
+    (void)call;
+    return 3;
+}

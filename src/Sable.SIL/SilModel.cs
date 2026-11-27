@@ -3427,6 +3427,7 @@ public static class SilBuiltins {
         Add("process_change_directory", SilType.Bool, SilType.String);
         Add("process_id", SilType.Int);
         Add("process_notify", SilType.Int, SilType.String, SilType.String);
+        Add("process_service", SilType.Int, SilType.Int);
         Add("memory_allocations", SilType.Int);
         Add("process_executable_path", SilType.String);
 

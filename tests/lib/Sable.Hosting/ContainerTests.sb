@@ -1,8 +1,10 @@
 module HostContainerTests
 
 import Sable.Concurrency
+import Sable.Configuration
 import Sable.DependencyInjection
 import Sable.Hosting
+import Sable.Serialize
 import Sable.Testing
 
 @immutable
@@ -46,7 +48,7 @@ async fn aServiceIsMadeByTheContainer() {
     let ledger = Ledger()
     let builder = builder(ledger)
     builder.container.addSingleton(String.self, key: "name", value: "worker")
-    let host = try! builder.build()
+    let host = try! await builder.build()
     try! await host.run()
     assertEqual(ledger.all, "worker ran disposed")
 }
@@ -59,8 +61,50 @@ async fn whatMustBeWaitedForIs() {
         await Task.yield()
         return "late"
     }
-    expectThrows(saying: "String (\"name\") must be waited for: 'buildAsync' builds them") { _ = try builder.build() }
-    let host = try! await builder.buildAsync()
+    let host = try! await builder.build()
     try! await host.run()
     assertEqual(ledger.all, "late ran disposed")
+}
+
+@derive(Serializable)
+struct Greeting: Sendable {
+    var text: String
+}
+
+@immutable
+@injectable(.Singleton)
+final class Greeter: HostedService {
+    let ledger: Ledger
+    let text: String
+    let lifetime: ApplicationLifetime
+    init(ledger: Ledger, greeting: Options<Greeting>, lifetime: ApplicationLifetime) {
+        self.ledger = ledger
+        text = greeting.value.text
+        self.lifetime = lifetime
+    }
+    async fn run(cancellation: CancellationToken) throws {
+        ledger.add(text)
+        lifetime.requestStop()
+    }
+}
+
+@test
+async fn optionsAreBoundFromTheHostsConfiguration() {
+    let ledger = Ledger()
+    let builder = ApplicationBuilder(arguments: ["--Greeting:Text=hello"])
+    builder.logging.minimumLevel = none
+    builder.options.handleSignals = false
+    builder.container.addSingleton(Ledger.self) { _services in ledger }
+    builder.container.configure(Greeting.self, section: "Greeting")
+    builder.services.add("greeter", Greeter.self)
+    let host = try! await builder.build()
+    try! await host.run()
+    assertEqual(ledger.all, "hello disposed")
+}
+
+@test
+async fn optionsThatDoNotBindStopTheHostBeingBuilt() {
+    let builder = ApplicationBuilder()
+    builder.container.configure(Greeting.self, section: "HostContainerTests:NoGreeting")
+    await expectThrows(saying: "Sable.Configuration.OptionsMonitor<HostContainerTests.Greeting> could not be made: HostContainerTests:NoGreeting:text: missing") { _ = try await builder.build() }
 }

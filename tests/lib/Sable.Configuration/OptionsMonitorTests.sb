@@ -1,0 +1,104 @@
+module OptionsMonitorTests
+
+import Sable.Configuration
+import Sable.Serialize
+import Sable.Testing
+import Sable.Validation
+
+import ConfigurationSupport
+
+@derive(Serializable)
+struct Server: Sendable {
+    var port: Int
+    @serialize(defaulted)
+    var host: String = "localhost"
+}
+
+struct ServerValidator: Validator<Server> {
+    fn rules(_ r: inout Rules<Server>) {
+        r.field(\.port).inRange(1...65535)
+    }
+}
+
+fn memoryConfiguration(_ values: [String: String]) async -> (MemoryConfigurationProvider, Configuration) {
+    let memory = MemoryConfigurationProvider(values)
+    return (memory, await builtWith(memory))
+}
+
+@test
+async fn theOptionsFollowTheConfiguration() {
+    let (memory, configuration) = await memoryConfiguration(["Server:Port": "80"])
+    let server = try! await OptionsMonitor.bind(Server.self, from: configuration.section("Server"))
+    var changes = server.makeAsyncIterator()
+    expect(server.value.port == 80 && server.version == 0 && server.name == "")
+    memory.set("Server:Port", "81")
+    try! await configuration.reload()
+    expect(server.value.port == 81 && server.version == 1 && server.refusal == none)
+    assertEqual((await changes.next())!.port, 81)
+    assertEqual(server.options.value.port, 81)
+    assertEqual(server.section.path, "Server")
+}
+
+@test
+async fn optionsThatDoNotBindAreRefusedAndTheOldOnesKept() {
+    let (memory, configuration) = await memoryConfiguration(["Server:Port": "80"])
+    let server = try! await OptionsMonitor.bind(Server.self, from: configuration.section("Server"), named: "main")
+    memory.set("Server:Port", "eighty")
+    try! await configuration.reload()
+    expect(server.value.port == 80 && server.version == 0)
+    assertEqual(server.refusal, "Server:Port: 'eighty' is not an integer")
+    memory.set("Server:Port", "82")
+    try! await configuration.reload()
+    expect(server.value.port == 82 && server.refusal == none)
+    assertEqual(server.options.name, "main")
+}
+
+@test
+async fn optionsAreHeldToTheirValidatorsRules() {
+    let (memory, configuration) = await memoryConfiguration(["Server:Port": "0"])
+    let error = require(await expectThrows(ValidationError.self) {
+        _ = try await OptionsMonitor.bind(Server.self, from: configuration.section("Server"), validator: ServerValidator())
+    })
+    assertEqual(error.result.failures[0].path, "Server.port")
+    memory.set("Server:Port", "80")
+    try! await configuration.reload()
+    let server = try! await OptionsMonitor.bind(Server.self, from: configuration.section("Server"), validator: ServerValidator())
+    memory.set("Server:Port", "70000")
+    try! await configuration.reload()
+    expect(server.value.port == 80)
+    expect(server.refusal!.contains("between 1 and 65535"), server.refusal!)
+}
+
+@test
+async fn optionsMayBeCheckedByAClosure() {
+    let (_, configuration) = await memoryConfiguration(["Server:Port": "80", "Server:Host": ""])
+    await expectThrows(saying: "Server: no host") {
+        _ = try await OptionsMonitor.bind(Server.self, from: configuration.section("Server"), validate: { server in
+            if server.host.isEmpty {
+                throw ConfigurationError.Malformed(source: "Server", reason: "no host")
+            }
+        })
+    }
+    await expectThrows(saying: "Cache:port: missing") { _ = try await OptionsMonitor.bind(Server.self, from: configuration.section("Cache")) }
+}
+
+@test
+async fn aMonitorLetGoIsToldNoMore() {
+    let (memory, configuration) = await memoryConfiguration(["Server:Port": "80"])
+    var kept = try! await OptionsMonitor.bind(Server.self, from: configuration.section("Server"))
+    _ = try! await OptionsMonitor.bind(Server.self, from: configuration.section("Server"))
+    memory.set("Server:Port", "81")
+    try! await configuration.reload()
+    memory.set("Server:Port", "82")
+    try! await configuration.reload()
+    assertEqual(kept.value.port, 82)
+    kept = try! await OptionsMonitor.bind(Server.self, from: configuration.section("Server"))
+    assertEqual(kept.value.port, 82)
+}
+
+@test
+fn optionsAreTheirValueAndName() {
+    let options = Options(Server(port: 1, host: "a"), name: "b")
+    expect(options.value.port == 1 && options.name == "b")
+    assertEqual(Options(3).name, "")
+}

@@ -1,0 +1,62 @@
+module Sable.Configuration
+
+import Sable.IO
+
+/// Where a configuration is put together: its providers, in order, each
+/// one's values over those before it — .NET's `ConfigurationBuilder`. The
+/// usual order is files, then secrets, then the environment, then the
+/// command line, so that what is said nearer the program's start wins.
+///
+/// ```sable
+/// var builder = ConfigurationBuilder()
+/// builder.addValues(["Http:Port": "80", "Http:Host": "localhost"])
+/// builder.addCommandLine(["--http:port=8080"])
+/// let configuration = try! await builder.build()
+/// assert(configuration.value("Http:Port") == "8080")
+/// assert(configuration.value("Http:Host") == "localhost")
+/// ```
+public struct ConfigurationBuilder {
+    /// What the configuration is to be made of, in order.
+    public var providers: (any ConfigurationProvider)[>..] = []
+
+    /// One with no providers.
+    public init() { }
+
+    /// The provider added, over those before it.
+    public mutating fn add<P: ConfigurationProvider>(_ provider: P) {
+        providers.append(provider)
+    }
+
+    /// A file added (`FileConfigurationProvider`): TOML, JSON, YAML or
+    /// `.env`, as its name says, unless the format is given.
+    public mutating fn addFile(_ path: FilePath, format: ConfigurationFormat? = none, optional: Bool = false, reloadOnChange: Bool = false) {
+        add(FileConfigurationProvider(path, format: format, optional: optional, reloadOnChange: reloadOnChange))
+    }
+
+    /// The environment's variables added whose names begin with the
+    /// prefix (`EnvironmentConfigurationProvider`).
+    public mutating fn addEnvironment(prefix start: String = "") {
+        add(EnvironmentConfigurationProvider(prefix: start))
+    }
+
+    /// The arguments added (`CommandLineConfigurationProvider`).
+    public mutating fn addCommandLine(_ arguments: String[>..], switches: [String: String] = [:]) {
+        add(CommandLineConfigurationProvider(arguments, switches: switches))
+    }
+
+    /// Values added that the program holds (`MemoryConfigurationProvider`).
+    public mutating fn addValues(_ values: [String: String]) {
+        add(MemoryConfigurationProvider(values))
+    }
+
+    /// The user's secrets for the program of the id added (`UserSecrets`).
+    public mutating fn addUserSecrets(id: String) {
+        add(UserSecrets(id: id))
+    }
+
+    /// The configuration, every provider loaded in order; what one throws,
+    /// this throws.
+    public fn build() async throws(ConfigurationError) -> Configuration {
+        return Configuration(providers, try await Configuration.load(providers))
+    }
+}

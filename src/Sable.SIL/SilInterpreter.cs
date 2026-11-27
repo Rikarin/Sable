@@ -2063,6 +2063,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_current_directory":
                 return Allocate(new HeapString(Sandbox?.CurrentDirectory ?? Directory.GetCurrentDirectory()));
 
+            case "process_service":
+                // A program the interpreter runs is no Windows service: there
+                // is none such but on Windows.
+                return OperatingSystem.IsWindows() ? 1L : 3L;
+
             case "process_notify":
                 return Sandbox is null ? Notify(Text(operands[0]).Value, Text(operands[1]).Value) : 1L;
 

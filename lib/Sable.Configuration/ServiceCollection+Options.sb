@@ -1,0 +1,59 @@
+module Sable.Configuration
+
+import Sable.DependencyInjection
+import Sable.Serialize
+import Sable.Validation
+
+extension ServiceCollection {
+    /// Options of the type, bound from the section at the path of the
+    /// `Configuration` the container has: an `OptionsMonitor<T>` and its
+    /// `Options<T>`, singletons registered under the name (with no key for
+    /// ""). The monitor is made as the provider is built (`buildAsync`,
+    /// which a host's build is), so options that do not bind stop it there:
+    /// .NET's `Configure<T>` with `ValidateOnStart`.
+    ///
+    /// ```sable
+    /// @derive(Serializable)
+    /// struct Database: Sendable {
+    ///     var url: String
+    ///     @serialize(defaulted)
+    ///     var poolSize: Int = 4
+    /// }
+    ///
+    /// var configuration = ConfigurationBuilder()
+    /// configuration.addValues(["Database:Url": "postgres://primary", "Replica:Url": "postgres://replica"])
+    /// var services = ServiceCollection()
+    /// services.addSingleton(Configuration.self, value: try! await configuration.build())
+    /// services.configure(Database.self, section: "Database")
+    /// services.configure(Database.self, section: "Replica", named: "replica")
+    /// let provider = try! await services.buildAsync()
+    /// assert(try! provider.resolve(Options<Database>.self).value.url == "postgres://primary")
+    /// assert(try! provider.resolve(Options<Database>.self, key: "replica").value.poolSize == 4)
+    /// ```
+    public mutating fn configure<T: Serializable & Sendable>(_ type: T.Type, section path: String, named name: String = "") {
+        configure(type, section: path, named: name, validate: { _options in })
+    }
+
+    /// Options as `configure(_:section:named:)` registers them, which the
+    /// validator's rules must pass as the provider is built, and at each
+    /// change of the configuration (`OptionsMonitor.bind`).
+    public mutating fn configure<T: Serializable & Sendable, V: Validator<T> & Sendable>(_ type: T.Type, section path: String, named name: String = "", validator: V) {
+        configure(type, section: path, named: name, validate: { options in
+            _ = try await validatedOptions(options, named: path, by: validator)
+        })
+    }
+
+    /// Options as `configure(_:section:named:)` registers them, which the
+    /// closure must not throw for as the provider is built, nor at each
+    /// change.
+    public mutating fn configure<T: Serializable & Sendable>(_ type: T.Type, section path: String, named name: String = "", validate: @escaping @Sendable async (T) throws -> Void) {
+        let key: String? = name.isEmpty ? none : name
+        add(ServiceDescriptor.waiting(OptionsMonitor<T>.self, key, from: [ServiceDependency(Configuration.self)]) { services in
+            let configuration = try services.resolve(Configuration.self)
+            return try await OptionsMonitor.bind(type, from: configuration.section(path), named: name, validate: validate)
+        })
+        add(ServiceDescriptor.of(Options<T>.self, .Singleton, key, from: [ServiceDependency(OptionsMonitor<T>.self, key: key)]) { services in
+            return (try services.resolve(OptionsMonitor<T>.self, key: key)).options
+        })
+    }
+}

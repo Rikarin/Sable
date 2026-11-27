@@ -1,0 +1,60 @@
+module Sable.Configuration
+
+/// What a provider gives: values by key, in the order they were first set,
+/// a key the same however it is cased. Setting one again replaces its
+/// value, and the spelling of its key.
+///
+/// ```sable
+/// var values = ConfigurationValues()
+/// values.set("Http:Port", "80")
+/// values.set("http:port", "8080")
+/// assert(values.value("HTTP:PORT") == "8080")
+/// assert(values.keys == ["http:port"] && values.count == 1)
+/// ```
+public struct ConfigurationValues: Sendable {
+    // By the key lowercased, in the order first set: the key as it was
+    // last set, and its value.
+    var entries: [String: (String, String)] = [:]
+
+    /// None.
+    public init() { }
+
+    /// The values of the dictionary, in its order.
+    public init(_ values: [String: String]) {
+        for (key, value) in values {
+            self.set(key, value)
+        }
+    }
+
+    /// How many keys it has.
+    public var count: Int => entries.count
+
+    /// Whether it has none.
+    public var isEmpty: Bool => entries.isEmpty
+
+    /// The keys, as they were last set, in the order they were first.
+    public var keys: String[>..] {
+        get {
+            var all: String[>..] = []
+            for (_, entry) in entries {
+                all.append(entry.0)
+            }
+            return all
+        }
+    }
+
+    /// The key's value, when it has one.
+    public fn value(_ key: String) -> String? {
+        return entries[key.lowercased()]?.1
+    }
+
+    /// The key given the value.
+    public mutating fn set(_ key: String, _ value: String) {
+        entries[key.lowercased()] = (key, value)
+    }
+
+    /// The key taken out, when it is there.
+    public mutating fn remove(_ key: String) {
+        _ = entries.remove(key.lowercased())
+    }
+}

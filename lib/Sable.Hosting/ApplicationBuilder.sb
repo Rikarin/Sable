@@ -24,7 +24,9 @@ public final class ApplicationBuilder {
     /// What they are made from, for those that say what that is
     /// (`HostedServices.add(_:_:)` of a type). The host's environment,
     /// configuration, logging, lifetime and clock are registered as it is
-    /// built, unless something else is; it disposes the rest as it stops.
+    /// built, unless something else is, and a `Logger` of the logging's;
+    /// it disposes the rest as it stops. It starts with `Logger.Of` of
+    /// every type, made with that `Logger`, a new one each time.
     public var container: ServiceCollection
     /// What they are configured by: the environment's variables, if not set.
     public var configuration: any HostConfiguration
@@ -42,6 +44,7 @@ public final class ApplicationBuilder {
     public init() {
         services = HostedServices()
         container = ServiceCollection()
+        container.addTransient(open: Logger.Of.self, Logger.Of.self)
         configuration = EnvironmentConfiguration()
         logging = HostLogging(minimumLevel: ApplicationBuilder.levelFromEnvironment())
         environment = HostEnvironment.current()
@@ -96,6 +99,8 @@ public final class ApplicationBuilder {
         all.tryAdd(ServiceDescriptor.of(HostEnvironment.self, none, environment))
         all.tryAdd(ServiceDescriptor.of((any HostConfiguration).self, none, configuration))
         all.tryAdd(ServiceDescriptor.of(HostLogging.self, none, logging))
+        let logging = self.logging
+        all.tryAdd(ServiceDescriptor.of(Logger.self, ServiceLifetime.Transient, none) { _services in logging.logger("app") })
         all.tryAdd(ServiceDescriptor.of(ApplicationLifetime.self, none, lifetime))
         all.tryAdd(ServiceDescriptor.of((any HostClock).self, none, clock))
         return all

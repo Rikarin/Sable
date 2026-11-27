@@ -2,8 +2,45 @@ module HostContainerTests
 
 import Sable.Concurrency
 import Sable.DependencyInjection
+import Sable.Diagnostics
 import Sable.Hosting
 import Sable.Testing
+
+// A service that says what loggers it was given, as it is made.
+@immutable
+@injectable(.Transient)
+final class Orders: HostedService {
+    init(log: Logger.Of<Orders>, root: Logger, ledger: Ledger) {
+        ledger.add("\(log.logger.name == "\(Orders.self)") \(root.name) \(log.isEnabled(Level.Info)) \(log.isEnabled(Level.Trace))")
+    }
+    async fn run(cancellation: CancellationToken) throws { }
+}
+
+@test
+fn aHostsContainerGivesLoggersOfItsLogging() throws {
+    let ledger = Ledger()
+    let builder = ApplicationBuilder()
+    builder.logging = HostLogging(minimumLevel: Level.Warning)
+    builder.container.addSingleton(Ledger.self) { _services in ledger }
+    builder.services.add("orders", Orders.self)
+    _ = try builder.build()
+    expect(ledger.all == "true app false false disposed")
+}
+
+@test
+fn aHostsLoggersAreThoseOfTheContainersLoggerWhereItHasOne() throws {
+    let ledger = Ledger()
+    let builder = ApplicationBuilder()
+    builder.container.addSingleton(Ledger.self) { _services in ledger }
+    builder.container.addTransient(Logger.self) { _services in
+        let mine = Logger("mine")
+        mine.threshold = Level.Trace
+        return mine
+    }
+    builder.services.add("orders", Orders.self)
+    _ = try builder.build()
+    expect(ledger.all == "true mine true true disposed")
+}
 
 @immutable
 @injectable(.Singleton)

@@ -1,0 +1,191 @@
+module Sable.Core
+
+/// Values kept in slots and named by handles, the slots reused: what an
+/// engine keeps its meshes, bodies and sounds in, each named by a small
+/// value rather than a reference. A handle carries its slot's generation,
+/// which goes up each time the slot is emptied, so a handle kept after its
+/// value was removed — stale — is refused rather than read as whatever
+/// came to live in the slot after: the subscript traps on it, 'contains'
+/// says no and 'remove' gives none.
+///
+/// Inserting reuses the slot emptied last, or adds one; removing destroys
+/// the value at once. Iterating goes through the values held, with their
+/// handles, in the order of their slots.
+///
+/// ```sable
+/// var meshes = SlabPool<String>()
+/// let cube = meshes.insert("cube")
+/// let cone = meshes.insert("cone")
+/// assert(meshes[cube] == "cube" && meshes.count == 2)
+/// assert(meshes.remove(cube) == "cube")
+/// let sphere = meshes.insert("sphere")
+/// assert(sphere.index == cube.index && sphere != cube)
+/// assert(!meshes.contains(cube) && meshes.remove(cube) == none)
+/// meshes[cone] = "tall cone"
+/// assert(meshes[cone] == "tall cone")
+/// ```
+public struct SlabPool<T>: Sequence {
+    var slots: T?[>..]
+    // Each slot's generation: odd while it holds a value, even while empty.
+    var generations: Int[>..]
+    // The empty slots, the one emptied last at the end.
+    var vacant: Int[>..]
+
+    /// How many values the pool holds.
+    public private(set) var count: Int
+
+    /// An empty pool.
+    public init() {
+        slots = []
+        generations = []
+        vacant = []
+        count = 0
+    }
+
+    /// An empty pool with room for 'capacity' values before it grows.
+    public init(capacity: Int) {
+        precondition(capacity >= 0, "a pool cannot have room for \(capacity) values")
+        self.init()
+        slots.reserveCapacity(capacity)
+        generations.reserveCapacity(capacity)
+    }
+
+    /// Whether the pool holds nothing.
+    public var isEmpty: Bool => count == 0
+
+    /// How many slots there are, held or empty.
+    public var slotCount: Int => slots.count
+
+    /// The value put in a slot — an emptied one if there is any — and the
+    /// handle that names it.
+    public mutating fn insert(_ value: T) -> SlabHandle<T> {
+        count += 1
+        if !vacant.isEmpty {
+            let index = vacant.removeLast()
+            generations[index] += 1
+            slots[index] = value
+            return SlabHandle<T>(index: index, generation: generations[index])
+        }
+
+        slots.append(value)
+        generations.append(1)
+        return SlabHandle<T>(index: slots.count - 1, generation: 1)
+    }
+
+    /// Whether the handle names a value the pool holds: false for a stale
+    /// one, whose value was removed.
+    public fn contains(_ handle: SlabHandle<T>) -> Bool {
+        return handle.index >= 0 && handle.index < generations.count && generations[handle.index] == handle.generation
+    }
+
+    /// The value the handle names. Traps for a stale handle, whose value was
+    /// removed, or one of another pool's that names no slot here.
+    public subscript(handle: SlabHandle<T>) -> T {
+        get {
+            refuseStale(handle)
+            return slots[handle.index]!
+        }
+        set {
+            refuseStale(handle)
+            slots[handle.index] = newValue
+        }
+    }
+
+    /// The value the handle names, taken out and its slot emptied for reuse;
+    /// none for a stale handle.
+    @discardable
+    public mutating fn remove(_ handle: SlabHandle<T>) -> T? {
+        if !contains(handle) {
+            return none
+        }
+
+        let value = slots[handle.index]
+        slots[handle.index] = none
+        generations[handle.index] += 1
+        vacant.append(handle.index)
+        count -= 1
+        return value
+    }
+
+    /// Every value removed, every handle made stale; the slots kept for reuse.
+    public mutating fn removeAll() {
+        vacant.removeAll(keepingCapacity: true)
+        var index = slots.count - 1
+        while index >= 0 {
+            if (generations[index] & 1) == 1 {
+                slots[index] = none
+                generations[index] += 1
+            }
+
+            vacant.append(index)
+            index -= 1
+        }
+
+        count = 0
+    }
+
+    /// An iterator over each value held with its handle, in slot order.
+    public fn makeIterator() -> SlabPoolIterator<T> {
+        return SlabPoolIterator<T>(slots: slots, generations: generations, position: 0)
+    }
+
+    fn refuseStale(_ handle: SlabHandle<T>) {
+        if !contains(handle) {
+            if handle.index < 0 || handle.index >= generations.count {
+                fatalError("a stale handle: slot \(handle.index) is not one of this pool's \(generations.count)")
+            }
+
+            fatalError("a stale handle: the value of slot \(handle.index), generation \(handle.generation), was removed; the slot is in generation \(generations[handle.index])")
+        }
+    }
+}
+
+/// A value's name in a SlabPool: its slot, and the slot's generation when
+/// the value was put there. Equal handles name the same value.
+public struct SlabHandle<T>: Hashable, Debug {
+    /// The slot.
+    public let index: Int
+
+    /// How many times the slot had been filled when the value was put there.
+    public let generation: Int
+
+    /// The handle of a slot and generation, as one was taken apart: a
+    /// pool refuses it unless that generation of the slot holds a value.
+    public init(index: Int, generation: Int) {
+        self.index = index
+        self.generation = generation
+    }
+
+    public operator == (lhs: SlabHandle<T>, rhs: SlabHandle<T>) -> Bool {
+        return lhs.index == rhs.index && lhs.generation == rhs.generation
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(index)
+        hasher.combine(generation)
+    }
+
+    /// "3#2": the slot, and the generation.
+    public fn debugDescription() -> String {
+        return "\(index)#\(generation)"
+    }
+}
+
+/// Goes through a pool's values with their handles, in slot order.
+public struct SlabPoolIterator<T>: Iterator {
+    let slots: T?[>..]
+    let generations: Int[>..]
+    var position: Int
+
+    /// The next value held, with its handle; none after the last.
+    public mutating fn next() -> (SlabHandle<T>, T)? {
+        while position < slots.count {
+            let index = position
+            position += 1
+            if let value = slots[index] {
+                return (SlabHandle<T>(index: index, generation: generations[index]), value)
+            }
+        }
+        return none
+    }
+}

@@ -1,0 +1,118 @@
+module TlsKeyScheduleTests
+
+// TlsKeySchedule and TlsRecordCipher (Sable.Net.Tls) against RFC 8448's
+// simple 1-RTT trace (§3). Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Rfc8448
+import Sable.Crypto
+import Sable.Net.Tls
+import Sable.Testing
+
+fn handshakeSchedule() -> TlsKeySchedule {
+    var schedule = TlsKeySchedule(.Aes128GcmSha256)
+    schedule.advance(sharedSecret: SymmetricKey(Rfc8448.sharedSecret))
+    return schedule
+}
+
+@test
+fn theEarlySecretIsTheTracesWithNoPreSharedKey() {
+    let schedule = TlsKeySchedule(.Aes128GcmSha256)
+    assertEqual(schedule.secret.bytes(), hex("33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a"))
+}
+
+@test
+fn theSharedSecretIsTheTwoKeysOfTheTrace() {
+    let client = try! X25519PrivateKey(Rfc8448.clientPrivateKey)
+    let server = try! X25519PublicKey(Rfc8448.serverPublicKey)
+    assertEqual((try! client.sharedSecret(with: server)).bytes(), Rfc8448.sharedSecret)
+}
+
+@test
+fn theHandshakeSecretsAreTheTraces() {
+    let schedule = handshakeSchedule()
+    assertEqual(schedule.secret.bytes(), hex("1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac"))
+    let hash = TlsCipherSuite.Aes128GcmSha256.hashAlgorithm.digest(of: joined(Rfc8448.clientHello, Rfc8448.serverHello)).bytes
+    assertEqual(schedule.deriveSecret("c hs traffic", transcriptHash: hash).bytes(), Rfc8448.clientHandshakeSecret)
+    assertEqual(schedule.deriveSecret("s hs traffic", transcriptHash: hash).bytes(), Rfc8448.serverHandshakeSecret)
+}
+
+@test
+fn theMasterAndApplicationSecretsAreTheTraces() {
+    var schedule = handshakeSchedule()
+    schedule.advance()
+    assertEqual(schedule.secret.bytes(), hex("18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919"))
+    let hash = hex("9608102a0f1ccc6db6250b7b7e417b1a000eaada3daae4777a7686c9ff83df13")
+    assertEqual(schedule.deriveSecret("c ap traffic", transcriptHash: hash).bytes(), hex("9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5"))
+    assertEqual(schedule.deriveSecret("s ap traffic", transcriptHash: hash).bytes(), hex("a11af9f05531f856ad47116b45a950328204b4f44bfb6b3a4b4f1f3fcb631643"))
+    assertEqual(schedule.deriveSecret("exp master", transcriptHash: hash).bytes(), hex("fe22f881176eda18eb8f44529e6792c50c9a3f89452f68d8ae311b4309d3cf50"))
+    let resumption = schedule.deriveSecret("res master", transcriptHash: hex("209145a96ee8e2a122ff810047cc952684658d6049e86429426db87c54ad143d"))
+    assertEqual(resumption.bytes(), hex("7df235f2031d2a051287d02b0241b0bfdaf86cc856231f2d5aba46c434ec196c"))
+    let ticket = TlsKeySchedule.expandLabel(.Aes128GcmSha256, resumption, "resumption", context: [0, 0], byteCount: 32)
+    assertEqual(ticket.bytes(), hex("4ecd0eb6ec3b4d87f5d6028f922ca4c5851a277fd41311c9e62d2c9492e1c4f3"))
+}
+
+@test
+fn theTrafficKeysAndIvsAreTheTraces() {
+    let server = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret))
+    assertEqual(server.iv, hex("5d313eb2671276ee13000b30"))
+    let key = TlsKeySchedule.expandLabel(.Aes128GcmSha256, SymmetricKey(Rfc8448.serverHandshakeSecret), "key", context: [], byteCount: 16)
+    assertEqual(key.bytes(), hex("3fce516009c21727d0f2e4e86ee403bc"))
+    let client = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.clientHandshakeSecret))
+    assertEqual(client.iv, hex("5bd3c71b836e0b76bb73265f"))
+}
+
+@test
+fn theServersFinishedIsTheTraces() {
+    let hash = TlsCipherSuite.Aes128GcmSha256.hashAlgorithm.digest(of: Rfc8448.serverFlightUpToCertificateVerify()).bytes
+    let data = TlsKeySchedule.finishedData(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret), transcriptHash: hash)
+    assertEqual(data, hex("9b9b141d906337fbd2cbdce71df4deda4ab42c309572cb7fffee5454b78f0718"))
+}
+
+@test
+fn theServersFlightSealsAndOpensAsTheTraceHasIt() throws {
+    var writer = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret))
+    let record = try writer.seal(Rfc8448.serverFlight(), type: .Handshake)
+    assertEqual(record, Rfc8448.serverFlightRecord)
+    var reader = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret))
+    let (type, content) = try reader.open(Rfc8448.serverFlightRecord)
+    expect(type == .Handshake)
+    assertEqual(content, Rfc8448.serverFlight())
+}
+
+@test
+fn aRecordOpensOnlyInItsPlace() throws {
+    var writer = TlsRecordCipher(.Aes256GcmSha384, trafficSecret: SymmetricKey(U8[>..](repeating: 3, count: 48)))
+    let first = try writer.seal([1], type: .ApplicationData)
+    let second = try writer.seal([2], type: .ApplicationData)
+    var reader = TlsRecordCipher(.Aes256GcmSha384, trafficSecret: SymmetricKey(U8[>..](repeating: 3, count: 48)))
+    let error = expectThrows(TlsError.self) { _ = try reader.open(second) }
+    expect(error?.alert == .badRecordMac)
+    _ = first
+}
+
+@test
+fn paddingIsSealedAndTakenOff() throws {
+    var writer = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(U8[>..](repeating: 5, count: 32)))
+    var reader = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(U8[>..](repeating: 5, count: 32)))
+    let record = try writer.seal([0, 0, 7, 0], type: .Alert, padding: 100)
+    assertEqual(record.count, 5 + 4 + 1 + 100 + 16)
+    let (type, content) = try reader.open(record)
+    expect(type == .Alert)
+    assertEqual(content, [0, 0, 7, 0])
+}
+
+@test
+fn aRecordTooLongIsRefused() {
+    var writer = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(U8[>..](repeating: 5, count: 32)))
+    let error = expectThrows(TlsError.self) { _ = try writer.seal(U8[>..](repeating: 1, count: 16385), type: .ApplicationData) }
+    expect(error?.alert == .internalError)
+    var reader = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(U8[>..](repeating: 5, count: 32)))
+    var long: U8[>..] = [23, 3, 3, 0x41, 0x01]
+    long.append(contentsOf: U8[>..](repeating: 0, count: 16384 + 257))
+    expect(expectThrows(TlsError.self) { _ = try reader.open(long) }?.alert == .recordOverflow)
+    expect(expectThrows(TlsError.self) { _ = try reader.open([23, 3, 3, 0, 1, 0]) }?.alert == .decodeError)
+    var plain = U8[>..](repeating: 0, count: 30)
+    plain[0] = 22
+    expect(expectThrows(TlsError.self) { _ = try reader.open(plain) }?.alert == .unexpectedMessage)
+}

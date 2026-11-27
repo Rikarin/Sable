@@ -1,0 +1,65 @@
+module Sable.Net.Tls
+
+import Sable.Crypto.X509
+import Sable.IO
+
+/// Why a TLS connection failed. When this end finds the fault it sends the
+/// other the alert that says so before it throws.
+///
+/// ```sable
+/// let error = TlsError.Failed(.decodeError, reason: "a short ServerHello")
+/// assert(error.alert == .decodeError)
+/// assert(error.description() == "decode_error: a short ServerHello")
+/// ```
+public union TlsError: Error {
+    /// This end found the fault, and sent the alert.
+    Failed(TlsAlert, reason: String)
+
+    /// The server's certificate is not to be believed; the alert that says
+    /// so was sent.
+    UntrustedCertificate(CertificateError)
+
+    /// The other end sent an alert that is an error.
+    PeerAlert(TlsAlert)
+
+    /// The stream under the connection failed.
+    Io(IoError)
+
+    /// The connection was closed already.
+    Closed
+
+    /// The alert that was sent or received for it, if any.
+    public var alert: TlsAlert? => match self {
+        case .Failed(let alert, _)          => alert
+        case .UntrustedCertificate(let why) => TlsError.alert(for: why)
+        case .PeerAlert(let alert)          => alert
+        default                             => none
+    }
+
+    /// What went wrong.
+    public fn description() -> String {
+        return match self {
+            case .Failed(let alert, let reason) => "\(alert): \(reason)"
+            case .UntrustedCertificate(let why) => "the server's certificate is not trusted: \(why.description())"
+            case .PeerAlert(let alert)          => "the other end sent \(alert)"
+            case .Io(let error)                 => error.description()
+            case .Closed                        => "the connection is closed"
+        }
+    }
+
+    public fn debugDescription() -> String {
+        return description()
+    }
+
+    /// The alert RFC 8446 §6.2 has for a certificate refused for the reason.
+    static fn alert(for error: CertificateError) -> TlsAlert {
+        return match error {
+            case .Expired(_)       => TlsAlert.certificateExpired
+            case .NotYetValid(_)   => TlsAlert.certificateExpired
+            case .UnknownIssuer(_) => TlsAlert.unknownCa
+            case .Revoked(_)       => TlsAlert.certificateRevoked
+            case .Unsupported(_)   => TlsAlert.unsupportedCertificate
+            default                => TlsAlert.badCertificate
+        }
+    }
+}

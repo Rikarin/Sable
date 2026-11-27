@@ -1,0 +1,38 @@
+module Sable.Net.Tls
+
+/// What a record carries (RFC 8446 §5.1).
+///
+/// ```sable
+/// assert(TlsContentType.Handshake.code == 22)
+/// assert(TlsContentType.of(code: 23) == .ApplicationData)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum TlsContentType: Sendable {
+    /// change_cipher_spec, which TLS 1.3 sends only for middleboxes.
+    ChangeCipherSpec
+    /// An alert.
+    Alert
+    /// Handshake messages.
+    Handshake
+    /// The application's bytes.
+    ApplicationData
+
+    /// The type of the number; none for another.
+    public static fn of(code: Int) -> TlsContentType? {
+        return match code {
+            case 20 => TlsContentType.ChangeCipherSpec
+            case 21 => TlsContentType.Alert
+            case 22 => TlsContentType.Handshake
+            case 23 => TlsContentType.ApplicationData
+            default => none
+        }
+    }
+
+    /// Its number on the wire.
+    public var code: Int => match self {
+        case .ChangeCipherSpec => 20
+        case .Alert            => 21
+        case .Handshake        => 22
+        case .ApplicationData  => 23
+    }
+}

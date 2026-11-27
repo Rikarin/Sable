@@ -1,0 +1,250 @@
+module Sable.Core
+
+/// Blocks of offsets handed out of a span the allocator does not own — a GPU
+/// heap, most often: the bookkeeping, not memory. Every request is rounded
+/// up to a power of two, and a block is carved by halving a bigger one; a
+/// block given back is joined with its buddy, the other half of what it was
+/// cut from, whenever that is free too, and the two with theirs, and so on.
+/// Finding the buddy is arithmetic — the offset with one bit flipped — so
+/// giving back costs a few steps, not a search, and the span does not
+/// fragment over a long run.
+///
+/// The cost is the rounding: a request of 33 KiB takes a block of 64 KiB.
+/// A RangeAllocator hands out what is asked, and walks its free runs. A
+/// block is aligned to its own size, so an alignment no bigger than the
+/// block costs nothing.
+///
+/// Free blocks are kept as bits, a level for each size, and a request takes
+/// the free block of the lowest offset, so the same requests are always
+/// given the same blocks.
+///
+/// Giving back a block that is not out — twice, or never handed out —
+/// traps. With 'checksLeaks', which SABLE_CHECK_LEAKS sets, an allocator that
+/// goes with blocks still out traps, naming them.
+///
+/// ```sable
+/// let heap = BuddyAllocator(capacity: 1024, minimumBlockSize: 64)
+/// let a = heap.allocate(100)!
+/// let b = heap.allocate(64)!
+/// assert(a == 0..<128 && b == 128..<192)
+/// assert(heap.allocatedBytes == 192 && heap.largestFreeRange == 512)
+/// heap.free(at: a.lowerBound)
+/// heap.free(at: b.lowerBound)
+/// assert(heap.largestFreeRange == 1024)
+/// ```
+public final class BuddyAllocator {
+    // A bit for each block of each level, set where the block is free:
+    // level 0's blocks are the smallest, the last level's one is the span.
+    var bits: U64[>..]
+    // Where each level's words start in 'bits', and the lowest word of it
+    // that may have a bit set.
+    var levelStart: Int[>..]
+    var lowestWord: Int[>..]
+    // How many blocks of each level are free.
+    var freeBlocks: Int[>..]
+    // Each block out: its level, by its offset.
+    var allocations: [Int: Int]
+
+    /// How many offsets there are to hand out, from 0: a power of two.
+    public let capacity: Int
+
+    /// The smallest block handed out: a power of two.
+    public let minimumBlockSize: Int
+
+    /// How many offsets are handed out, the rounding counted.
+    public private(set) var allocatedBytes: Int
+
+    /// Whether the allocator traps if it goes with blocks still out.
+    public let checksLeaks: Bool
+
+    /// An allocator of the offsets 0 to 'capacity', all free, in blocks of
+    /// at least 'minimumBlockSize'; each is rounded up to a power of two, and
+    /// the capacity to at least one block.
+    public init(capacity: Int, minimumBlockSize: Int = 256, checksLeaks: Bool = Runtime.environment(name: "SABLE_CHECK_LEAKS") != none) {
+        precondition(capacity >= 1, "a buddy allocator cannot have \(capacity) offsets")
+        precondition(minimumBlockSize >= 1, "a block cannot be \(minimumBlockSize) offsets")
+        self.minimumBlockSize = minimumBlockSize.nextPowerOfTwo()
+        let total = capacity.nextPowerOfTwo()
+        self.capacity = total > self.minimumBlockSize ? total : self.minimumBlockSize
+        self.checksLeaks = checksLeaks
+        let levels = self.capacity.log2() - self.minimumBlockSize.log2() + 1
+        bits = []
+        levelStart = []
+        lowestWord = []
+        freeBlocks = []
+        var start = 0
+        for level in 0..<levels {
+            levelStart.append(start)
+            lowestWord.append(start)
+            freeBlocks.append(0)
+            start += ((self.capacity / (self.minimumBlockSize << level)) + 63) / 64
+        }
+
+        bits = U64[>..](repeating: 0, count: start)
+        allocations = [:]
+        allocatedBytes = 0
+        markFree(levels - 1, 0)
+    }
+
+    deinit {
+        if checksLeaks && !allocations.isEmpty {
+            var blocks: [Int: Int] = [:]
+            for (offset, level) in allocations {
+                blocks[offset] = offset + blockSize(level)
+            }
+
+            fatalError("a BuddyAllocator went with \(allocations.count) block(s) still allocated: \(outstandingRanges(blocks))")
+        }
+    }
+
+    /// How many offsets are free.
+    public var freeBytes: Int => capacity - allocatedBytes
+
+    /// How many blocks are out.
+    public var allocationCount: Int => allocations.count
+
+    /// The biggest block that can be had now. Below 'freeBytes' when the
+    /// free offsets are in pieces.
+    public var largestFreeRange: Int {
+        get {
+            var level = freeBlocks.count - 1
+            while level >= 0 {
+                if freeBlocks[level] > 0 {
+                    return blockSize(level)
+                }
+
+                level -= 1
+            }
+            return 0
+        }
+    }
+
+    /// A block of at least 'size' offsets, at a multiple of 'alignment' (a
+    /// power of two): the size, the alignment and the smallest block, the
+    /// largest of them rounded up to a power of two. None when no block that
+    /// big is free.
+    public fn allocate(_ size: Int, alignment: Int = 1) -> Range<Int>? {
+        precondition(size >= 1, "cannot allocate \(size) offsets")
+        precondition(alignment >= 1 && alignment.isPowerOfTwo, "an alignment is a power of two, not \(alignment)")
+        var wanted = size > alignment ? size : alignment
+        if wanted < minimumBlockSize {
+            wanted = minimumBlockSize
+        }
+
+        if wanted > capacity {
+            return none
+        }
+
+        let level = wanted.nextPowerOfTwo().log2() - minimumBlockSize.log2()
+        var found = level
+        while found < freeBlocks.count && freeBlocks[found] == 0 {
+            found += 1
+        }
+
+        if found == freeBlocks.count {
+            return none
+        }
+
+        let block = takeFree(found)
+        // Halved down to size: each split leaves its upper half free.
+        while found > level {
+            found -= 1
+            markFree(found, block + blockSize(found))
+        }
+
+        allocations[block] = level
+        allocatedBytes += blockSize(level)
+        return block..<block + blockSize(level)
+    }
+
+    /// The block that starts at 'offset' given back, joined with its buddy
+    /// while that is free. Traps unless a block starting there is out.
+    public fn free(at offset: Int) {
+        guard let taken = allocations.remove(offset) else {
+            fatalError("no block starting at \(offset) is allocated: given back twice, or never handed out")
+        }
+
+        var level = taken
+        allocatedBytes -= blockSize(level)
+        var block = offset
+        while level < freeBlocks.count - 1 {
+            let buddy = block ^ blockSize(level)
+            if !isFree(level, buddy) {
+                break
+            }
+
+            clearFree(level, buddy)
+            block = block < buddy ? block : buddy
+            level += 1
+        }
+
+        markFree(level, block)
+    }
+
+    /// The block out that starts at 'offset', its size rounded; none if no
+    /// block starting there is.
+    public fn allocation(at offset: Int) -> Range<Int>? {
+        if let level = allocations[offset] {
+            return offset..<offset + blockSize(level)
+        }
+
+        return none
+    }
+
+    /// Every block given back at once: the whole span one free block.
+    public fn reset() {
+        allocations.removeAll()
+        bits.fill(0)
+        for level in 0..<freeBlocks.count {
+            freeBlocks[level] = 0
+            lowestWord[level] = levelStart[level]
+        }
+
+        allocatedBytes = 0
+        markFree(freeBlocks.count - 1, 0)
+    }
+
+    fn blockSize(_ level: Int) -> Int {
+        return minimumBlockSize << level
+    }
+
+    // The word and the bit of a level's block at an offset.
+    fn place(_ level: Int, _ offset: Int) -> (Int, U64) {
+        let index = offset / blockSize(level)
+        return (levelStart[level] + (index >> 6), U64(1) << U64(index & 63))
+    }
+
+    fn isFree(_ level: Int, _ offset: Int) -> Bool {
+        let (word, bit) = place(level, offset)
+        return (bits[word] & bit) != 0
+    }
+
+    fn markFree(_ level: Int, _ offset: Int) {
+        let (word, bit) = place(level, offset)
+        bits[word] = bits[word] | bit
+        freeBlocks[level] += 1
+        if word < lowestWord[level] {
+            lowestWord[level] = word
+        }
+    }
+
+    fn clearFree(_ level: Int, _ offset: Int) {
+        let (word, bit) = place(level, offset)
+        bits[word] = bits[word] & ~bit
+        freeBlocks[level] -= 1
+    }
+
+    // The free block of the level at the lowest offset, taken: there is one.
+    fn takeFree(_ level: Int) -> Int {
+        var word = lowestWord[level]
+        while bits[word] == 0 {
+            word += 1
+        }
+
+        lowestWord[level] = word
+        let index = ((word - levelStart[level]) << 6) + bits[word].trailingZeroCount
+        let offset = index * blockSize(level)
+        clearFree(level, offset)
+        return offset
+    }
+}

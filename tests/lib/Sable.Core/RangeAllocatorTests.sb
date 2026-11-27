@@ -1,0 +1,146 @@
+module RangeAllocatorTests
+
+// RangeAllocator (Sable.Core): offsets handed out first fit, aligned, and
+// joined again as they come back; misuse and leaks caught.
+
+import Sable.Testing
+
+@test
+fn requestsAreGivenTheFirstRunThatHoldsThemAligned() {
+    let heap = RangeAllocator(capacity: 1000)
+    expect(heap.allocate(10) == 0..<10)
+    expect(heap.allocate(20, alignment: 16) == 16..<36)
+    expect(heap.allocate(6) == 10..<16)
+    expect(heap.allocatedBytes == 36 && heap.freeBytes == 964 && heap.allocationCount == 3)
+    heap.reset()
+}
+
+@test
+fn aRangeGivenBackIsJoinedWithTheFreeRunsItTouches() {
+    let heap = RangeAllocator(capacity: 300)
+    let a = heap.allocate(100)!
+    let b = heap.allocate(100)!
+    let c = heap.allocate(100)!
+    expect(heap.largestFreeRange == 0)
+    heap.free(at: a.lowerBound)
+    heap.free(at: c.lowerBound)
+    expect(heap.largestFreeRange == 100)
+    heap.free(at: b.lowerBound)
+    expect(heap.largestFreeRange == 300)
+    expect(heap.allocate(300) == 0..<300)
+    heap.reset()
+}
+
+@test(arguments: [(0, 1, 2), (1, 0, 2), (2, 1, 0), (0, 2, 1), (1, 2, 0), (2, 0, 1)])
+fn everyOrderOfGivingBackLeavesOneRun(_ first: Int, _ second: Int, _ third: Int) {
+    let heap = RangeAllocator(capacity: 90)
+    let ranges = [heap.allocate(30)!, heap.allocate(30)!, heap.allocate(30)!]
+    heap.free(at: ranges[first].lowerBound)
+    heap.free(at: ranges[second].lowerBound)
+    heap.free(at: ranges[third].lowerBound)
+    expect(heap.largestFreeRange == 90 && heap.allocatedBytes == 0)
+}
+
+@test
+fn aRequestNoRunHoldsGetsNone() {
+    let heap = RangeAllocator(capacity: 100)
+    _ = heap.allocate(10)!
+    let b = heap.allocate(40)!
+    _ = heap.allocate(10)!
+    heap.free(at: b.lowerBound)
+    expect(heap.allocate(41) == none)
+    expect(heap.allocate(37, alignment: 64) == none)
+    expect(heap.allocate(30, alignment: 64) == 64..<94)
+    expect(heap.allocate(40) == 10..<50)
+    expect(RangeAllocator(capacity: 0).allocate(1) == none)
+    heap.reset()
+}
+
+@test
+fn anAllocationIsFoundByWhereItStarts() {
+    let heap = RangeAllocator(capacity: 64)
+    let a = heap.allocate(5, alignment: 8)!
+    expect(heap.allocation(at: a.lowerBound) == a)
+    expect(heap.allocation(at: 1) == none)
+    heap.free(at: a.lowerBound)
+    expect(heap.allocation(at: a.lowerBound) == none)
+}
+
+@test
+fn givingBackARangeThatIsNotOutTraps() {
+    let heap = RangeAllocator(capacity: 64)
+    let a = heap.allocate(8)!
+    heap.free(at: a.lowerBound)
+    expectPanic("no range starting at 0 is allocated: given back twice, or never handed out") {
+        heap.free(at: a.lowerBound)
+    }
+}
+
+@test
+fn badRequestsTrap() {
+    let heap = RangeAllocator(capacity: 64)
+    expectPanic("cannot allocate 0 offsets") {
+        _ = heap.allocate(0)
+    }
+    expectPanic("an alignment is a power of two, not 3") {
+        _ = heap.allocate(1, alignment: 3)
+    }
+    expectPanic("a range allocator cannot have -1 offsets") {
+        _ = RangeAllocator(capacity: -1)
+    }
+}
+
+@test
+fn anAllocatorThatGoesWithRangesOutIsALeak() {
+    expectPanic("a RangeAllocator went with 2 range(s) still allocated: 0..<8, 8..<24") {
+        let heap = RangeAllocator(capacity: 64, checksLeaks: true)
+        _ = heap.allocate(8)
+        _ = heap.allocate(16)
+    }
+    let quiet = RangeAllocator(capacity: 64, checksLeaks: false)
+    _ = quiet.allocate(8)
+    expect(!quiet.checksLeaks)
+}
+
+@test
+fn aLeakReportNamesTheFirstEightRanges() {
+    expectPanic("still allocated: 0..<1, 1..<2, 2..<3, 3..<4, 4..<5, 5..<6, 6..<7, 7..<8, …") {
+        let heap = RangeAllocator(capacity: 64, checksLeaks: true)
+        for _ in 0..<10 {
+            _ = heap.allocate(1)
+        }
+    }
+}
+
+@test
+fn allocatingAndFreeingAtRandomNeverOverlaps() {
+    forAll(Gen.number(in: 1...40).array(count: 0...50), cases: 150) { (sizes: Int[>..]) in
+        let heap = RangeAllocator(capacity: 400, checksLeaks: false)
+        var held: Range<Int>[>..] = []
+        for (step, size) in sizes.enumerated() {
+            if step % 3 == 2 && !held.isEmpty {
+                let gone = held.removeLast()
+                heap.free(at: gone.lowerBound)
+            } else if let range = heap.allocate(size, alignment: 1 << (step % 4)) {
+                expect(range.count == size && range.lowerBound % (1 << (step % 4)) == 0)
+                for other in held {
+                    expect(range.upperBound <= other.lowerBound || other.upperBound <= range.lowerBound)
+                }
+
+                held.append(range)
+            }
+        }
+
+        var total = 0
+        for range in held {
+            total += range.count
+        }
+
+        expect(heap.allocatedBytes == total && heap.allocationCount == held.count)
+        for range in held {
+            heap.free(at: range.lowerBound)
+        }
+
+        expect(heap.largestFreeRange == 400)
+    }
+}

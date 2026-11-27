@@ -1,0 +1,106 @@
+module TlsPartsTests
+
+// TlsAlert, TlsError, TlsKeyShare and TlsServerTrust (Sable.Net.Tls), and
+// the key schedule and records of the suites RFC 8448 does not use. Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.IO
+import Sable.Net.Tls
+import Sable.Testing
+
+@test
+fn anAlertFormatsAsItsName() {
+    for code in [0, 22, 43, 44, 46, 90, 109, 110, 120] {
+        expect("\(TlsAlert(code: code))" == TlsAlert(code: code).name)
+    }
+    expect(TlsAlert.recordOverflow.code == 22 && TlsAlert.missingExtension.code == 109)
+    expect(TlsAlert.unsupportedExtension.code == 110 && TlsAlert.noApplicationProtocol.code == 120)
+    expect(TlsAlert.unsupportedCertificate.code == 43 && TlsAlert.certificateRevoked.code == 44)
+    expect(TlsAlert.certificateUnknown.code == 46 && TlsAlert.userCanceled.code == 90)
+}
+
+@test(arguments: [
+    (CertificateError.Expired(subject: "a"), 45),
+    (CertificateError.NotYetValid(subject: "a"), 45),
+    (CertificateError.UnknownIssuer(issuer: "a"), 48),
+    (CertificateError.Revoked(subject: "a"), 44),
+    (CertificateError.Unsupported(reason: "a"), 43),
+    (CertificateError.HostMismatch(host: "a"), 42),
+])
+fn anUntrustedCertificateHasItsAlert(_ why: CertificateError, _ code: Int) {
+    let error = TlsError.UntrustedCertificate(why)
+    expect(error.alert == TlsAlert(code: code))
+    expect(error.description().hasPrefix("the server's certificate is not trusted"))
+    expect(error.debugDescription() == error.description())
+}
+
+@test
+fn errorsSayWhatWentWrong() {
+    expect(TlsError.Io(IoError.TimedOut).alert == none)
+    expect(TlsError.Io(IoError.TimedOut).description() == IoError.TimedOut.description())
+    expect(TlsError.Closed.description() == "the connection is closed")
+    expect(TlsError.PeerAlert(.unknownCa).description() == "the other end sent unknown_ca")
+}
+
+@test
+fn p256SharesAgree() throws {
+    let server = EcdhPrivateKey<P256>.generate()
+    let share = TlsKeyShare.P256(EcdhPrivateKey<P256>.generate())
+    expect(share.group == 0x17)
+    let secret = try share.sharedSecret(with: server.publicKey.bytes)
+    guard case .P256(let own) = share else {
+        expect(false)
+        return
+    }
+    expect(secret == server.sharedSecret(with: own.publicKey))
+    expect(expectThrows(TlsError.self) { _ = try share.sharedSecret(with: server.publicKey.compressed) }?.alert == .illegalParameter)
+    let x25519 = TlsKeyShare.X25519(X25519PrivateKey.generate())
+    expect(expectThrows(TlsError.self) { _ = try x25519.sharedSecret(with: [1, 2, 3]) }?.alert == .illegalParameter)
+}
+
+@test
+fn theSystemsTrustIsVerified() {
+    guard case .Verified(_) = TlsServerTrust.system() else {
+        expect(false, "the system's trust pinned")
+        return
+    }
+}
+
+@test
+fn sha384SuitesHaveSecretsOfTheirLength() {
+    var schedule = TlsKeySchedule(.Aes256GcmSha384)
+    expect(schedule.secret.byteCount == 48)
+    schedule.advance(sharedSecret: SymmetricKey(U8[>..](repeating: 1, count: 32)))
+    let hash = HashAlgorithm.Sha384.digest(of: [1]).bytes
+    let traffic = schedule.deriveSecret("c hs traffic", transcriptHash: hash)
+    expect(traffic.byteCount == 48)
+    expect(TlsKeySchedule.finishedData(.Aes256GcmSha384, trafficSecret: traffic, transcriptHash: hash).count == 48)
+    let next = TlsKeySchedule.nextTrafficSecret(.Aes256GcmSha384, traffic)
+    expect(next.byteCount == 48 && next != traffic)
+    expect(TlsKeySchedule.nextTrafficSecret(.Aes128GcmSha256, SymmetricKey(U8[>..](repeating: 1, count: 32))).byteCount == 32)
+    let withKey = TlsKeySchedule(.Aes128GcmSha256, preSharedKey: SymmetricKey(U8[>..](repeating: 2, count: 32)))
+    expect(withKey.secret != TlsKeySchedule(.Aes128GcmSha256).secret)
+}
+
+@test(arguments: [TlsCipherSuite.Aes128GcmSha256, TlsCipherSuite.Aes256GcmSha384, TlsCipherSuite.ChaCha20Poly1305Sha256])
+fn everySuiteSealsAndRefusesAChangedRecord(_ suite: TlsCipherSuite) throws {
+    let secret = SymmetricKey(U8[>..](repeating: 4, count: suite.hashAlgorithm.digestByteCount))
+    var writer = TlsRecordCipher(suite, trafficSecret: secret)
+    var reader = TlsRecordCipher(suite, trafficSecret: secret)
+    var record = try writer.seal([1, 2, 3, 4], type: .ApplicationData)
+    record[6] = record[6] ^ 1
+    expect(expectThrows(TlsError.self) { _ = try reader.open(record) }?.alert == .badRecordMac)
+    expect(TlsCipherSuite.of(code: suite.code) == suite)
+    expect(TlsCipherSuite.of(code: 0x1304) == none)
+    expect(expectThrows(TlsError.self) { _ = try writer.seal([1], type: .ApplicationData, padding: -1) }?.alert == .internalError)
+}
+
+@test
+fn contentTypesHaveTheirNumbers() {
+    for type in [TlsContentType.ChangeCipherSpec, TlsContentType.Alert, TlsContentType.Handshake, TlsContentType.ApplicationData] {
+        expect(TlsContentType.of(code: type.code) == type)
+    }
+    expect(TlsContentType.of(code: 24) == none)
+}

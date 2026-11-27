@@ -1,0 +1,51 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+
+/// A client's ephemeral key for one group of the key exchange (RFC 8446
+/// §4.2.8): what its key_share offers, and what makes the shared secret
+/// with the server's.
+///
+/// ```sable
+/// let share = TlsKeyShare.X25519(X25519PrivateKey.generate())
+/// assert(share.group == 0x001D && share.publicBytes.count == 32)
+/// assert(TlsKeyShare.P256(EcdhPrivateKey<P256>.generate()).publicBytes.count == 65)
+/// ```
+public union TlsKeyShare: Sendable {
+    /// x25519.
+    X25519(X25519PrivateKey)
+    /// secp256r1.
+    P256(EcdhPrivateKey<Sable.Crypto.P256>)
+
+    /// The group's number on the wire.
+    public var group: Int => match self {
+        case .X25519(_) => 0x001D
+        case .P256(_)   => 0x0017
+    }
+
+    /// The public key as key_share sends it.
+    public var publicBytes: U8[>..] => match self {
+        case .X25519(let key) => key.publicKey.bytes
+        case .P256(let key)   => key.publicKey.bytes
+    }
+
+    /// The secret shared with the server's key, or illegal_parameter for a
+    /// key that is no point of the group.
+    public fn sharedSecret(with server: U8[:]) throws(TlsError) -> SymmetricKey {
+        do {
+            match self {
+                case .X25519(let key) => {
+                    return try key.sharedSecret(with: try X25519PublicKey(server))
+                }
+                case .P256(let key) => {
+                    if server.count != 65 || server[0] != 4 {
+                        throw CryptoError.InvalidKey(reason: "a compressed point")
+                    }
+                    return key.sharedSecret(with: try EcdhPublicKey<Sable.Crypto.P256>(server))
+                }
+            }
+        } catch {
+            throw TlsError.Failed(.illegalParameter, reason: "the server's key share is no key of its group: \(error.description())")
+        }
+    }
+}

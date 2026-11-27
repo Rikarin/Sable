@@ -1,0 +1,339 @@
+module TlsClientConnectionTests
+
+// TlsClientConnection (Sable.Net.Tls): RFC 8448's simple 1-RTT handshake
+// replayed end to end, and the server's faults it must refuse. Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Rfc8448
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Net.Tls
+import Sable.Testing
+import Sable.Time
+
+/// The trace's server certificate: RSA, self-signed, of the name "rsa".
+fn traceCertificate() -> Certificate {
+    return try! Certificate.parse(der: Rfc8448.certificate[11..<11 + 0x1B0])
+}
+
+/// A client that says what the trace's client says.
+fn traceClient(_ options: TlsClientOptions) -> TlsClientConnection {
+    let key = try! X25519PrivateKey(Rfc8448.clientPrivateKey)
+    return TlsClientConnection(host: "server", options: options, clientHello: Rfc8448.clientHello, keyShares: [.X25519(key)])
+}
+
+fn pinned() -> TlsClientOptions {
+    return TlsClientOptions(trust: .Pinned([traceCertificate()]))
+}
+
+/// The server's flight with its messages as given, sealed as the trace's.
+fn flight(_ messages: U8[:]) -> U8[>..] {
+    var writer = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret))
+    return try! writer.seal(messages, type: .Handshake)
+}
+
+/// A server flight of the certificate, signed by the key, with a Finished
+/// that is right: the trace's handshake with another certificate.
+fn flight(certificate: Certificate, key: EcdsaPrivateKey<P256>) -> U8[>..] {
+    var body: U8[>..] = [0]
+    var entry: U8[>..] = []
+    let der = certificate.der
+    entry.append(contentsOf: [U8(der.count >> 16), U8(der.count >> 8 & 0xFF), U8(der.count & 0xFF)])
+    entry.append(contentsOf: der)
+    entry.append(contentsOf: [0, 0])
+    body.append(contentsOf: [U8(entry.count >> 16), U8(entry.count >> 8 & 0xFF), U8(entry.count & 0xFF)])
+    body.append(contentsOf: entry)
+    let certificateMessage = message(11, body)
+    var transcript = joined(joined(Rfc8448.clientHello, Rfc8448.serverHello), joined(Rfc8448.encryptedExtensions, certificateMessage))
+    var content = U8[>..](repeating: 0x20, count: 64)
+    content.append(contentsOf: "TLS 1.3, server CertificateVerify".utf8Bytes())
+    content.append(0)
+    content.append(contentsOf: HashAlgorithm.Sha256.digest(of: transcript).bytes)
+    let signature = key.sign(content, hash: .Sha256).der
+    var verify: U8[>..] = [4, 3, U8(signature.count >> 8), U8(signature.count & 0xFF)]
+    verify.append(contentsOf: signature)
+    let verifyMessage = message(15, verify)
+    transcript.append(contentsOf: verifyMessage)
+    let finished = TlsKeySchedule.finishedData(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret), transcriptHash: HashAlgorithm.Sha256.digest(of: transcript).bytes)
+    return flight(joined(joined(joined(Rfc8448.encryptedExtensions, certificateMessage), verifyMessage), message(20, finished)))
+}
+
+fn message(_ type: U8, _ body: U8[:]) -> U8[>..] {
+    var bytes: U8[>..] = [type, U8(body.count >> 16), U8(body.count >> 8 & 0xFF), U8(body.count & 0xFF)]
+    bytes.append(contentsOf: body)
+    return bytes
+}
+
+/// A CA and a certificate it issued for test.example, checked at the
+/// middle of December 2026.
+struct Authority {
+    let root: Certificate
+    let key: EcdsaPrivateKey<P256>
+    let leaf: Certificate
+
+    init(root name: String = "Root", host: String = "test.example", notAfter: UtcDateTime = UtcDateTime.of(year: 2027, month: 6, day: 1, hour: 0, minute: 0, second: 0)!) {
+        let rootKey = EcdsaPrivateKey<P256>.generate().anyKey
+        var authority = CertificateBuilder(subject: DistinguishedName(commonName: name), isAuthority: true)
+        authority.notBefore = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        authority.notAfter = UtcDateTime.of(year: 2036, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        root = try! authority.selfSigned(with: rootKey)
+        key = EcdsaPrivateKey<P256>.generate()
+        var builder = CertificateBuilder(subject: DistinguishedName([]), host: host)
+        builder.notBefore = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+        builder.notAfter = notAfter
+        leaf = try! builder.issued(to: key.anyKey.publicKey, by: root, signingKey: rootKey)
+    }
+
+    fn options() -> TlsClientOptions {
+        var options = TlsClientOptions(trust: .Verified(CertificateVerifier(roots: TrustStore([root]))))
+        options.time = UtcDateTime.of(year: 2026, month: 12, day: 15, hour: 0, minute: 0, second: 0)!
+        return options
+    }
+
+    fn client(host: String = "test.example") -> TlsClientConnection {
+        let share = try! X25519PrivateKey(Rfc8448.clientPrivateKey)
+        return TlsClientConnection(host: host, options: options(), clientHello: Rfc8448.clientHello, keyShares: [.X25519(share)])
+    }
+}
+
+@test
+fn theClientSendsTheTracesHello() {
+    var client = traceClient(pinned())
+    assertEqual(client.takeOutgoing(), Rfc8448.clientHelloRecord)
+    assertEqual(client.takeOutgoing(), [])
+}
+
+@test
+fn theTracesHandshakeCompletesWithTheTracesFinished() throws {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    try client.receive(Rfc8448.serverHelloRecord)
+    expect(!client.isHandshakeComplete)
+    try client.receive(Rfc8448.serverFlightRecord)
+    require(client.isHandshakeComplete)
+    assertEqual(client.takeOutgoing(), Rfc8448.clientFinishedRecord)
+    expect(client.cipherSuite == .Aes128GcmSha256)
+    expect(client.applicationProtocol == none)
+    expect(client.peerCertificates == [traceCertificate()])
+}
+
+@test
+fn theTracesApplicationDataAndClosureAreTheTraces() throws {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    try client.receive(joined(Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord))
+    _ = client.takeOutgoing()
+    try client.receive(Rfc8448.newSessionTicketRecord)
+    try client.write(Rfc8448.applicationData)
+    assertEqual(client.takeOutgoing(), Rfc8448.clientApplicationRecord)
+    try client.receive(Rfc8448.serverApplicationRecord)
+    assertEqual(client.takeReceived(), Rfc8448.applicationData)
+    client.close()
+    assertEqual(client.takeOutgoing(), Rfc8448.clientAlertRecord)
+    expect(client.isClosedForWriting)
+    _ = expectThrows(TlsError.self) { try client.write([1]) }
+    try client.receive(Rfc8448.serverAlertRecord)
+    expect(client.isPeerClosed)
+}
+
+@test
+fn recordsSplitAnywhereAreTheSame() throws {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    let all = joined(Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord)
+    var at = 0
+    while at < all.count {
+        let end = at + 7 < all.count ? at + 7 : all.count
+        try client.receive(all[at..<end])
+        at = end
+    }
+    require(client.isHandshakeComplete)
+    assertEqual(client.takeOutgoing(), Rfc8448.clientFinishedRecord)
+}
+
+@test
+fn aBadFinishedIsADecryptError() throws {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    try client.receive(Rfc8448.serverHelloRecord)
+    var finished = Rfc8448.serverFinished
+    finished[10] = finished[10] ^ 1
+    let messages = joined(joined(joined(Rfc8448.encryptedExtensions, Rfc8448.certificate), Rfc8448.certificateVerify), finished)
+    let error = expectThrows(TlsError.self) { try client.receive(flight(messages)) }
+    expect(error?.alert == .decryptError)
+    let alert = client.takeOutgoing()
+    assertEqual(alert.count, 5 + 2 + 1 + 16)
+    expect(!client.isHandshakeComplete)
+    expect(expectThrows(TlsError.self) { try client.receive([]) }?.description() == "the connection is closed")
+}
+
+@test
+fn aBadSignatureIsADecryptError() throws {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    try client.receive(Rfc8448.serverHelloRecord)
+    var verify = Rfc8448.certificateVerify
+    verify[verify.count - 1] = verify[verify.count - 1] ^ 0x80
+    let messages = joined(joined(joined(Rfc8448.encryptedExtensions, Rfc8448.certificate), verify), Rfc8448.serverFinished)
+    let error = expectThrows(TlsError.self) { try client.receive(flight(messages)) }
+    expect(error?.alert == .decryptError)
+}
+
+@test
+fn aCertificateNotPinnedIsRefused() throws {
+    let other = Authority()
+    var client = traceClient(TlsClientOptions(trust: .Pinned([other.leaf])))
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(joined(Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord)) }
+    expect(error?.alert == .unknownCa)
+}
+
+@test
+fn aVerifiedCertificateCompletesTheHandshake() throws {
+    let authority = Authority()
+    var client = authority.client()
+    _ = client.takeOutgoing()
+    try client.receive(joined(Rfc8448.serverHelloRecord, flight(certificate: authority.leaf, key: authority.key)))
+    expect(client.isHandshakeComplete)
+    expect(client.peerCertificates == [authority.leaf])
+}
+
+@test
+fn aCertificateOfAnotherHostIsRefused() throws {
+    let authority = Authority()
+    var client = authority.client(host: "other.example")
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(joined(Rfc8448.serverHelloRecord, flight(certificate: authority.leaf, key: authority.key))) }
+    expect(error?.alert == .badCertificate)
+    if case .UntrustedCertificate(.HostMismatch(let host)) = error! {
+        assertEqual(host, "other.example")
+    } else {
+        expect(false, "\(error!.description())")
+    }
+}
+
+@test
+fn anExpiredCertificateIsRefused() throws {
+    let authority = Authority(notAfter: UtcDateTime.of(year: 2026, month: 12, day: 1, hour: 0, minute: 0, second: 0)!)
+    var client = authority.client()
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(joined(Rfc8448.serverHelloRecord, flight(certificate: authority.leaf, key: authority.key))) }
+    expect(error?.alert == .certificateExpired)
+}
+
+@test
+fn aCertificateOfAnUnknownIssuerIsRefused() throws {
+    let authority = Authority()
+    let stranger = Authority(root: "Stranger")
+    var client = stranger.client()
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(joined(Rfc8448.serverHelloRecord, flight(certificate: authority.leaf, key: authority.key))) }
+    expect(error?.alert == .unknownCa)
+}
+
+@test
+fn aSignatureByAnotherKeyIsRefused() throws {
+    let authority = Authority()
+    var client = authority.client()
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(joined(Rfc8448.serverHelloRecord, flight(certificate: authority.leaf, key: EcdsaPrivateKey<P256>.generate()))) }
+    expect(error?.alert == .decryptError)
+}
+
+@test
+fn aServerAlertIsThrownAndNotAnswered() throws {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive([21, 3, 3, 0, 2, 2, 40]) }
+    expect(error?.alert == .handshakeFailure)
+    expect(error?.description() == "the other end sent handshake_failure")
+    assertEqual(client.takeOutgoing(), [])
+}
+
+@test(arguments: [
+    ([22, 3, 3, 0, 4, 1, 0, 0, 0], 10),
+    ([23, 3, 3, 0, 1, 0], 10),
+    ([22, 3, 3, 0, 6, 2, 0, 0, 2, 3, 3], 50),
+    ([22, 3, 3, 0, 0], 10),
+    ([22, 3, 3, 0x48, 0x01], 22),
+    ([20, 3, 3, 0, 1, 2], 10),
+    ([21, 3, 3, 0, 1, 2], 50),
+    ([99, 3, 3, 0, 1, 2], 10),
+])
+fn aMalformedFirstRecordSendsItsAlert(_ record: U8[>..], _ code: Int) {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(record) }
+    expect(error?.alert == TlsAlert(code: code), "\(error?.description() ?? "nothing")")
+    assertEqual(client.takeOutgoing(), [21, 3, 3, 0, 2, 2, U8(code)])
+}
+
+/// The trace's ServerHello with one byte changed.
+fn serverHello(changing at: Int, to value: U8) -> U8[>..] {
+    var hello = Rfc8448.serverHello
+    hello[at] = value
+    var record: U8[>..] = [22, 3, 3, 0, U8(hello.count)]
+    record.append(contentsOf: hello)
+    return record
+}
+
+@test(arguments: [
+    (4, 2, 70),
+    (38, 1, 47),
+    (39, 0x99, 47),
+    (41, 1, 47),
+    (44, 0x2C, 110),
+    (89, 3, 70),
+    (49, 0x1E, 47),
+])
+fn aServerHelloOutOfLineIsRefused(_ at: Int, _ value: U8, _ code: Int) {
+    var client = traceClient(pinned())
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(serverHello(changing: at, to: value)) }
+    expect(error?.alert == TlsAlert(code: code), "\(error?.description() ?? "nothing")")
+}
+
+@test
+fn aSuiteNotOfferedIsRefused() {
+    var options = pinned()
+    options.cipherSuites = [.ChaCha20Poly1305Sha256]
+    var client = traceClient(options)
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(Rfc8448.serverHelloRecord) }
+    expect(error?.alert == .illegalParameter)
+}
+
+fn holds(_ bytes: U8[:], _ part: U8[:]) -> Bool {
+    var at = 0
+    while at + part.count <= bytes.count {
+        if bytes[at..<at + part.count] == part {
+            return true
+        }
+        at += 1
+    }
+    return false
+}
+
+@test
+fn theStandardHelloOffersWhatTheOptionsSay() {
+    var options = TlsClientOptions(trust: .Pinned([]))
+    options.applicationProtocols = ["h2"]
+    var client = TlsClientConnection(host: "example.com", options: options)
+    let record = client.takeOutgoing()
+    expect(record[0] == 22 && record[5] == 1)
+    expect(holds(record, "example.com".utf8Bytes()) && holds(record, "h2".utf8Bytes()))
+    var byAddress = TlsClientConnection(host: "127.0.0.1", options: options)
+    expect(!holds(byAddress.takeOutgoing(), "127.0.0.1".utf8Bytes()))
+    _ = expectThrows(TlsError.self) { try client.write([1]) }
+}
+
+@test
+fn alertsHaveTheirNames() {
+    expect(TlsAlert.unexpectedMessage.name == "unexpected_message")
+    expect(TlsAlert(code: 200).name == "alert 200")
+    expect(TlsAlert.userCanceled.isClosure)
+    for code in [10, 20, 22, 40, 42, 43, 44, 45, 46, 47, 48, 50, 51, 70, 80, 109, 110, 120] {
+        expect(!TlsAlert(code: code).name.hasPrefix("alert"))
+    }
+    expect(TlsError.Closed.alert == none)
+}

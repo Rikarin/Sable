@@ -1,0 +1,89 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+
+/// The TLS 1.3 key schedule (RFC 8446 §7.1): the early secret, then the
+/// handshake secret once the key exchange's shared secret is mixed in, then
+/// the master secret; and from each, by the transcript's hash, the traffic
+/// secrets the records are sealed with.
+///
+/// ```sable
+/// var schedule = TlsKeySchedule(.Aes128GcmSha256)
+/// schedule.advance(sharedSecret: SymmetricKey(U8[>..](repeating: 7, count: 32)))
+/// let hash = TlsCipherSuite.Aes128GcmSha256.hashAlgorithm.digest(of: [1, 2, 3]).bytes
+/// let client = schedule.deriveSecret("c hs traffic", transcriptHash: hash)
+/// assert(client.byteCount == 32 && client != schedule.deriveSecret("s hs traffic", transcriptHash: hash))
+/// ```
+public struct TlsKeySchedule: Sendable {
+    /// The suite whose hash it is of.
+    public let suite: TlsCipherSuite
+
+    /// The secret of the stage it is at: early, handshake or master.
+    public private(set) var secret: SymmetricKey
+
+    /// The early secret, from a pre-shared key or, with none, from zeros.
+    public init(_ suite: TlsCipherSuite, preSharedKey: SymmetricKey? = none) {
+        self.suite = suite
+        let zeros = U8[>..](repeating: 0, count: suite.hashAlgorithm.digestByteCount)
+        self.secret = TlsKeySchedule.extract(suite, salt: zeros, secret: preSharedKey ?? SymmetricKey(zeros))
+    }
+
+    /// The next stage: the handshake secret from the early one and the key
+    /// exchange's shared secret, or with none, the master secret from the
+    /// handshake one.
+    public mutating fn advance(sharedSecret: SymmetricKey? = none) {
+        let derived = deriveSecret("derived", transcriptHash: suite.hashAlgorithm.digest(of: []).bytes)
+        let zeros = U8[>..](repeating: 0, count: suite.hashAlgorithm.digestByteCount)
+        var salt = derived.bytes()
+        secret = TlsKeySchedule.extract(suite, salt: salt, secret: sharedSecret ?? SymmetricKey(zeros))
+        secureZero(&salt)
+    }
+
+    /// Derive-Secret: the stage's secret expanded for the label, prefixed
+    /// "tls13 ", and the transcript's hash.
+    public fn deriveSecret(_ label: String, transcriptHash: U8[:]) -> SymmetricKey {
+        return TlsKeySchedule.expandLabel(suite, secret, label, context: transcriptHash, byteCount: suite.hashAlgorithm.digestByteCount)
+    }
+
+    /// HKDF-Expand-Label: a secret expanded for the label, prefixed
+    /// "tls13 ", and the context, to so many bytes.
+    ///
+    /// ```sable
+    /// let secret = SymmetricKey(U8[>..](repeating: 1, count: 32))
+    /// assert(TlsKeySchedule.expandLabel(.Aes128GcmSha256, secret, "key", context: [], byteCount: 16).byteCount == 16)
+    /// ```
+    public static fn expandLabel(_ suite: TlsCipherSuite, _ secret: SymmetricKey, _ label: String, context: U8[:], byteCount: Int) -> SymmetricKey {
+        var info: U8[>..] = [U8(byteCount >> 8 & 0xFF), U8(byteCount & 0xFF)]
+        let full = "tls13 \(label)".utf8Bytes()
+        info.append(U8(full.count))
+        info.append(contentsOf: full)
+        info.append(U8(context.count))
+        info.append(contentsOf: context)
+        return match suite.hashAlgorithm {
+            case .Sha384 => try! Hkdf<Sha384>.expand(secret, info: info, byteCount: byteCount)
+            default      => try! Hkdf<Sha256>.expand(secret, info: info, byteCount: byteCount)
+        }
+    }
+
+    /// The verify_data of a Finished (RFC 8446 §4.4.4): an HMAC of the
+    /// transcript's hash under the finished key of the traffic secret.
+    public static fn finishedData(_ suite: TlsCipherSuite, trafficSecret: SymmetricKey, transcriptHash: U8[:]) -> U8[>..] {
+        let key = TlsKeySchedule.expandLabel(suite, trafficSecret, "finished", context: [], byteCount: suite.hashAlgorithm.digestByteCount)
+        return match suite.hashAlgorithm {
+            case .Sha384 => Hmac<Sha384>.authenticationCode(for: transcriptHash, using: key).bytes
+            default      => Hmac<Sha256>.authenticationCode(for: transcriptHash, using: key).bytes
+        }
+    }
+
+    /// The traffic secret after a KeyUpdate (RFC 8446 §7.2).
+    public static fn nextTrafficSecret(_ suite: TlsCipherSuite, _ secret: SymmetricKey) -> SymmetricKey {
+        return TlsKeySchedule.expandLabel(suite, secret, "traffic upd", context: [], byteCount: suite.hashAlgorithm.digestByteCount)
+    }
+
+    static fn extract(_ suite: TlsCipherSuite, salt: U8[:], secret: SymmetricKey) -> SymmetricKey {
+        return match suite.hashAlgorithm {
+            case .Sha384 => Hkdf<Sha384>.extract(secret, salt: salt)
+            default      => Hkdf<Sha256>.extract(secret, salt: salt)
+        }
+    }
+}

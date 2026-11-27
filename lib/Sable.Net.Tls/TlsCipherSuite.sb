@@ -1,0 +1,53 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+
+/// A TLS 1.3 cipher suite (RFC 8446 §B.4): the AEAD records are sealed
+/// with and the hash of the key schedule.
+///
+/// ```sable
+/// assert(TlsCipherSuite.Aes128GcmSha256.code == 0x1301)
+/// assert(TlsCipherSuite.of(code: 0x1303) == .ChaCha20Poly1305Sha256)
+/// assert(TlsCipherSuite.Aes256GcmSha384.hashAlgorithm == .Sha384)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum TlsCipherSuite: Sendable {
+    /// TLS_AES_128_GCM_SHA256.
+    Aes128GcmSha256
+    /// TLS_AES_256_GCM_SHA384.
+    Aes256GcmSha384
+    /// TLS_CHACHA20_POLY1305_SHA256.
+    ChaCha20Poly1305Sha256
+
+    /// The suite of the number; none for one the library has not.
+    public static fn of(code: Int) -> TlsCipherSuite? {
+        return match code {
+            case 0x1301 => TlsCipherSuite.Aes128GcmSha256
+            case 0x1302 => TlsCipherSuite.Aes256GcmSha384
+            case 0x1303 => TlsCipherSuite.ChaCha20Poly1305Sha256
+            default     => none
+        }
+    }
+
+    /// Its number on the wire.
+    public var code: Int => match self {
+        case .Aes128GcmSha256        => 0x1301
+        case .Aes256GcmSha384        => 0x1302
+        case .ChaCha20Poly1305Sha256 => 0x1303
+    }
+
+    /// The hash of its key schedule and transcript.
+    public var hashAlgorithm: HashAlgorithm => match self {
+        case .Aes256GcmSha384 => HashAlgorithm.Sha384
+        default               => HashAlgorithm.Sha256
+    }
+
+    /// How many bytes its record key is.
+    public var keyByteCount: Int => match self {
+        case .Aes128GcmSha256 => 16
+        default               => 32
+    }
+
+    /// Every suite, in the order a client offers them.
+    public static var all: TlsCipherSuite[>..] => [.Aes128GcmSha256, .Aes256GcmSha384, .ChaCha20Poly1305Sha256]
+}

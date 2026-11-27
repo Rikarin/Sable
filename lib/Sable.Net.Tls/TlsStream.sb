@@ -1,0 +1,141 @@
+module Sable.Net.Tls
+
+import Sable.IO
+
+/// A TLS 1.3 client connection over a stream: what is written is sealed
+/// before it goes, and what is read was opened as it came. The stream is
+/// any `AsyncReader & AsyncWriter`, a `TcpStream` most often. Read it from
+/// one task at a time, and write it from one at a time.
+///
+/// ```sable
+/// fn fetch<S: AsyncReader & AsyncWriter>(over tcp: S) async throws -> U8[>..] {
+///     let tls = try await TlsStream.connect(tcp, host: "localhost")
+///     try await tls.write("GET / HTTP/1.0\r\n\r\n".utf8Bytes())
+///     return try await tls.read(upTo: 4096)
+/// }
+/// ```
+public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWriter {
+    let transport: S
+    var connection: TlsClientConnection
+
+    init(_ transport: S, _ connection: TlsClientConnection) {
+        self.transport = transport
+        self.connection = connection
+    }
+
+    /// A connection to the host over the stream, once its handshake is
+    /// over: the server's certificate must be the host's, as the options
+    /// say it is checked.
+    public static fn connect(_ transport: S, host: String, options: TlsClientOptions = TlsClientOptions()) async throws(TlsError) -> TlsStream<S> {
+        return try await TlsStream<S>.connect(transport, connection: TlsClientConnection(host: host, options: options))
+    }
+
+    /// The connection given over the stream, once its handshake is over.
+    public static fn connect(_ transport: S, connection: TlsClientConnection) async throws(TlsError) -> TlsStream<S> {
+        let stream = TlsStream<S>(transport, connection)
+        try await stream.flush()
+        while !stream.connection.isHandshakeComplete {
+            if !(try await stream.pull()) {
+                throw TlsError.Failed(.handshakeFailure, reason: "the stream ended in the handshake")
+            }
+        }
+        try await stream.flush()
+        return stream
+    }
+
+    /// The application protocol the server chose; none if it chose none.
+    public var applicationProtocol: String? => connection.applicationProtocol
+
+    /// The suite the records are sealed with.
+    public var cipherSuite: TlsCipherSuite => connection.cipherSuite!
+
+    /// Up to 'count' bytes of application data, as soon as any have come;
+    /// none once the server has closed the connection. A fault of TLS is
+    /// `InvalidData`.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        while true {
+            let ready = connection.takeReceived()
+            if !ready.isEmpty {
+                if ready.count > count {
+                    let rest = ready[count..<ready.count].toArray()
+                    connection.received = rest
+                    return ready[0..<count].toArray()
+                }
+                return ready
+            }
+            if connection.isPeerClosed {
+                return []
+            }
+            var more = false
+            do {
+                more = try await pull()
+                try await flush()
+            } catch {
+                throw TlsStream<S>.ioError(error)
+            }
+            if !more {
+                throw IoError.UnexpectedEof
+            }
+        }
+    }
+
+    /// The bytes sealed and sent.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        do {
+            try connection.write(bytes)
+            try await flush()
+        } catch {
+            throw TlsStream<S>.ioError(error)
+        }
+    }
+
+    /// close_notify sent: this end writes no more.
+    public fn close() async throws(IoError) {
+        connection.close()
+        do {
+            try await flush()
+        } catch {
+            throw TlsStream<S>.ioError(error)
+        }
+    }
+
+    /// Whether more came from the stream; what came is read.
+    fn pull() async throws(TlsError) -> Bool {
+        var bytes: U8[>..] = []
+        do {
+            bytes = try await transport.read(upTo: 16384 + 5 + 256)
+        } catch {
+            throw TlsError.Io(error)
+        }
+        if bytes.isEmpty {
+            return false
+        }
+        do {
+            try connection.receive(bytes)
+        } catch {
+            let failure = error
+            _ = try? await transport.write(connection.takeOutgoing())
+            throw failure
+        }
+        return true
+    }
+
+    fn flush() async throws(TlsError) {
+        let bytes = connection.takeOutgoing()
+        if bytes.isEmpty {
+            return
+        }
+        do {
+            try await transport.write(bytes)
+        } catch {
+            throw TlsError.Io(error)
+        }
+    }
+
+    static fn ioError(_ error: TlsError) -> IoError {
+        if case .Io(let inner) = error {
+            return inner
+        }
+        return IoError.InvalidData(what: "TLS: \(error.description())")
+    }
+}

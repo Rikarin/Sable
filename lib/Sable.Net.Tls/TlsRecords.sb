@@ -147,13 +147,8 @@ struct TlsRecords: Sendable {
         throw TlsError.PeerAlert(alert)
     }
 
-    /// A message after the handshake: a KeyUpdate, or — where the end takes
-    /// them, and keeps none — a NewSessionTicket.
-    mutating fn readPostHandshake(_ type: Int, _ body: inout TlsReader, takesTickets: Bool) throws(TlsError) {
-        if type == 4 && takesTickets {
-            _ = try body.take(body.bytes.count)
-            return
-        }
+    /// A KeyUpdate after the handshake; any other message is unexpected.
+    mutating fn readPostHandshake(_ type: Int, _ body: inout TlsReader) throws(TlsError) {
         if type != 24 {
             throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) after the handshake")
         }

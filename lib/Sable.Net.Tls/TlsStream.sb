@@ -83,6 +83,9 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
     /// host connected to.
     public var serverName: String? => client != none ? client!.host : server!.serverName
 
+    /// Whether the handshake resumed a session of a ticket.
+    public var isResumed: Bool => client != none ? client!.isResumed : server!.isResumed
+
     var isHandshakeComplete: Bool => client != none ? client!.isHandshakeComplete : server!.isHandshakeComplete
 
     var isPeerClosed: Bool => client != none ? client!.isPeerClosed : server!.isPeerClosed

@@ -1,0 +1,207 @@
+module TlsResumptionTests
+
+// Sessions of Sable.Net.Tls resumed (RFC 8446 §4.2.11): the server's
+// tickets, the client's cache of them, the binder, and what makes a server
+// decline one; in process, and over TCP on loopback. Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Sable.Concurrency
+import Sable.Crypto
+import Sable.IO
+import Sable.Net
+import Sable.Net.Tls
+import Sable.Testing
+import Sable.Time
+import TlsSupport
+
+/// A server of the PKI's whose clock stands at the clients'.
+fn serverOptions(_ pki: TestPki) -> TlsServerOptions {
+    var options = pki.serverOptions()
+    options.time = pki.clientOptions().time
+    return options
+}
+
+/// A client of the PKI's that keeps its sessions in the cache.
+fn clientOptions(_ pki: TestPki, _ cache: TlsSessionCache) -> TlsClientOptions {
+    var options = pki.clientOptions()
+    options.sessionCache = cache
+    return options
+}
+
+/// A whole handshake between a new client and a new server of the options.
+fn connected(_ client: TlsClientOptions, _ server: TlsServerOptions) throws(TlsError) -> (TlsClientConnection, TlsServerConnection) {
+    var a = TlsClientConnection(host: "localhost", options: client)
+    var b = TlsServerConnection(options: server)
+    try exchange(&a, &b)
+    return (a, b)
+}
+
+@test
+fn aSecondConnectionResumesTheFirstsSession() throws {
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let cache = TlsSessionCache()
+    let options = serverOptions(pki)
+    let (first, firstServer) = try connected(clientOptions(pki, cache), options)
+    require(first.isHandshakeComplete && firstServer.isHandshakeComplete)
+    expect(!first.isResumed && !firstServer.isResumed)
+    expect(cache.count(host: "localhost") == 1)
+    var (client, server) = try connected(clientOptions(pki, cache), options)
+    require(client.isHandshakeComplete && server.isHandshakeComplete)
+    expect(client.isResumed && server.isResumed)
+    expect(client.peerCertificates.isEmpty)
+    // The ticket offered is spent, and the resumed handshake brought another.
+    expect(cache.count(host: "localhost") == 1)
+    try client.write([1, 2, 3])
+    try server.receive(client.takeOutgoing())
+    assertEqual(server.takeReceived(), [1, 2, 3])
+    try server.write([4, 5])
+    try client.receive(server.takeOutgoing())
+    assertEqual(client.takeReceived(), [4, 5])
+}
+
+@test(arguments: TlsCipherSuite.all)
+fn everySuiteResumes(_ suite: TlsCipherSuite) throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    var options = serverOptions(pki)
+    options.cipherSuites = [suite]
+    _ = try connected(clientOptions(pki, cache), options)
+    let (client, server) = try connected(clientOptions(pki, cache), options)
+    expect(client.isResumed && server.isResumed && client.cipherSuite == suite)
+}
+
+@test
+fn aServerOfAnotherTicketKeyMakesAFullHandshake() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    _ = try connected(clientOptions(pki, cache), serverOptions(pki))
+    let (client, server) = try connected(clientOptions(pki, cache), serverOptions(pki))
+    expect(!client.isResumed && !server.isResumed && client.peerCertificates == [pki.leaf])
+}
+
+@test
+fn aServerWithNoTicketKeyIssuesNoneAndResumesNone() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    var options = serverOptions(pki)
+    options.ticketKey = none
+    _ = try connected(clientOptions(pki, cache), options)
+    expect(cache.count(host: "localhost") == 0)
+    var issuing = serverOptions(pki)
+    _ = try connected(clientOptions(pki, cache), issuing)
+    issuing.ticketKey = none
+    let (client, server) = try connected(clientOptions(pki, cache), issuing)
+    expect(!client.isResumed && !server.isResumed)
+}
+
+@test
+fn anExpiredTicketIsDeclined() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    var options = serverOptions(pki)
+    options.ticketLifetime = Duration.seconds(60)
+    _ = try connected(clientOptions(pki, cache), options)
+    // The server's clock is past the ticket's life, the client's is not.
+    options.time = options.time!.adding(Duration.seconds(61))
+    let (client, server) = try connected(clientOptions(pki, cache), options)
+    expect(!client.isResumed && !server.isResumed)
+}
+
+@test
+fn theClientOffersNoSessionPastItsLifetime() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    var options = serverOptions(pki)
+    options.ticketLifetime = Duration.seconds(60)
+    _ = try connected(clientOptions(pki, cache), options)
+    var later = clientOptions(pki, cache)
+    later.time = later.time!.adding(Duration.seconds(61))
+    let (client, _) = try connected(later, options)
+    expect(!client.isResumed && cache.count(host: "localhost") == 1)
+}
+
+@test
+fn aSessionOfAnotherHashIsNotResumed() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    var options = serverOptions(pki)
+    options.cipherSuites = [.Aes128GcmSha256]
+    _ = try connected(clientOptions(pki, cache), options)
+    options.cipherSuites = [.Aes256GcmSha384]
+    let (client, server) = try connected(clientOptions(pki, cache), options)
+    expect(!client.isResumed && !server.isResumed && client.cipherSuite == .Aes256GcmSha384)
+}
+
+@test
+fn aWrongBinderFailsTheHandshake() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let cache = TlsSessionCache()
+    let options = serverOptions(pki)
+    _ = try connected(clientOptions(pki, cache), options)
+    var client = TlsClientConnection(host: "localhost", options: clientOptions(pki, cache))
+    var hello = client.takeOutgoing()
+    // The binder is the hello's last bytes.
+    hello[hello.count - 1] ^= 1
+    var server = TlsServerConnection(options: options)
+    let error = expectThrows(TlsError.self) { try server.receive(hello) }
+    expect(error?.alert == .decryptError)
+}
+
+@test
+fn theCacheKeepsTheNewestSessionsOfEachHost() {
+    let cache = TlsSessionCache(perHost: 2)
+    for i in 0..<3 {
+        cache.add(TlsSession(ticket: [U8(i)], resumptionKey: SymmetricKey(U8[>..](repeating: 1, count: 32)), cipherSuite: .Aes128GcmSha256, received: UtcDateTime.fromUnix(i), lifetime: Duration.seconds(10), ageAdd: 0), host: "a")
+    }
+    expect(cache.count(host: "a") == 2 && cache.count(host: "b") == 0)
+    expect(cache.take(host: "a", at: UtcDateTime.fromUnix(5))?.ticket == [2])
+    expect(cache.take(host: "b", at: UtcDateTime.fromUnix(5)) == none)
+    // The one left, of time 1, is past its life at 12.
+    expect(cache.take(host: "a", at: UtcDateTime.fromUnix(12)) == none)
+    expect(cache.count(host: "a") == 0)
+}
+
+@test
+fn aSessionsAgeIsObfuscated() {
+    let session = TlsSession(ticket: [1], resumptionKey: SymmetricKey(U8[>..](repeating: 1, count: 32)), cipherSuite: .Aes128GcmSha256, received: UtcDateTime.fromUnix(100), lifetime: Duration.seconds(10), ageAdd: 0xFFFF_FFFF)
+    expect(session.obfuscatedAge(at: UtcDateTime.fromUnix(101)) == 999)
+    expect(session.obfuscatedAge(at: UtcDateTime.fromUnix(99)) == 0xFFFF_FFFF)
+    expect(!session.isValid(at: UtcDateTime.fromUnix(99)))
+}
+
+/// Accepts connections, one after another, and answers each one's "ping"
+/// with "pong", and whether it was resumed.
+fn pong(_ listener: TcpListener, _ options: TlsServerOptions, _ count: Int) async throws -> Bool[>..] {
+    var resumed: Bool[>..] = []
+    for _ in 0..<count {
+        let tcp = try await listener.accept()
+        let tls = try await TlsStream.accept(tcp, options: options)
+        _ = try await tls.read(upTo: 1024)
+        try await tls.write("pong".utf8Bytes())
+        try await tls.close()
+        tcp.close()
+        resumed.append(tls.isResumed)
+    }
+    return resumed
+}
+
+@test
+fn streamsOverTcpResumeASession() async throws {
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let options = serverOptions(pki)
+    let server = Task.spawn { () -> Bool[>..] in (try? await pong(listener, options, 2)) ?? [] }
+    let cache = TlsSessionCache()
+    var seen: Bool[>..] = []
+    for _ in 0..<2 {
+        let tcp = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+        let tls = try await TlsStream.connect(tcp, host: "localhost", options: clientOptions(pki, cache))
+        try await tls.write("ping".utf8Bytes())
+        // The ticket comes before the pong.
+        expect(try await tls.read(upTo: 1024) == "pong".utf8Bytes())
+        seen.append(tls.isResumed)
+        tcp.close()
+    }
+    expect(seen == [false, true])
+    expect(await server.value == [false, true])
+}

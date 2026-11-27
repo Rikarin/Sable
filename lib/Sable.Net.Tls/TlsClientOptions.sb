@@ -21,8 +21,13 @@ public struct TlsClientOptions: Sendable {
     /// The suites offered, the one preferred first.
     public var cipherSuites: TlsCipherSuite[>..] = TlsCipherSuite.all
 
-    /// The time certificates are checked at; none is the system's now.
+    /// The time certificates are checked at, and sessions' tickets had and
+    /// aged at; none is the system's now.
     public var time: UtcDateTime? = none
+
+    /// Where sessions of each host are kept, to resume a connection with
+    /// the next time; none for a client that resumes none.
+    public var sessionCache: TlsSessionCache? = none
 
     public init(trust: TlsServerTrust = TlsServerTrust.system()) {
         self.trust = trust

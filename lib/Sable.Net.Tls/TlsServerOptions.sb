@@ -2,12 +2,15 @@ module Sable.Net.Tls
 
 import Sable.Crypto
 import Sable.Crypto.X509
+import Sable.Time
 
 /// How a server answers: the certificate chain it sends, its own first,
 /// the private key of that certificate, which signs the handshake, and the
 /// application protocols (ALPN, RFC 7301) and suites it takes, the one it
 /// prefers first. A key of P-256 or P-384 signs with ECDSA, of Ed25519 with
-/// Ed25519, and of RSA with RSA-PSS.
+/// Ed25519, and of RSA with RSA-PSS. Tickets of sessions are sealed with a
+/// key made with the options, so that servers of the same options resume
+/// each other's sessions.
 ///
 /// ```sable
 /// let key = EcdsaPrivateKey<P256>.generate().anyKey
@@ -31,8 +34,21 @@ public struct TlsServerOptions: Sendable {
     /// The suites taken, the one preferred first.
     public var cipherSuites: TlsCipherSuite[>..] = TlsCipherSuite.all
 
+    /// The key the tickets of sessions are sealed with, with AES-GCM: 16 or
+    /// 32 bytes, made afresh with the options; none for a server that
+    /// issues no ticket and resumes no session.
+    public var ticketKey: SymmetricKey?
+
+    /// How long after it was issued a ticket is taken; no more than seven
+    /// days is said to the client.
+    public var ticketLifetime: Duration = Duration.seconds(7200)
+
+    /// The time tickets are issued and checked at; none is the system's now.
+    public var time: UtcDateTime? = none
+
     public init(certificateChain: Certificate[:], privateKey: PrivateKey) {
         self.certificateChain = certificateChain.toArray()
         self.privateKey = privateKey
+        self.ticketKey = SymmetricKey.random(byteCount: 32)
     }
 }

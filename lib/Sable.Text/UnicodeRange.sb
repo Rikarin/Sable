@@ -21,7 +21,8 @@ public struct UnicodeRange {
 
     /// So many code points from the first, all of them at most U+10FFFF.
     public init(first: Int, length: Int) {
-        precondition(first >= 0 && length >= 0 && first + length <= 0x110000, "a range of code points")
+        // Each is negative where it is out of bounds: one test for all three.
+        precondition((first | length | 0x110000 - first - length) >= 0, "a range of code points")
         self.first = first
         self.length = length
     }

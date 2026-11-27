@@ -116,6 +116,7 @@ fn rangesAreTheirBlocks() {
     expect(UnicodeRange.cjkUnifiedIdeographs == UnicodeRange(first: 0x4E00, length: 0x5200))
     expect(UnicodeRange.specials.last == 0xFFFF)
     expect(UnicodeRange(from: 'z', through: 'a').length == 0)
+    expect(!UnicodeRange.latin1Supplement.contains('a') && !UnicodeRange.latin1Supplement.contains('ā'))
     expect(UnicodeRange.all.contains('😀') && !UnicodeRange.empty.contains('a'))
 }
 

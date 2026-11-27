@@ -1,11 +1,14 @@
 module Sable.Configuration
 
+import Sable.CommandLine
+
 /// Configuration from a program's arguments, as .NET's command-line
 /// provider reads them: `--Http:Port=8080`, `--Http:Port 8080` or
 /// `Http:Port=8080`. A switch the mappings name — `-p`, or a `--port` —
 /// stands for the key they map it to. A switch with nothing after it, or
 /// another switch, is "true". What is none of these, and everything after
-/// `--`, is left for the program.
+/// `--`, is left for the program. The arguments are read as Sable.CommandLine's
+/// `ArgumentToken` reads them; `ArgumentParser` is for the program's own.
 ///
 /// ```sable
 /// let arguments: String[>..] = ["--Http:Port=8080", "--verbose", "-e", "Staging", "input.txt", "Cache:Size=4"]
@@ -37,43 +40,52 @@ public struct CommandLineConfigurationProvider: ConfigurationProvider {
 
     public fn load() async throws(ConfigurationError) -> ConfigurationValues {
         var values = ConfigurationValues()
+        let tokens = ArgumentToken.read(arguments)
         var i = 0
-        while i < arguments.count {
-            let argument = arguments[i]
+        while i < tokens.count {
+            let token = tokens[i]
             i += 1
-            if argument == "--" {
+            if token == .Separator {
                 break
             }
-            var written = argument
-            var value: String? = none
-            if let (before, after) = argument.splitOnce("=") {
-                written = before
-                value = after
-            }
-            var key = ""
-            if let mapped = switches[written.lowercased()] {
-                key = mapped
-            } else if written.hasPrefix("--") {
-                key = written.trimmingPrefix("--")
-            } else if written.hasPrefix("-") || value == none {
-                // A switch not mapped, or what the program has for itself.
-                continue
-            } else {
-                key = written
-            }
+            let (key, given) = entry(of: token)
             if key.isEmpty {
                 continue
             }
+            var value = given
             if value == none {
-                if i < arguments.count && !arguments[i].hasPrefix("-") {
-                    value = arguments[i]
+                value = "true"
+                if i < tokens.count, let next = CommandLineConfigurationProvider.value(of: tokens[i]) {
+                    value = next
                     i += 1
-                } else {
-                    value = "true"
                 }
             }
             values.set(key, value!)
         }
         return values
+    }
+
+    // The key an argument sets, "" for none, and the value written in it.
+    fn entry(of token: ArgumentToken) -> (String, String?) {
+        if case .Switch(let dashes, let name, let given) = token {
+            if let mapped = switches[(dashes + name).lowercased()] {
+                return (mapped, given)
+            }
+            // A switch not mapped is a key only with two dashes.
+            return (dashes == "--" ? name : "", given)
+        }
+        // What the program has for itself, unless it is 'key=value'.
+        if case .Value(let text) = token, let (before, after) = text.splitOnce("=") {
+            return (switches[before.lowercased()] ?? before, after)
+        }
+        return ("", none)
+    }
+
+    // An argument that can be the value of a switch before it.
+    static fn value(of token: ArgumentToken) -> String? {
+        if case .Value(let text) = token {
+            return text.hasPrefix("-") ? none : text
+        }
+        return none
     }
 }

@@ -87,7 +87,8 @@ public sealed partial class Compilation {
         var scope = new FileScope(tree, module);
         _fileScopes[tree] = scope;
         if (tree.Root is CompilationUnitSyntax unit) {
-            ResolveImports(unit, scope);
+            // Its tiers were checked as the library was compiled (S3239).
+            ResolveImports(unit, scope, importer: null);
         }
 
         return scope;

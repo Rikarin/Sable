@@ -1,0 +1,30 @@
+module LoggerInjectionTests
+
+// Sable.DependencyInjection's conformance of Sable.Diagnostics' Logger.Of:
+// a container gives a typed logger made with its own Logger.
+
+import Sable.DependencyInjection
+import Sable.Diagnostics
+import Sable.Testing
+
+struct Checkout { }
+
+@test
+fn aContainerGivesATypedLoggerMadeWithItsLogger() throws {
+    var services = ServiceCollection()
+    services.addTransient(open: Logger.Of.self, Logger.Of.self)
+    let alone = try services.build()
+    let made = try alone.resolve(Logger.Of<Checkout>.self)
+    expect(made.logger.name == "\(Checkout.self)" && made.logger.context.isEmpty)
+
+    services.addTransient(Logger.self) { _services in
+        let root = Logger("app")
+        root.threshold = Level.Error
+        root.context = [field("host", "a")]
+        return root
+    }
+    let provider = try services.build()
+    let log = try provider.resolve(Logger.Of<Checkout>.self)
+    expect(!log.isEnabled(Level.Warning) && log.logger.context.count == 1)
+    expect(Logger.Of<Checkout>.dependencies().count == 1)
+}

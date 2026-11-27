@@ -47,6 +47,13 @@ public fn renderManifest(_ p: Package) -> String {
         }
     }
 
+    if !p.modules.isEmpty {
+        w.table("modules")
+        for m in p.modules {
+            w.string(quoteKey(m.name), m.isCore ? "core" : "extension")
+        }
+    }
+
     w.dependencies("dependencies", p.dependencies)
     w.dependencies("dev-dependencies", p.devDependencies)
     w.dependencies("build-dependencies", p.buildDependencies)

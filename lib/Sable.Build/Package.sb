@@ -34,6 +34,10 @@ public struct Package {
     /// library and `src/main.sb` the executable, when they exist.
     public var targets: Target[>..] = []
 
+    /// Each module, in a package of many, with its tier: `.core("A")` or
+    /// `.extension("B")`. A core module never imports an extension one.
+    public var modules: Module[>..] = []
+
     public var dependencies: Dependency[>..] = []
     public var devDependencies: Dependency[>..] = []
     public var buildDependencies: Dependency[>..] = []

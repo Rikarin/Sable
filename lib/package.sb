@@ -3,8 +3,51 @@ import Sable.Build
 // The standard library as a package, for the editor: its files are compiled
 // together and apart from the tests and examples beside them. Programs do not
 // depend on it; the toolchain embeds the modules (this file is not one).
+//
+// `modules` is every module of lib/ with its tier, and the one list of them:
+// the compiler reads it (Sable.Symbols' LibraryTiers) and reports a core
+// module that imports an extension one (S3239); LibraryTierTests fails on a
+// module of lib/ not listed, a listed one that is not there, and a core
+// module that reaches an extension through others. Write each as
+// `.core("...")` or `.extension("...")`, in a literal list.
 let manifest = Package {
     name: "sable",
     version: "0.1.0",
     publish: false,
+    modules: [
+        .core("Sable.Core"),
+        .core("Sable.Collections"),
+        .core("Sable.Text"),
+        .core("Sable.Time"),
+        .core("Sable.Math"),
+        .core("Sable.Math.Geometry"),
+        .core("Sable.IO"),
+        .core("Sable.IO.Hashing"),
+        .core("Sable.IO.Compression"),
+        .core("Sable.IO.Archives"),
+        .core("Sable.IO.Ipc"),
+        .core("Sable.Concurrency"),
+        .core("Sable.Process"),
+        .core("Sable.Net"),
+        .core("Sable.Net.Tls"),
+        .core("Sable.Crypto"),
+        .core("Sable.Crypto.X509"),
+        .core("Sable.Serialize"),
+        .core("Sable.Serialize.Asn1"),
+        .core("Sable.Serialize.Xml"),
+        .core("Sable.Globalization"),
+        .core("Sable.Interop"),
+        .core("Sable.Diagnostics"),
+        .core("Sable.Testing"),
+        .core("Sable.Generators"),
+        .core("Sable.Build"),
+        .extension("Sable.DependencyInjection"),
+        .extension("Sable.Hosting"),
+        .extension("Sable.Configuration"),
+        .extension("Sable.Validation"),
+        .extension("Sable.CommandLine"),
+        .extension("Sable.Serialize.Yaml"),
+        .extension("Sable.IO.Ports"),
+        .extension("Sable.Math.Tensors"),
+    ],
 }

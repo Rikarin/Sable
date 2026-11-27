@@ -17,6 +17,9 @@ is what to hold to while changing things.
 - **Breaking changes are fine:** there are no users. No deprecation shims.
 - **One spelling for each thing.** Before adding API, look for what exists
   (and in other modules); extend it rather than add a rival.
+- **Every library module is core or an extension,** listed in
+  `lib/package.sb` (docs/06 §6.4). A core module never imports an extension,
+  even through another (S3239, `LibraryTierTests`); a new module gets a tier.
 - **Debug builds stay specialised by default;** unspecialised generics
   (`SABLE_GENERICS=unspecialised`) are tested, not the default.
 - Data from official sources (test vectors, RFCs, specs) may be downloaded

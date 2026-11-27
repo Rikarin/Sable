@@ -139,20 +139,34 @@ public static class Library {
     ///     that needs a part of the runtime the minimal profile leaves out,
     ///     and that part; null when it needs none.
     /// </summary>
-    public static (string Module, string Part)? BeyondMinimalOf(string module, ParseOptions options) {
-        var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
+    public static (string Module, string Part)? BeyondMinimalOf(string module, ParseOptions options) =>
+        ImportChain(module, options, BeyondMinimal.ContainsKey) is { } chain ? (chain[^1], BeyondMinimal[chain[^1]]) : null;
+
+    /// <summary>
+    ///     The shortest way <paramref name="module" /> is or imports,
+    ///     transitively, a library module <paramref name="sought" /> holds
+    ///     of: the module, what it imports, and so on to the one found; null
+    ///     when it reaches none. Sable.Core, which every module has, is not
+    ///     walked.
+    /// </summary>
+    public static IReadOnlyList<string>? ImportChain(string module, ParseOptions options, Func<string, bool> sought) {
+        var from = new Dictionary<string, string?>(StringComparer.Ordinal) { [Core] = null, [module] = null };
         var pending = new Queue<string>([module]);
         while (pending.TryDequeue(out var next)) {
-            if (!seen.Add(next)) {
-                continue;
-            }
+            if (sought(next)) {
+                var chain = new List<string>();
+                for (string? at = next; at is not null; at = from[at]) {
+                    chain.Add(at);
+                }
 
-            if (BeyondMinimal.TryGetValue(next, out var part)) {
-                return (next, part);
+                chain.Reverse();
+                return chain;
             }
 
             foreach (var imported in ModuleFor(next, options).SelectMany(ImportsOf)) {
-                pending.Enqueue(imported);
+                if (from.TryAdd(imported, next)) {
+                    pending.Enqueue(imported);
+                }
             }
         }
 

@@ -2414,7 +2414,7 @@ public static class SilBuiltins {
             // '@builtin' of the library's, on a value that copies on write.
             // An array's buffer too, alone or as such a struct's one field,
             // which an empty array has none of: unique.
-            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType or ArrayType)] } or ArrayType }]
+            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType or ArrayType)] } or ArrayType } or AddressType { Pointee: ScalarType { Name: "Region" } }]
                 ? new([operands[0]], SilType.Bool)
                 : null;
         }

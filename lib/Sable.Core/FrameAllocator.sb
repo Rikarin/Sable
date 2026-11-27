@@ -1,0 +1,87 @@
+module Sable.Core
+
+/// Regions for frames that overlap: a GPU renders frame n while the program
+/// writes frame n + 1, so what a frame allocated must live until that frame
+/// comes round again, 'framesInFlight' frames later. Each frame is given a
+/// region of the allocator's, the oldest, reset as it is given (docs/02
+/// §2.1): a frame's churn costs one bump a value, and nothing to free.
+///
+/// A frame is the region 'beginFrame()' gives, held in a local: what it
+/// allocates is rooted in that local, so the compiler keeps the references
+/// from outliving it as it does a 'region' block's. A frame still held when
+/// it comes round again — a reference kept across frames — is caught: the
+/// region would be reset under it, so 'beginFrame()' traps instead. With
+/// SABLE_CHECK_REGIONS set, what a reset gives back is poisoned and every
+/// value's guard bytes are checked, as in any region.
+///
+/// ```sable
+/// struct Particle {
+///     var x: F64
+///     var speed: F64
+/// }
+///
+/// let frames = FrameAllocator(framesInFlight: 2)
+/// var total = 0.0
+/// for n in 0..<4 {
+///     let frame = frames.beginFrame()
+///     let particle = frame.alloc(Particle { x: F64(n), speed: 0.5 })
+///     particle.x += particle.speed
+///     total += particle.x
+/// }
+/// assert(total == 8.0)
+/// assert(frames.frameNumber == 4 && frames.frameIndex == 1)
+/// ```
+public final class FrameAllocator {
+    var regions: Region[>..]
+
+    /// How many frames may be in flight at once: how many regions there are.
+    public let framesInFlight: Int
+
+    /// How many frames have begun.
+    public private(set) var frameNumber: Int
+
+    /// An allocator of 'framesInFlight' regions, none begun.
+    public init(framesInFlight: Int) {
+        precondition(framesInFlight >= 1, "a frame allocator needs at least one frame in flight, not \(framesInFlight)")
+        self.framesInFlight = framesInFlight
+        regions = []
+        regions.reserveCapacity(framesInFlight)
+        for _ in 0..<framesInFlight {
+            regions.append(Region.make())
+        }
+
+        frameNumber = 0
+    }
+
+    /// Which region the latest frame has, from 0 to 'framesInFlight' - 1;
+    /// -1 before the first.
+    public var frameIndex: Int => frameNumber == 0 ? -1 : (frameNumber - 1) % framesInFlight
+
+    /// The next frame's region: the one the frame 'framesInFlight' frames
+    /// ago had, everything in it destroyed. Traps if that frame is still
+    /// held, as resetting it would leave its references dangling.
+    public fn beginFrame() -> Region {
+        let index = frameNumber % framesInFlight
+        if !regions[index].isUniquelyReferenced() {
+            fatalError("frame \(frameNumber - framesInFlight) is still held as frame \(frameNumber) begins in its region: keep a frame's region and references for that frame alone")
+        }
+
+        regions[index].reset()
+        frameNumber += 1
+        return regions[index]
+    }
+
+    /// Every region emptied and the count of frames begun back to 0. Traps
+    /// if a frame is still held.
+    public fn reset() {
+        for index in 0..<framesInFlight {
+            if !regions[index].isUniquelyReferenced() {
+                fatalError("a frame is still held as the frame allocator is reset")
+            }
+
+            regions[index].reset()
+        }
+
+        frameNumber = 0
+    }
+}

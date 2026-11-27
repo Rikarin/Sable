@@ -999,4 +999,15 @@ extension Region {
     /// Everything in the region destroyed, its memory kept for what comes next.
     @builtin("region_reset")
     public fn reset()
+
+    /// A region of no block's, empty: what a FrameAllocator keeps and lends
+    /// out. Not public: a reference into a region is rooted where the region
+    /// is held, and one made by a block is held there alone.
+    @builtin("region_create")
+    package static fn make() -> Region
+
+    /// Whether nothing but this holds the region: no one is still using
+    /// what it lent out.
+    @builtin("ref_is_unique")
+    package mutating fn isUniquelyReferenced() -> Bool
 }

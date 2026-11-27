@@ -1,0 +1,117 @@
+module FrameAllocatorTests
+
+// FrameAllocator (Sable.Core): a region a frame, reset as its frame comes
+// round again; a frame held past that caught.
+
+import Sable.Testing
+
+struct Particle {
+    var x: Int
+    var label: String
+}
+
+class Noisy {
+    let log: Log
+    let name: String
+
+    init(_ log: Log, _ name: String) {
+        self.log = log
+        self.name = name
+    }
+
+    deinit {
+        log.lines.append(name)
+    }
+}
+
+class Log {
+    var lines: String[>..] = []
+}
+
+struct Holder {
+    var held: Noisy
+}
+
+// A frame's work: values allocated in its region, read and changed there.
+fn simulate(in frame: Region, _ n: Int) -> Int {
+    var total = 0
+    for i in 0..<n {
+        let particle = frame.alloc(Particle { x: i, label: "p\(i)" })
+        particle.x += 1
+        total += particle.x + particle.label.count
+    }
+    return total
+}
+
+@test
+fn eachFrameAllocatesInARegionOfItsOwn() {
+    let frames = FrameAllocator(framesInFlight: 3)
+    expect(frames.framesInFlight == 3 && frames.frameNumber == 0 && frames.frameIndex == -1)
+    var totals: Int[>..] = []
+    for n in 1...7 {
+        let frame = frames.beginFrame()
+        totals.append(simulate(in: frame, n))
+        expect(frames.frameIndex == (n - 1) % 3)
+    }
+
+    expect(totals == [3, 7, 12, 18, 25, 33, 42])
+    expect(frames.frameNumber == 7)
+}
+
+@test
+fn whatAFrameHeldIsDestroyedWhenItsFrameComesRound() {
+    let log = Log()
+    let frames = FrameAllocator(framesInFlight: 2)
+    for n in 0..<2 {
+        let frame = frames.beginFrame()
+        _ = frame.alloc(Holder { held: Noisy(log, "frame \(n)") })
+    }
+
+    expect(log.lines.isEmpty)
+    _ = frames.beginFrame()
+    expect(log.lines == ["frame 0"])
+    frames.reset()
+    expect(log.lines == ["frame 0", "frame 1"])
+    expect(frames.frameNumber == 0 && frames.frameIndex == -1)
+}
+
+@test
+fn aFrameStillHeldWhenItComesRoundIsCaught() {
+    let frames = FrameAllocator(framesInFlight: 2)
+    let kept = frames.beginFrame()
+    let particle = kept.alloc(Particle { x: 1, label: "kept" })
+    _ = frames.beginFrame()
+    expectPanic("frame 0 is still held as frame 2 begins in its region") {
+        _ = frames.beginFrame()
+    }
+    expect(particle.label == "kept")
+}
+
+@test
+fn resettingWhileAFrameIsHeldIsCaught() {
+    let frames = FrameAllocator(framesInFlight: 1)
+    let frame = frames.beginFrame()
+    expectPanic("a frame is still held as the frame allocator is reset") {
+        frames.reset()
+    }
+    expect(simulate(in: frame, 1) == 3)
+}
+
+@test
+fn oneFrameInFlightIsResetEveryFrame() {
+    let log = Log()
+    let frames = FrameAllocator(framesInFlight: 1)
+    for n in 0..<3 {
+        let frame = frames.beginFrame()
+        _ = frame.alloc(Holder { held: Noisy(log, "\(n)") })
+    }
+
+    expect(log.lines == ["0", "1"])
+}
+
+@test
+fn anAllocatorNeedsAFrame() {
+    expectPanic("a frame allocator needs at least one frame in flight, not 0") {
+        _ = FrameAllocator(framesInFlight: 0)
+    }
+}

@@ -48,8 +48,7 @@ public final class ConcurrentDictionary<Key: Hashable & Sendable, Value: Sendabl
             for i in 0..<size {
                 let lock = Runtime.lockNew()
                 locks.initialize(to: lock, at: i)
-                let empty: [Key: Value] = [:]
-                shard(lock).initialize(to: empty)
+                shard(lock).initialize(to: [:])
             }
         }
     }

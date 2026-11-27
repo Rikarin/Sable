@@ -56,8 +56,7 @@ struct Optionals {
 
 @test
 fn eachTakesAnySequenceAndAnOptionalOne() {
-    let noScores: [String: Int] = [:]
-    assertEqual(found(Optionals(tags: none, scores: noScores, fixed: [1, 0])) {
+    assertEqual(found(Optionals(tags: none, scores: [:], fixed: [1, 0])) {
         $0.each(\.tags).notEmpty()
         $0.each(\.fixed).notEmpty()
     }, ["fixed[1] NotEmpty"])

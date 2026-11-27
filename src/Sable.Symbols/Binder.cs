@@ -2457,11 +2457,11 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
-        if (!CheckAccessible(functions[0], syntax)) {
+        if (Accessible(functions, syntax) is not { } seen) {
             return new BoundError(syntax, receiver);
         }
 
-        var group = new BoundFunctionGroup(syntax, receiver, functions) { Substitution = found!.Value.Substitution };
+        var group = new BoundFunctionGroup(syntax, receiver, [..seen]) { Substitution = found!.Value.Substitution };
         return BindCallToGroup(syntax, group, [], [], []);
     }
 
@@ -3935,8 +3935,8 @@ public sealed partial class Binder {
                 var statics = onType.Members.Where(IsStaticMember).ToList();
 
                 if (statics.Count > 0) {
-                    return CheckAccessible(statics[0], syntax.Name)
-                        ? BindMemberGroup(syntax, null, statics, onType.Owner, onType.Substitution)
+                    return Accessible(statics, syntax.Name) is { } seen
+                        ? BindMemberGroup(syntax, null, seen, onType.Owner, onType.Substitution)
                         : new BoundError(syntax, receiver);
                 }
 
@@ -4007,8 +4007,8 @@ public sealed partial class Binder {
                 && LookupMember(optional, name) is { } own) {
                 var ownMembers = own.Members.Where(static m => !IsStaticMember(m)).ToList();
                 if (ownMembers.Count > 0) {
-                    return CheckAccessible(ownMembers[0], syntax.Name)
-                        ? BindMemberGroup(syntax, receiver, ownMembers, own.Owner, own.Substitution)
+                    return Accessible(ownMembers, syntax.Name) is { } seen
+                        ? BindMemberGroup(syntax, receiver, seen, own.Owner, own.Substitution)
                         : new BoundError(syntax, receiver);
                 }
             }
@@ -4104,11 +4104,11 @@ public sealed partial class Binder {
         // internal 'count(of:)' on every array is no reason Sable.Core's
         // 'names.count' should fail. Only when nothing of the name is
         // visible is that the error.
-        if (instanceMembers.Where(IsAccessible).ToList() is { Count: > 0 } accessible) {
-            instanceMembers = accessible;
-        } else if (!CheckAccessible(instanceMembers[0], syntax.Name)) {
+        if (Accessible(instanceMembers, syntax.Name) is not { } accessible) {
             return new BoundError(syntax, receiver);
         }
+
+        instanceMembers = accessible;
 
         // Through 'any P', Self and P's associated types are some conformer's,
         // and which one is not known: 'a.same(b)' could compare two different
@@ -4189,12 +4189,12 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
-        if (!CheckAccessible(statics[0], syntax.Name)) {
+        if (Accessible(statics, syntax.Name) is not { } seen) {
             return new BoundError(syntax, receiver);
         }
 
         var through = new BoundConversion(syntax.Expression, new MetatypeTypeSymbol(opened), receiver, ConversionKind.Open);
-        var member = BindMemberGroup(syntax, through, statics, found.Owner, found.Substitution);
+        var member = BindMemberGroup(syntax, through, seen, found.Owner, found.Substitution);
         return member is BoundFieldAccess field ? OpenedResult(field, name, [opened], [..opened.Constraints], syntax) : member;
     }
 
@@ -4214,6 +4214,22 @@ public sealed partial class Binder {
 
         ReportInaccessible(member, syntax);
         return false;
+    }
+
+    /// <summary>
+    ///     Of the members of a name, those the code here may see: another
+    ///     module's internal overload is not a candidate, wherever it is
+    ///     declared, and does not hide a public one. Null, the first reported,
+    ///     when it sees none of them.
+    /// </summary>
+    List<T>? Accessible<T>(IReadOnlyList<T> members, SyntaxNode syntax) where T : Symbol {
+        var seen = members.Where(m => IsAccessible(m)).ToList();
+        if (seen.Count > 0) {
+            return seen;
+        }
+
+        ReportInaccessible(members[0], syntax);
+        return null;
     }
 
     /// <summary>The members a file can see at the top level, noting the first it cannot.</summary>
@@ -4989,8 +5005,8 @@ public sealed partial class Binder {
             // A static member an extension gives, as 'Hashing<String>.standard()'
             // would find it: '.standard()' where a Hashing<String> is wanted.
             if (LookupMemberOfKind(named, name, instance: false) is { } onType && onType.Members.Where(IsStaticMember).ToList() is { Count: > 0 } statics) {
-                return CheckAccessible(statics[0], syntax.Name)
-                    ? BindMemberGroup(syntax, null, statics, onType.Owner, onType.Substitution)
+                return Accessible(statics, syntax.Name) is { } seen
+                    ? BindMemberGroup(syntax, null, seen, onType.Owner, onType.Substitution)
                     : new BoundError(syntax);
             }
 
@@ -5609,6 +5625,9 @@ public sealed partial class Binder {
             KeyPathExpressionSyntax
                 when target is NamedTypeSymbol { TypeKind: not TypeKind.Protocol, Name: not "KeyPath" } or TupleTypeSymbol or ArrayTypeSymbol =>
                 "a key path",
+            DictionaryExpressionSyntax
+                when target is FunctionTypeSymbol or TupleTypeSymbol or ArrayTypeSymbol =>
+                "a dictionary",
             _ => null,
         };
     }
@@ -5638,6 +5657,10 @@ public sealed partial class Binder {
             // Nor is '[]' any particular array: 'run(name, [])' takes the
             // element type and the kind from the parameter.
             ArrayExpressionSyntax { Elements.Count: 0 } => true,
+
+            // Nor '[:]' any particular dictionary: 'f(environment: [:])'
+            // takes its key and value types from the parameter.
+            DictionaryExpressionSyntax { Entries.Count: 0 } => true,
 
             // Nor is '[.Circle(radius: 1), .Square]' until the parameter
             // says what its elements' leading dots name.

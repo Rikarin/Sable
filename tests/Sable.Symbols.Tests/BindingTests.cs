@@ -319,6 +319,39 @@ public sealed class BindingTests {
     public void AnEmptyArrayArgumentTakesTheParametersType() =>
         AssertClean("let n = count([])", "fn count(_ items: String[>..]) -> Int { return items.count }");
 
+    /// <summary>An empty dictionary argument takes its type from the parameter, as '[]' does (#352).</summary>
+    [Fact]
+    public void AnEmptyDictionaryArgumentTakesTheParametersType() {
+        const string extra = "fn f(environment: [String: String]) -> Int { return environment.count }";
+        AssertClean("let n = f(environment: [:])", extra);
+        AssertClean("let n = f(environment: ([:]))", extra);
+        Assert.Equal("Int", TypeOfLast("let n = f(environment: [:])", extra));
+    }
+
+    /// <summary>A generic dictionary parameter's key and value are inferred from other arguments, and '[:]' is of them.</summary>
+    [Fact]
+    public void AnEmptyDictionaryArgumentTakesAGenericParametersInferredType() =>
+        Assert.Equal(
+            "Dictionary<String, Int>",
+            TypeOfLast(
+                "let d = merged([:], \"a\", 1)",
+                "fn merged<K: Hashable, V>(_ base: [K: V], _ key: K, _ value: V) -> [K: V] {\n    var d = base\n    d[key] = value\n    return d\n}"
+            )
+        );
+
+    /// <summary>Inside interpolation too.</summary>
+    [Fact]
+    public void AnEmptyDictionaryArgumentInInterpolationTakesTheParametersType() =>
+        AssertClean(
+            "let s = \"n=\\(f(environment: [:]))\"",
+            "fn f(environment: [String: String]) -> Int { return environment.count }"
+        );
+
+    /// <summary>Where no parameter takes a dictionary, '[:]' is still reported.</summary>
+    [Fact]
+    public void AnEmptyDictionaryWhereNoDictionaryGoesIsReported() =>
+        Assert.NotEmpty(ErrorsIn("let n = f([:])", "fn f(_ xs: Int[]) -> Int { return xs.count }"));
+
     /// <summary>
     ///     An array literal bends to the parameter's element type if its
     ///     elements are literals: one with an Int variable in it stays an

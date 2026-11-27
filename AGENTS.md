@@ -108,9 +108,7 @@ others. Mistakes that have broken CI before:
 
 ## Commits and issues
 
-- Commit messages end with
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (or your own
-  model's line).
+- No `Co-Authored-By` lines in commit messages.
 - `Fixes #N` only when every "Done when" item of the issue is truly met;
   otherwise `Part of #N`.
 - A report or issue says what was not run or not verified, plainly.

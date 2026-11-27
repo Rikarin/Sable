@@ -137,6 +137,7 @@ typedef struct WinPipe {
     OVERLAPPED operation;
     DWORD length; // of 'bytes': read and to be given, or being written
     DWORD used;   // given already
+    int lines;    // a serial port's DTR and RTS (SERIAL_*), as last set
     struct WinPipe *next_free;
     char bytes[WIN_PIPE_BUFFER];
 } WinPipe;
@@ -171,6 +172,7 @@ static WinPipe *pipe_make(HANDLE handle, bool reads) {
     pipe->reads = reads;
     pipe->pending = false;
     pipe->length = pipe->used = 0;
+    pipe->lines = 0;
     pipe->wait = NULL;
     ReleaseSRWLockExclusive(&pipe->lock);
     return pipe;

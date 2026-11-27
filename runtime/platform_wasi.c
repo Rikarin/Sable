@@ -730,9 +730,17 @@ static char *local_directory(bool any) {
     return NULL;
 }
 
-static PlatformPipe local_listen(const char *name, int flags, bool first) {
+static bool local_share(const char *path, const char *group) {
+    (void)path;
+    (void)group;
+    ipc_unsupported();
+    return false;
+}
+
+static PlatformPipe local_listen(const char *name, int flags, const char *group, bool first) {
     (void)name;
     (void)flags;
+    (void)group;
     (void)first;
     return ipc_unsupported();
 }

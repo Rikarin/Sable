@@ -113,15 +113,28 @@ int64_t sable_ipc_directory(bool any, uint8_t *into, int64_t room) {
 }
 
 // An instance of a named pipe to accept by: the source's handle, or 0.
-int64_t sable_ipc_local_listen(const uint8_t *bytes, int64_t length, int64_t flags, bool first) {
+int64_t sable_ipc_local_listen(const uint8_t *bytes, int64_t length, int64_t flags, const uint8_t *group, int64_t group_length, bool first) {
     char *name = ipc_c_name(bytes, length);
-    if (name == NULL) {
+    char *owners = name == NULL ? NULL : ipc_c_name(group, group_length);
+    if (owners == NULL) {
+        free(name);
         return 0;
     }
 
-    PlatformPipe pipe = local_listen(name, (int)flags, first);
+    PlatformPipe pipe = local_listen(name, (int)flags, owners, first);
     free(name);
+    free(owners);
     return pipe == IO_FAILED ? 0 : ipc_source(pipe);
+}
+
+// The socket's file opened to the group (POSIX).
+bool sable_ipc_local_share(const uint8_t *path, int64_t length, const uint8_t *group, int64_t group_length) {
+    char *name = ipc_c_name(path, length);
+    char *owners = name == NULL ? NULL : ipc_c_name(group, group_length);
+    bool shared = owners != NULL && local_share(name, owners);
+    free(name);
+    free(owners);
+    return shared;
 }
 
 // 0 once a client is connected, 1 while none is (waited for as a read), 2

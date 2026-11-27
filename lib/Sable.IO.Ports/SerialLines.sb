@@ -1,8 +1,9 @@
 module Sable.IO.Ports
 
 /// A serial port's control lines, as they were when asked for
-/// (`SerialPort.lines`). DTR and RTS are this end's, which Windows does not
-/// say: there they read as off.
+/// (`SerialPort.lines`). DTR and RTS are this end's: on Windows, as the
+/// driver says them (IOCTL_SERIAL_GET_DTRRTS), or, for one that does not,
+/// as this program last set them.
 @derive(Equatable)
 public struct SerialLines {
     /// Data terminal ready: this end is there.

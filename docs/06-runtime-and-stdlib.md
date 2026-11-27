@@ -2257,14 +2257,16 @@ throws `Unsupported`.
 - **LocalListener, LocalStream.** One name everywhere: on POSIX a Unix domain
   socket `<name>.socket` in a directory of the user's own
   (`$XDG_RUNTIME_DIR`, else `/tmp/sable-<uid>`, made 0700 and refused if it
-  is anyone else's), or `/tmp`, writable by all, for `.AnyUser`; a socket
+  is anyone else's), or `/tmp`, writable by all, for `.AnyUser`, or
+  `/tmp` with the file the group's and 0660 for `.Group(name:)`; a socket
   left by a server that ended is taken over (connecting to it is refused),
   and the listener removes its file. A server for this user alone lets go of
   a peer of another uid; a client asking so connects only to a server of its
   own uid (SO_PEERCRED, getpeereid). On Windows a named pipe
   `\\.\pipe\<name>`: duplex and overlapped, its first instance made with
   FILE_FLAG_FIRST_PIPE_INSTANCE (AddressInUse otherwise), a DACL of the user's
-  SID alone for `.CurrentUserOnly`, the next instance made as one is
+  SID alone for `.CurrentUserOnly` (and the group's, to read and write, for
+  `.Group`, by LookupAccountNameW), the next instance made as one is
   accepted; the client checks the pipe's owner, and a connected pipe is two
   sources over duplicated handles, one to read and one to write. Messages
   are Windows' alone; a named pipe has no half-close.
@@ -2282,7 +2284,10 @@ throws `Unsupported`.
   move between threads. Waiting polls as a semaphore's does.
 - **SerialPort.** POSIX opens the device O_NOCTTY and nonblocking, takes it
   with TIOCEXCL, and sets it raw (cfmakeraw, VMIN 1) with the frame, CRTSCTS
-  or IXON/IXOFF; Linux takes termios's named rates, macOS any by IOSSIOSPEED.
+  or IXON/IXOFF; Linux takes termios's named rates and any other by
+  termios2's BOTHER (TCSETS2, its layout asm-generic's: x86, Arm, RISC-V,
+  LoongArch), macOS any by IOSSIOSPEED. Windows reads DTR and RTS by
+  IOCTL_SERIAL_GET_DTRRTS, or as last set where a driver will not say.
   Windows opens `\\.\COMn` overlapped, sets its DCB, and has a read return as
   soon as a byte has come (ReadIntervalTimeout and the multiplier MAXDWORD);
   like a pipe, a source reads and another writes. A read's limit is
@@ -2653,11 +2658,18 @@ other libraries, differ:
   netlink's link and address groups (Linux), or NotifyIpInterfaceChange and
   NotifyUnicastIpAddressChange (Windows), and lists the interfaces again to
   say what (`differences`): what the systems' messages carry is not read.
+  Both are a `NetworkChangeSource`'s, the system's by default: a program's
+  own source stands in for it, which is how a test sees changes come with
+  no interface changed.
 - *NetworkStatistics* reads /proc/net (Linux), the pcblist_n sysctl (macOS,
   whose records' layout is the kernel's, not the SDK's; without an
   entitlement it lists only this process's sockets, and TCP's counters read
   as zeros) and GetExtendedTcpTable, GetExtendedUdpTable, GetTcpStatisticsEx
-  (Windows, IPv4's and IPv6's added).
+  (Windows, IPv4's and IPv6's added). A TCP connection's process is
+  Windows' own; on Linux the process with a /proc/<pid>/fd link to the
+  row's socket inode, on macOS the one libproc (PROC_PIDFDSOCKETINFO) gives
+  a socket of the row's addresses — of the processes this one may look
+  into, which are its user's (every one to root).
 
 ### X.509
 

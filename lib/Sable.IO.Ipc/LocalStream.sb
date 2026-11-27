@@ -47,6 +47,7 @@ public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
     public static async fn connect(name: String, access: LocalAccess = .CurrentUserOnly, messages: Bool = false, timeout: Duration? = none) throws(IoError) -> LocalStream {
         try checkName(name, most: 64)
         #if os(windows)
+        // Of a group: a server of any user's.
         let flags = (access == .CurrentUserOnly ? 1 : 0) + (messages ? 2 : 0)
         let start = Instant.now()
         var times = 0

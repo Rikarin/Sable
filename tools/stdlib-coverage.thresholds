@@ -76,7 +76,6 @@ lib/Sable.Text/TranscodingKernels.sb              50  50   # run only where the 
 lib/Sable.Net/UdpSocket.sb                        85  60   # the system's buffers cannot be made to fill, nor a socket have no address
 lib/Sable.Net/UnixStream.sb                       75  30   # only Linux has a full queue to be tried again
 lib/Sable.Net/IpProtocol.sb                       85  50   # the other branch is the precondition's trap, which ends the test's process
-lib/Sable.Net/NetworkChangeSequence.sb            85  50   # no test may change the machine's interfaces, so no change comes
 lib/Sable.Net/NetworkStatistics.sb                85  40   # the system's lists do not fail, nor list a socket of no address
 lib/Sable.Net/Ping.sb                             35  20   # Linux runners' ping_group_range refuses ICMP sockets and a raw one needs root, so pings are skipped there (macOS: 85/75); a router's error needs more than the loopback
 lib/Sable.Net/RawSocket.sb                        10  20   # a raw socket needs root, and Linux runners' ping_group_range refuses ICMP sockets, so its tests are skipped there (macOS: 92/64)

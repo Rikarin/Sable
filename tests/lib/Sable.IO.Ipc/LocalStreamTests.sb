@@ -225,6 +225,61 @@ fn messagesAreKeptWholeOnWindowsAlone() async throws {
     #endif
 }
 
+// ---- A group ------------------------------------------------------------------------
+
+// A group this user is a member of: its own (`id -gn`) on macOS and Linux,
+// Users on Windows; none where there is no `id`.
+fn ownGroup() async -> String? {
+    #if os(windows)
+    return "Users"
+    #else
+    let asked = try? await Command("id").arguments(["-gn"]).stderr(.Null).output()
+    guard let done = asked else {
+        return none
+    }
+    let name = done.succeeded ? done.output.trimmed() : ""
+    return name.isEmpty ? none : name
+    #endif
+}
+
+@test
+fn aServerForAGroupTakesItsMembersClients() async throws {
+    let group = await ownGroup()
+    try skip(if: group == none, "there is no `id -gn` to name this user's group by")
+    let access = LocalAccess.Group(name: group!)
+    assertEqual(access.groupName, group)
+    let server = try LocalListener.bind(name: unique(), access: access)
+    assertEqual(server.access, access)
+    #if !os(windows)
+    // In /tmp, of the group alone.
+    expect(server.path.hasPrefix("/tmp/"))
+    assertEqual((try File.metadata(server.path)).permissions.mode & 0o777, 0o660)
+    #endif
+    let serving = Task.spawn { () -> Bool in
+        let connection = try! await server.accept()
+        try! await echo(connection)
+        return true
+    }
+    let client = try await LocalStream.connect(name: server.name, access: access, timeout: Duration.seconds(10))
+    try await client.write([7, 8, 9])
+    assertEqual(try await client.read(upTo: 3), [7, 8, 9])
+    client.close()
+    expect(await serving.value)
+    server.close()
+}
+
+@test
+fn aGroupThereIsNoneOfIsNotFound() {
+    let name = unique()
+    let error = expectThrows { _ = try LocalListener.bind(name: name, access: .Group(name: "sable-no-such-group")) }
+    expect("\(error!)".contains("NotFound"))
+    #if !os(windows)
+    // Nor is its socket left.
+    expect(!File.exists("/tmp/\(name).socket"))
+    #endif
+    assertEqual(LocalAccess.AnyUser.groupName, none)
+}
+
 // ---- Another user ------------------------------------------------------------------
 
 #if os(linux)
@@ -245,14 +300,14 @@ fn connectAsAnotherUser(_ path: String) async throws -> String {
 
 @test
 fn anotherUserIsDeniedAServerForThisUserAlone() async throws {
-    try skip(if: !(await mayBeAnotherUser()), "another user cannot be run as without a password, or there is no python3")
+    try skip(if: !(await mayBeAnotherUser()), "`sudo -n -u nobody python3` failed: no other user without a password, or no python3")
     let server = try LocalListener.bind(name: unique())
     assertEqual(try await connectAsAnotherUser(server.path), "PermissionError")
 }
 
 @test
 fn anotherUserConnectsToAServerForAnyone() async throws {
-    try skip(if: !(await mayBeAnotherUser()), "another user cannot be run as without a password, or there is no python3")
+    try skip(if: !(await mayBeAnotherUser()), "`sudo -n -u nobody python3` failed: no other user without a password, or no python3")
     let server = try LocalListener.bind(name: unique(), access: .AnyUser)
     let accepting = Task.spawn { try! await server.accept() }
     assertEqual(try await connectAsAnotherUser(server.path), "connected")

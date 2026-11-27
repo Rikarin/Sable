@@ -689,11 +689,18 @@ static PlatformPipe fifo_open(const char *path, bool writes);
 // memory the caller frees; NULL when there is none.
 static char *local_directory(bool any);
 
-// A named pipe (Windows): 1 for this user alone, 2 messages kept whole.
-enum { LOCAL_CURRENT_USER = 1, LOCAL_MESSAGES = 2 };
+// A local socket's file (POSIX) opened to this user and the group's
+// members alone: the group's, of mode 0660. NET_ERROR_NOT_FOUND for a group
+// there is none of.
+static bool local_share(const char *path, const char *group);
+
+// A named pipe (Windows): 1 for this user alone, 2 messages kept whole, 4
+// for this user and the group's members.
+enum { LOCAL_CURRENT_USER = 1, LOCAL_MESSAGES = 2, LOCAL_GROUP = 4 };
 // An instance of the pipe of that name to accept a client by; 'first'
-// fails if there is one already, another program's perhaps.
-static PlatformPipe local_listen(const char *name, int flags, bool first);
+// fails if there is one already, another program's perhaps. 'group' is
+// the group's name, of LOCAL_GROUP.
+static PlatformPipe local_listen(const char *name, int flags, const char *group, bool first);
 // 0 once a client is connected to the instance, IO_WOULD_BLOCK before.
 static int local_accept(PlatformPipe pipe);
 // The pipe's other direction, to write by: a source of its own.
@@ -774,11 +781,13 @@ static void changes_unwatch(void *watch);
 typedef struct PlatformConnection {
     PlatformAddress local, remote;
     int state; // TCP's, as Sable.Net's TcpState numbers them
-    int64_t process; // -1 unknown
+    int64_t process; // -1 unknown; TCP's alone are looked for
 } PlatformConnection;
 
 // Every one of the protocol's (6 TCP, 17 UDP), in memory the caller frees:
-// how many, or -1. macOS lists only this process's.
+// how many, or -1. macOS lists only this process's without an entitlement;
+// the processes are those this one may look into (/proc/<pid>/fd on Linux,
+// libproc on macOS).
 static int connections_list(int protocol, PlatformConnection **rows);
 // The protocol's counters (NetworkStatistics): false where there are none.
 static bool protocol_counters(int protocol, int64_t counters[8]);

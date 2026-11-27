@@ -60,6 +60,9 @@ fn manyPingsAtOnceEachHaveTheirOwnAnswer() async throws {
 fn anAddressThatDoesNotAnswerTimesOut() async throws {
     // 127.0.0.2 is no address of macOS's; Linux and Windows answer for all
     // of 127/8, and the loopback interface has nothing that does not answer.
+    // Nothing else may be pinged (no test reaches past loopback), nor may a
+    // test make the system silent (icmp_echo_ignore_all, a firewall's rule:
+    // root's, and the whole machine's), so there it is skipped, saying so.
     #if os(macos)
     let reply = try await ping(ip("127.0.0.2"), timeout: Duration.milliseconds(50))
     try skip(if: reply == none, "this user may not ping")
@@ -67,7 +70,7 @@ fn anAddressThatDoesNotAnswerTimesOut() async throws {
     assertEqual(reply!.address, ip("127.0.0.2"))
     expect(reply!.roundTrip >= Duration.milliseconds(50))
     #else
-    try skip("every address of 127/8 answers here")
+    try skip("every address of 127/8 answers here, and nothing on loopback is silent: a timeout is tested on macOS alone")
     #endif
 }
 

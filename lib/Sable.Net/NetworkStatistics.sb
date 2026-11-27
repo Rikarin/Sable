@@ -4,9 +4,10 @@ import Sable.IO
 
 /// What the system says of its TCP and UDP sockets: .NET's
 /// `IPGlobalProperties`. Linux's /proc/net, macOS's pcblist sysctl, and
-/// Windows' GetExtendedTcpTable and GetExtendedUdpTable. macOS lists only
-/// this process's sockets to a program without an entitlement (netstat has
-/// one).
+/// Windows' GetExtendedTcpTable and GetExtendedUdpTable; a connection's
+/// process is found by /proc/<pid>/fd on Linux and by libproc on macOS.
+/// macOS lists only this process's sockets to a program without an
+/// entitlement (netstat has one), whatever its user.
 ///
 /// ```sable
 /// fn listening() throws(IoError) -> Int[>..] {

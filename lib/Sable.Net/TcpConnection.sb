@@ -12,6 +12,9 @@ public struct TcpConnection {
     /// Where it is in its life.
     public let state: TcpState
 
-    /// The process it is of, where the system says (Windows).
+    /// The process it is of, where the system says: Windows says each;
+    /// Linux and macOS, those of the processes this one may look into
+    /// (its user's, or every one to root). None for a connection no
+    /// process has any more (TIME_WAIT's).
     public let processId: Int?
 }

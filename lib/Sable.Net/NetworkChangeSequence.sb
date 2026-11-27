@@ -9,16 +9,12 @@ public final class NetworkChangeSequence: AsyncSequence {
     public alias Element = NetworkChangeEvent
     public alias Iter = NetworkChangeIterator
 
-    let watch: Int
+    let source: any NetworkChangeSource
     let first: NetworkInterface[>..]
 
-    init(watch: Int, first: NetworkInterface[>..]) {
-        self.watch = watch
+    init(source: any NetworkChangeSource, first: NetworkInterface[>..]) {
+        self.source = source
         self.first = first
-    }
-
-    deinit {
-        closeChanges(watch)
     }
 
     /// What goes through them, from the interfaces as they were when the
@@ -49,15 +45,12 @@ public struct NetworkChangeIterator: AsyncIterator {
             if Task.isCancelled {
                 return none
             }
-            // What the system said is taken before the interfaces are
-            // listed: a change after it is said again.
-            drainChanges(changes.watch)
-            if let now = try? NetworkInterface.all() {
+            // The source watched before it first listed them: what changed
+            // since, it says.
+            await changes.source.changed()
+            if let now = try? changes.source.interfaces() {
                 pending = NetworkChange.differences(from: known, to: now).reversed().toArray()
                 known = now
-            }
-            if pending.isEmpty {
-                await Runtime.waitForSocket(changesEvent(changes.watch), writable: false)
             }
         }
         return pending.removeLast()

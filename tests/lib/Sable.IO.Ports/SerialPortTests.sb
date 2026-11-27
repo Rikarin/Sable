@@ -177,6 +177,17 @@ fn framesAreSetAsAsked(parity: Parity, terminal: PseudoTerminal) throws {
     port.close()
 }
 
+// Rates no termios table names: Linux sets them by termios2, macOS by
+// IOSSIOSPEED or as they are.
+@test(arguments: [250000, 31250, 1234567])
+fn aRateOfItsOwnIsSet(baudRate: Int, terminal: PseudoTerminal) throws {
+    try skip(if: !terminal.isThere, "there is no pseudo-terminal")
+    let port = try SerialPort.open(terminal.name, SerialOptions { baudRate: baudRate })
+    try port.configure(SerialOptions { baudRate: 115200 })
+    try port.configure(SerialOptions { baudRate: baudRate, parity: .Even })
+    port.close()
+}
+
 @test
 fn whatNoPortTakesIsRefused(terminal: PseudoTerminal) throws {
     try skip(if: !terminal.isThere, "there is no pseudo-terminal")
@@ -185,6 +196,9 @@ fn whatNoPortTakesIsRefused(terminal: PseudoTerminal) throws {
     }
     expectThrows(saying: IoError.InvalidInput(path: terminal.name).description()) {
         _ = try SerialPort.open(terminal.name, SerialOptions { stopBits: .OnePointFive })
+    }
+    expectThrows(saying: IoError.InvalidInput(path: terminal.name).description()) {
+        _ = try SerialPort.open(terminal.name, SerialOptions { baudRate: 0 })
     }
     // A file is no terminal.
     expectThrows(saying: IoError.InvalidInput(path: "/dev/null").description()) {

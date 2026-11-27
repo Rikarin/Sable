@@ -5,9 +5,12 @@ module NetworkChangeTests
 //     tools/stdlib-coverage.sh Sable.Net
 //
 // Nothing here changes the machine's interfaces: what a change is found to
-// be is tested by lists of interfaces, and the watch by its start and end.
+// be is tested by lists of interfaces; a watch's changes as they come, by
+// a source of the test's own (ScriptedInterfaces) whose interfaces change
+// when the test says; and the system's watch by its start and end.
 
 import NetSupport
+import Sable.Concurrency
 import Sable.IO
 import Sable.Net
 import Sable.Testing
@@ -72,4 +75,78 @@ fn aWatchBeginsAndEndsWithTheTaskGoingThroughIt() async throws {
     try? await Task.sleep(for: Duration.milliseconds(5))
     watching.cancel()
     expect(await watching.value)
+}
+
+/// Interfaces that change when the test says: each list sent is what they
+/// are once the watch has waited for a change.
+@immutable
+final class ScriptedInterfaces: NetworkChangeSource {
+    let lists: Channel<NetworkInterface[>..]>
+    let now: Mutex<NetworkInterface[>..]>
+    let listed: Atomic<Int>
+
+    init(_ first: NetworkInterface[>..]) {
+        lists = Channel<NetworkInterface[>..]>()
+        now = Mutex<NetworkInterface[>..]>(first)
+        listed = Atomic<Int>(0)
+    }
+
+    fn interfaces() throws(IoError) -> NetworkInterface[>..] {
+        _ = listed.add(1)
+        return now.withLock { $0 }
+    }
+
+    fn changed() async {
+        if let next = await lists.receive() {
+            now.withLock { $0 = next }
+        }
+    }
+}
+
+@test
+fn aWatchGivesEachChangeOfItsSourceInTurn() async {
+    let loopback = NetworkInterface(name: "lo", index: 1, isUp: true, addresses: [entry("127.0.0.1", 8)])
+    let source = ScriptedInterfaces([loopback])
+    var changes = NetworkChange.events(from: source).makeAsyncIterator()
+    // An interface added and up, with an address: three changes, from one.
+    let tunnel = NetworkInterface(name: "utun3", index: 9, isUp: true, addresses: [entry("10.8.0.2", 32)])
+    await source.lists.send([loopback, tunnel])
+    assertEqual(await changes.next(), NetworkChangeEvent.InterfaceAdded(name: "utun3"))
+    assertEqual(await changes.next(), NetworkChangeEvent.InterfaceUp(name: "utun3"))
+    assertEqual(await changes.next(), NetworkChangeEvent.AddressAdded(interface: "utun3", address: entry("10.8.0.2", 32)))
+    // Said to have changed when nothing did: no change, and the next is waited for.
+    await source.lists.send([loopback, tunnel])
+    await source.lists.send([loopback, NetworkInterface(name: "utun3", index: 9, isUp: false, addresses: [entry("10.8.0.2", 32)])])
+    assertEqual(await changes.next(), NetworkChangeEvent.InterfaceDown(name: "utun3"))
+    await source.lists.send([loopback])
+    assertEqual(await changes.next(), NetworkChangeEvent.InterfaceRemoved(name: "utun3"))
+    // Listed once as the watch began, then once each time it was told.
+    assertEqual(source.listed.load(), 5)
+}
+
+@test
+fn aWatchBeginsFromTheInterfacesAsItsSourceFirstListedThem() async {
+    let source = ScriptedInterfaces([])
+    let changes = NetworkChange.events(from: source)
+    let quiet = NetworkInterface(name: "eth1", index: 3, isUp: false)
+    // What each iterator waits for.
+    await source.lists.send([quiet])
+    await source.lists.send([quiet])
+    var iterator = changes.makeAsyncIterator()
+    assertEqual(await iterator.next(), NetworkChangeEvent.InterfaceAdded(name: "eth1"))
+    // Each iterator goes from the interfaces as they were when the watch began.
+    var again = changes.makeAsyncIterator()
+    assertEqual(await again.next(), NetworkChangeEvent.InterfaceAdded(name: "eth1"))
+}
+
+@test
+fn aWatchOfASourceEndsWhenItsTaskIsCancelled() async {
+    let source = ScriptedInterfaces([])
+    let changes = NetworkChange.events(from: source)
+    let watching = Task.spawn { () -> NetworkChangeEvent? in
+        var iterator = changes.makeAsyncIterator()
+        return await iterator.next()
+    }
+    watching.cancel()
+    expect(await watching.value == none)
 }

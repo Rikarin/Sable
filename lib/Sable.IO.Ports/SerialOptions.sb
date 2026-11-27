@@ -8,8 +8,10 @@ module Sable.IO.Ports
 /// assert(options.dataBits == 8 && options.parity == .None)
 /// ```
 public struct SerialOptions {
-    /// Bits a second. Linux takes the rates termios names (50 to 4,000,000);
-    /// macOS and Windows any the device does.
+    /// Bits a second: any the device takes. Linux sets a rate termios has
+    /// no name for (250,000, 31,250) by termios2's BOTHER, on the machines
+    /// whose termios2 is the kernel's common one (x86, Arm, RISC-V,
+    /// LoongArch); macOS by IOSSIOSPEED.
     public var baudRate: Int = 9600
 
     /// Bits of data in each character: 5 to 8.

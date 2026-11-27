@@ -3,6 +3,7 @@ module Rfc8448
 // The bytes of RFC 8448's simple 1-RTT handshake (§3), copied from the RFC's
 // text: what the TLS tests replay.
 
+import Sable.Crypto
 import Sable.Text
 
 /// The bytes that hexadecimal text is of.
@@ -28,6 +29,22 @@ public struct Rfc8448 {
 
     /// The X25519 shared secret.
     public static var sharedSecret: U8[>..] => hex("8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d")
+
+    /// The server's RSA key, of its certificate (§2).
+    public static fn serverRsaKey() -> RsaPrivateKey {
+        return try! RsaPrivateKey(
+            modulus: hex("b4bb498f8279303d980836399b36c6988c0c68de55e1bdb826d3901a2461eafd2de49a91d015abbc9a95137ace6c1af19eaa6af98c7ced43120998e187a80ee0ccb0524b1b018c3e0b63264d449a6d38e22a5fda430846748030530ef0461c8ca9d9efbfae8ea6d1d03e2bd193eff0ab9a8002c47428a6d35a8d88d79f7f1e3f"),
+            exponent: 0x010001,
+            privateExponent: hex("04dea705d43a6ea7209dd8072111a83c81e322a59278b33480641eaf7c0a6985b8e31c44f6de62e1b4c2309f6126e77b7c41e923314bbfa3881305dc1217f16c819ce538e922f369828d0e57195d8c8488460207b2faa726bcf708bbd7db7f679f893492fc2a622e08970aac441ce4e0c3088df25ae679233df8a3bda2ff9941"),
+            prime1: hex("e435fb7cc83737756dacea96ab7f59a2cc1069db7deb190e17e33a532b273f30a327aa0aaabc58cd67466af9845fadc675fe094af92c4bd1f2c1bc33dd2e0515"),
+            prime2: hex("cabd3bc0e0438664c8d4cc9f99977a94d9bbfead8e43870abae3f7eb8b4e0eee8af1d9b4719ba6196cf2cbbaeeebf8b3490afe9e9ffa74a88aa51fc645629303"),
+            exponent1: hex("3f57345c27fe1b687e6e761627b78b1b826433dd760fa0bea6a6acf39490aa1b47cda4869d68f584dd5b5029bd32093b8258661fe715025e5d70a45a08d3d319"),
+            exponent2: hex("183da01363bd2f2885cacbdc9964bf4764f1517636f86401286f71893c52ccfe40a6c23d0d086b47c6fb10d8fd1041e04def7e9a40ce957c417794e10412d139"),
+            coefficient: hex("839ca9a085e4286b2c90e466997a2c681f21339aa3477814e4dec11833050ed50dd13cc038048a43c59b2acc416889c037665fe5afa605969f8c01dfa5ca969d"))
+    }
+
+    /// The server's random, in its ServerHello.
+    public static var serverRandom: U8[>..] => serverHello[6..<38].toArray()
 
     /// The ClientHello message.
     public static var clientHello: U8[>..] => hex("010000c00303cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7000006130113031302010000910000000b0009000006736572766572ff01000100000a00140012001d0017001800190100010101020103010400230000003300260024001d002099381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c002b0003020304000d0020001e040305030603020308040805080604010501060102010402050206020202002d00020101001c00024001")

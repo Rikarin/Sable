@@ -2,9 +2,9 @@ module Sable.Net.Tls
 
 import Sable.Crypto
 
-/// A client's ephemeral key for one group of the key exchange (RFC 8446
+/// An ephemeral key for one group of the key exchange (RFC 8446
 /// §4.2.8): what its key_share offers, and what makes the shared secret
-/// with the server's.
+/// with the other end's.
 ///
 /// ```sable
 /// let share = TlsKeyShare.X25519(X25519PrivateKey.generate())
@@ -45,7 +45,7 @@ public union TlsKeyShare: Sendable {
                 }
             }
         } catch {
-            throw TlsError.Failed(.illegalParameter, reason: "the server's key share is no key of its group: \(error.description())")
+            throw TlsError.Failed(.illegalParameter, reason: "the other end's key share is no key of its group: \(error.description())")
         }
     }
 }

@@ -1,0 +1,242 @@
+module Sable.Net.Tls
+
+import Sable.Crypto
+
+/// What both ends of a TLS 1.3 connection do alike (RFC 8446 §5): records
+/// read from the bytes that came and opened, the handshake's messages
+/// gathered from them, application data kept, alerts read and sent, and
+/// records sealed to send. The handshake of each end, client or server, is
+/// the connection's own.
+struct TlsRecords: Sendable {
+    var incoming: U8[>..] = []
+    var handshakeBytes: U8[>..] = []
+    var outgoing: U8[>..] = []
+    var received: U8[>..] = []
+    var reader: TlsRecordCipher? = none
+    var writer: TlsRecordCipher? = none
+
+    /// The suite and the traffic secrets of each direction, once chosen.
+    var suite: TlsCipherSuite? = none
+    var ownSecret: SymmetricKey? = none
+    var peerSecret: SymmetricKey? = none
+
+    /// Whether the handshake is over.
+    var isConnected = false
+    var isFailed = false
+    var isPeerClosed = false
+    var isClosedForWriting = false
+
+    init() { }
+
+    mutating fn takeOutgoing() -> U8[>..] {
+        let taken = outgoing
+        outgoing = []
+        return taken
+    }
+
+    mutating fn takeReceived() -> U8[>..] {
+        let taken = received
+        received = []
+        return taken
+    }
+
+    /// Records read from now on are opened under the peer's secret, and
+    /// records written sealed under this end's.
+    mutating fn useKeys(own: SymmetricKey, peer: SymmetricKey) {
+        ownSecret = own
+        peerSecret = peer
+        reader = TlsRecordCipher(suite!, trafficSecret: peer)
+        writer = TlsRecordCipher(suite!, trafficSecret: own)
+    }
+
+    /// Records written from now on are sealed under this end's secret.
+    mutating fn useOwnKey(_ own: SymmetricKey) {
+        ownSecret = own
+        writer = TlsRecordCipher(suite!, trafficSecret: own)
+    }
+
+    /// Records read from now on are opened under the peer's secret.
+    mutating fn usePeerKey(_ peer: SymmetricKey) {
+        peerSecret = peer
+        reader = TlsRecordCipher(suite!, trafficSecret: peer)
+    }
+
+    /// The next whole handshake message that has come, reading as many
+    /// records as that takes, and no more: a record after it may need the
+    /// keys the message brings. None while one is still to come.
+    mutating fn nextMessage() throws(TlsError) -> U8[>..]? {
+        while true {
+            if handshakeBytes.count >= 4 {
+                let length = Int(handshakeBytes[1]) << 16 | Int(handshakeBytes[2]) << 8 | Int(handshakeBytes[3])
+                if handshakeBytes.count >= 4 + length {
+                    let message = handshakeBytes[0..<4 + length].toArray()
+                    handshakeBytes = handshakeBytes[4 + length..<handshakeBytes.count].toArray()
+                    return message
+                }
+            }
+            if incoming.count < 5 {
+                return none
+            }
+            let length = Int(incoming[3]) << 8 | Int(incoming[4])
+            if length > TlsRecordCipher.maximumContentByteCount + 256 {
+                throw TlsError.Failed(.recordOverflow, reason: "a record of \(length) bytes")
+            }
+            if incoming.count < 5 + length {
+                return none
+            }
+            let record = incoming[0..<5 + length].toArray()
+            incoming = incoming[5 + length..<incoming.count].toArray()
+            try readRecord(record)
+        }
+    }
+
+    mutating fn readRecord(_ record: U8[>..]) throws(TlsError) {
+        let outer = Int(record[0])
+        if outer == 20 && !isConnected {
+            if record.count != 6 || record[5] != 1 {
+                throw TlsError.Failed(.unexpectedMessage, reason: "a change_cipher_spec that is not one")
+            }
+            return
+        }
+        var type = TlsContentType.Handshake
+        var content: U8[>..] = []
+        if reader != none {
+            let (opened, bytes) = try reader!.open(record)
+            type = opened
+            content = bytes
+        } else {
+            guard let plain = TlsContentType.of(code: outer) else {
+                throw TlsError.Failed(.unexpectedMessage, reason: "a record of type \(outer)")
+            }
+            if plain == .ApplicationData {
+                throw TlsError.Failed(.unexpectedMessage, reason: "application data before the handshake's keys")
+            }
+            if record.count - 5 > TlsRecordCipher.maximumContentByteCount {
+                throw TlsError.Failed(.recordOverflow, reason: "a plaintext record of \(record.count - 5) bytes")
+            }
+            type = plain
+            content = record[5..<record.count].toArray()
+        }
+        match type {
+            case .Alert => try readAlert(content)
+            case .Handshake => {
+                if content.isEmpty {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "an empty handshake record")
+                }
+                handshakeBytes.append(contentsOf: content)
+            }
+            case .ApplicationData => {
+                if !isConnected {
+                    throw TlsError.Failed(.unexpectedMessage, reason: "application data before the handshake is over")
+                }
+                received.append(contentsOf: content)
+            }
+            case .ChangeCipherSpec => throw TlsError.Failed(.unexpectedMessage, reason: "a protected change_cipher_spec")
+        }
+    }
+
+    mutating fn readAlert(_ content: U8[:]) throws(TlsError) {
+        if content.count != 2 {
+            throw TlsError.Failed(.decodeError, reason: "an alert of \(content.count) bytes")
+        }
+        let alert = TlsAlert(code: Int(content[1]))
+        if alert == .closeNotify {
+            isPeerClosed = true
+            return
+        }
+        throw TlsError.PeerAlert(alert)
+    }
+
+    /// A message after the handshake: a KeyUpdate, or — where the end takes
+    /// them, and keeps none — a NewSessionTicket.
+    mutating fn readPostHandshake(_ type: Int, _ body: inout TlsReader, takesTickets: Bool) throws(TlsError) {
+        if type == 4 && takesTickets {
+            _ = try body.take(body.bytes.count)
+            return
+        }
+        if type != 24 {
+            throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) after the handshake")
+        }
+        let requested = try body.number(1)
+        try body.finish()
+        if requested > 1 {
+            throw TlsError.Failed(.illegalParameter, reason: "a KeyUpdate of \(requested)")
+        }
+        usePeerKey(TlsKeySchedule.nextTrafficSecret(suite!, peerSecret!))
+        if requested == 1 {
+            outgoing.append(contentsOf: try writer!.seal(handshakeMessage(24, [0]), type: .Handshake))
+            useOwnKey(TlsKeySchedule.nextTrafficSecret(suite!, ownSecret!))
+        }
+    }
+
+    /// A handshake message sent: sealed if there are keys, plain if not, in
+    /// as many records as its length takes.
+    mutating fn send(_ message: U8[:]) throws(TlsError) {
+        var at = 0
+        while at < message.count {
+            let end = message.count - at > TlsRecordCipher.maximumContentByteCount ? at + TlsRecordCipher.maximumContentByteCount : message.count
+            if writer != none {
+                outgoing.append(contentsOf: try writer!.seal(message[at..<end], type: .Handshake))
+            } else {
+                appendRecord(&outgoing, 22, message[at..<end])
+            }
+            at = end
+        }
+    }
+
+    /// Application data sealed into records to send.
+    mutating fn write(_ bytes: U8[:]) throws(TlsError) {
+        if !isConnected || isClosedForWriting || isFailed {
+            throw TlsError.Closed
+        }
+        var at = 0
+        while at < bytes.count {
+            let end = bytes.count - at > TlsRecordCipher.maximumContentByteCount ? at + TlsRecordCipher.maximumContentByteCount : bytes.count
+            outgoing.append(contentsOf: try writer!.seal(bytes[at..<end], type: .ApplicationData))
+            at = end
+        }
+    }
+
+    mutating fn close() {
+        if !isClosedForWriting {
+            sendAlert(.closeNotify)
+            isClosedForWriting = true
+        }
+    }
+
+    /// The connection given up for the fault: its alert queued, unless it
+    /// was the peer's.
+    mutating fn fail(_ error: TlsError) {
+        if case .PeerAlert(_) = error {
+            isFailed = true
+            return
+        }
+        if let alert = error.alert {
+            sendAlert(alert)
+        }
+        isFailed = true
+    }
+
+    mutating fn sendAlert(_ alert: TlsAlert) {
+        let body: U8[>..] = [alert.isClosure ? 1 : 2, U8(alert.code)]
+        if writer != none {
+            do {
+                outgoing.append(contentsOf: try writer!.seal(body, type: .Alert))
+            } catch {
+                return
+            }
+        } else {
+            appendRecord(&outgoing, 21, body)
+        }
+    }
+}
+
+/// The content signed by a CertificateVerify (RFC 8446 §4.4.3): of the
+/// server's, or of the client's.
+fn certificateVerifyContent(server: Bool, transcriptHash: U8[:]) -> U8[>..] {
+    var content = U8[>..](repeating: 0x20, count: 64)
+    content.append(contentsOf: (server ? "TLS 1.3, server CertificateVerify" : "TLS 1.3, client CertificateVerify").utf8Bytes())
+    content.append(0)
+    content.append(contentsOf: transcriptHash)
+    return content
+}

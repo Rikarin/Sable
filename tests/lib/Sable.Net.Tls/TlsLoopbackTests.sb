@@ -1,0 +1,96 @@
+module TlsLoopbackTests
+
+// TlsStream (Sable.Net.Tls) over Sable.Net's TCP on loopback: a client and a
+// server of the library's, each over a TcpStream. Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Sable.Concurrency
+import Sable.Crypto
+import Sable.IO
+import Sable.Net
+import Sable.Net.Tls
+import Sable.Testing
+import TlsSupport
+
+/// Everything read from the stream until the other end closes it.
+fn readToEnd<S: AsyncReader & AsyncWriter>(_ tls: TlsStream<S>) async throws(IoError) -> U8[>..] {
+    var all: U8[>..] = []
+    while true {
+        let bytes = try await tls.read(upTo: 65536)
+        if bytes.isEmpty {
+            return all
+        }
+        all.append(contentsOf: bytes)
+    }
+}
+
+/// Accepts one connection, reads all the client sends, and sends it back
+/// with each byte one more before closing.
+fn answerOnce(_ listener: TcpListener, _ options: TlsServerOptions) async throws -> (String?, String?) {
+    let tcp = try await listener.accept()
+    let tls = try await TlsStream.accept(tcp, options: options)
+    let bytes = try await readToEnd(tls)
+    var reply: U8[>..] = []
+    for b in bytes {
+        reply.append(b == 255 ? 0 : b + 1)
+    }
+    try await tls.write(reply)
+    try await tls.close()
+    tcp.close()
+    return (tls.serverName, tls.applicationProtocol)
+}
+
+@test
+fn streamsOverTcpExchangeDataAndClose() async throws {
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    var options = pki.serverOptions()
+    options.applicationProtocols = ["h2", "http/1.1"]
+    let serving = options
+    let server = Task.spawn { () -> (String?, String?)? in try? await answerOnce(listener, serving) }
+    let tcp = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    var clientOptions = pki.clientOptions()
+    clientOptions.applicationProtocols = ["http/1.1"]
+    let tls = try await TlsStream.connect(tcp, host: "localhost", options: clientOptions)
+    expect(tls.applicationProtocol == "http/1.1" && tls.serverName == "localhost")
+    var bytes: U8[>..] = []
+    for i in 0..<100_000 {
+        bytes.append(U8(i % 256))
+    }
+    try await tls.write(bytes)
+    try await tls.close()
+    let reply = try await readToEnd(tls)
+    require(reply.count == bytes.count)
+    expect(reply[0] == 1 && reply[255] == 0 && reply[99_999] == 160)
+    let seen = await server.value
+    require(seen != none)
+    let (name, chosen) = seen!
+    expect(name == "localhost" && chosen == "http/1.1")
+    tcp.close()
+}
+
+@test
+fn aClientThatDistrustsTheServerFailsBothEnds() async throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let other = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()), root: "Another Root")
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let options = pki.serverOptions()
+    let server = Task.spawn { () -> String in
+        do {
+            _ = try await answerOnce(listener, options)
+            return "no fault"
+        } catch {
+            return error.description()
+        }
+    }
+    let tcp = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    do {
+        _ = try await TlsStream.connect(tcp, host: "localhost", options: other.clientOptions())
+        expect(false, "a server of another CA trusted")
+    } catch {
+        expect(error.alert == .unknownCa)
+    }
+    tcp.close()
+    let heard = await server.value
+    expect(heard.contains("unknown_ca"), heard)
+}

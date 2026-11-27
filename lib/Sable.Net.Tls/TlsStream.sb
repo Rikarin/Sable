@@ -2,10 +2,11 @@ module Sable.Net.Tls
 
 import Sable.IO
 
-/// A TLS 1.3 client connection over a stream: what is written is sealed
-/// before it goes, and what is read was opened as it came. The stream is
-/// any `AsyncReader & AsyncWriter`, a `TcpStream` most often. Read it from
-/// one task at a time, and write it from one at a time.
+/// A TLS 1.3 connection over a stream, of a client (`connect`) or of a
+/// server (`accept`): what is written is sealed before it goes, and what is
+/// read was opened as it came. The stream is any `AsyncReader &
+/// AsyncWriter`, a `TcpStream` most often. Read it from one task at a time,
+/// and write it from one at a time.
 ///
 /// ```sable
 /// fn fetch<S: AsyncReader & AsyncWriter>(over tcp: S) async throws -> U8[>..] {
@@ -13,14 +14,22 @@ import Sable.IO
 ///     try await tls.write("GET / HTTP/1.0\r\n\r\n".utf8Bytes())
 ///     return try await tls.read(upTo: 4096)
 /// }
+///
+/// fn answer<S: AsyncReader & AsyncWriter>(over tcp: S, _ options: TlsServerOptions) async throws {
+///     let tls = try await TlsStream.accept(tcp, options: options)
+///     _ = try await tls.read(upTo: 4096)
+///     try await tls.write("HTTP/1.0 204 No Content\r\n\r\n".utf8Bytes())
+///     try await tls.close()
+/// }
 /// ```
 public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWriter {
     let transport: S
-    var connection: TlsClientConnection
+    var client: TlsClientConnection? = none
+    var server: TlsServerConnection? = none
+    var pending: U8[>..] = []
 
-    init(_ transport: S, _ connection: TlsClientConnection) {
+    init(_ transport: S) {
         self.transport = transport
-        self.connection = connection
     }
 
     /// A connection to the host over the stream, once its handshake is
@@ -30,40 +39,95 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
         return try await TlsStream<S>.connect(transport, connection: TlsClientConnection(host: host, options: options))
     }
 
-    /// The connection given over the stream, once its handshake is over.
+    /// The client connection given over the stream, once its handshake is
+    /// over.
     public static fn connect(_ transport: S, connection: TlsClientConnection) async throws(TlsError) -> TlsStream<S> {
-        let stream = TlsStream<S>(transport, connection)
-        try await stream.flush()
-        while !stream.connection.isHandshakeComplete {
-            if !(try await stream.pull()) {
-                throw TlsError.Failed(.handshakeFailure, reason: "the stream ended in the handshake")
-            }
-        }
-        try await stream.flush()
+        let stream = TlsStream<S>(transport)
+        stream.client = connection
+        try await stream.handshake()
         return stream
     }
 
-    /// The application protocol the server chose; none if it chose none.
-    public var applicationProtocol: String? => connection.applicationProtocol
+    /// The server's end of a connection a client made over the stream, once
+    /// its handshake is over.
+    public static fn accept(_ transport: S, options: TlsServerOptions) async throws(TlsError) -> TlsStream<S> {
+        return try await TlsStream<S>.accept(transport, connection: TlsServerConnection(options: options))
+    }
+
+    /// The server connection given over the stream, once its handshake is
+    /// over.
+    public static fn accept(_ transport: S, connection: TlsServerConnection) async throws(TlsError) -> TlsStream<S> {
+        let stream = TlsStream<S>(transport)
+        stream.server = connection
+        try await stream.handshake()
+        return stream
+    }
+
+    fn handshake() async throws(TlsError) {
+        try await flush()
+        while !isHandshakeComplete {
+            if !(try await pull()) {
+                throw TlsError.Failed(.handshakeFailure, reason: "the stream ended in the handshake")
+            }
+            try await flush()
+        }
+    }
+
+    /// The application protocol chosen; none if none was.
+    public var applicationProtocol: String? => client != none ? client!.applicationProtocol : server!.applicationProtocol
 
     /// The suite the records are sealed with.
-    public var cipherSuite: TlsCipherSuite => connection.cipherSuite!
+    public var cipherSuite: TlsCipherSuite => client != none ? client!.cipherSuite! : server!.cipherSuite!
+
+    /// The name the client asked the server for; on a client's stream, the
+    /// host connected to.
+    public var serverName: String? => client != none ? client!.host : server!.serverName
+
+    var isHandshakeComplete: Bool => client != none ? client!.isHandshakeComplete : server!.isHandshakeComplete
+
+    var isPeerClosed: Bool => client != none ? client!.isPeerClosed : server!.isPeerClosed
+
+    fn takeReceived() -> U8[>..] {
+        if client != none {
+            return client!.takeReceived()
+        }
+        return server!.takeReceived()
+    }
+
+    fn takeOutgoing() -> U8[>..] {
+        if client != none {
+            return client!.takeOutgoing()
+        }
+        return server!.takeOutgoing()
+    }
+
+    fn receive(_ bytes: U8[:]) throws(TlsError) {
+        if client != none {
+            try client!.receive(bytes)
+        } else {
+            try server!.receive(bytes)
+        }
+    }
 
     /// Up to 'count' bytes of application data, as soon as any have come;
-    /// none once the server has closed the connection. A fault of TLS is
+    /// none once the other end has closed the connection. A fault of TLS is
     /// `InvalidData`.
     public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
         while true {
-            let ready = connection.takeReceived()
-            if !ready.isEmpty {
-                if ready.count > count {
-                    let rest = ready[count..<ready.count].toArray()
-                    connection.received = rest
-                    return ready[0..<count].toArray()
-                }
-                return ready
+            if pending.isEmpty {
+                pending = takeReceived()
             }
-            if connection.isPeerClosed {
+            if !pending.isEmpty {
+                if pending.count > count {
+                    let taken = pending[0..<count].toArray()
+                    pending = pending[count..<pending.count].toArray()
+                    return taken
+                }
+                let taken = pending
+                pending = []
+                return taken
+            }
+            if isPeerClosed {
                 return []
             }
             var more = false
@@ -82,7 +146,11 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
     /// The bytes sealed and sent.
     public fn write(_ bytes: U8[:]) async throws(IoError) {
         do {
-            try connection.write(bytes)
+            if client != none {
+                try client!.write(bytes)
+            } else {
+                try server!.write(bytes)
+            }
             try await flush()
         } catch {
             throw TlsStream<S>.ioError(error)
@@ -91,7 +159,11 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
 
     /// close_notify sent: this end writes no more.
     public fn close() async throws(IoError) {
-        connection.close()
+        if client != none {
+            client!.close()
+        } else {
+            server!.close()
+        }
         do {
             try await flush()
         } catch {
@@ -111,17 +183,17 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
             return false
         }
         do {
-            try connection.receive(bytes)
+            try receive(bytes)
         } catch {
             let failure = error
-            _ = try? await transport.write(connection.takeOutgoing())
+            _ = try? await transport.write(takeOutgoing())
             throw failure
         }
         return true
     }
 
     fn flush() async throws(TlsError) {
-        let bytes = connection.takeOutgoing()
+        let bytes = takeOutgoing()
         if bytes.isEmpty {
             return
         }

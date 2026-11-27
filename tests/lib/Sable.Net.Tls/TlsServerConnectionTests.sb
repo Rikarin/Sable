@@ -1,0 +1,343 @@
+module TlsServerConnectionTests
+
+// TlsServerConnection (Sable.Net.Tls): RFC 8448's simple 1-RTT handshake
+// answered as the trace's server, the library's own client against it, and
+// the faults of a client it must refuse. Run with
+//     tools/stdlib-coverage.sh Sable.Net.Tls
+
+import Rfc8448
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Net.Tls
+import Sable.Testing
+import Sable.Time
+import TlsSupport
+
+fn traceCertificate() -> Certificate {
+    return try! Certificate.parse(der: Rfc8448.certificate[11..<11 + 0x1B0])
+}
+
+/// The trace's server: its certificate and key, its random and its
+/// ephemeral key.
+fn traceServer(_ protocols: String[>..] = []) -> TlsServerConnection {
+    var options = TlsServerOptions(certificateChain: [traceCertificate()], privateKey: .Rsa(Rfc8448.serverRsaKey()))
+    options.applicationProtocols = protocols
+    let share = TlsKeyShare.X25519(try! X25519PrivateKey(Rfc8448.serverPrivateKey))
+    return TlsServerConnection(options: options, random: Rfc8448.serverRandom, keyShares: [share])
+}
+
+/// The trace's client: its hello and its ephemeral key.
+fn traceClient() -> TlsClientConnection {
+    let key = try! X25519PrivateKey(Rfc8448.clientPrivateKey)
+    return TlsClientConnection(host: "server", options: TlsClientOptions(trust: .Pinned([traceCertificate()])), clientHello: Rfc8448.clientHello, keyShares: [.X25519(key)])
+}
+
+@test
+fn theServerAnswersTheTracesHelloWithTheTracesServerHello() throws {
+    var server = traceServer()
+    try server.receive(Rfc8448.clientHelloRecord)
+    let sent = server.takeOutgoing()
+    require(sent.count > Rfc8448.serverHelloRecord.count)
+    assertEqual(sent[0..<Rfc8448.serverHelloRecord.count].toArray(), Rfc8448.serverHelloRecord)
+    expect(server.cipherSuite == .Aes128GcmSha256 && server.serverName == "server" && !server.isHandshakeComplete)
+    // The rest is sealed under the trace's server_handshake_traffic_secret.
+    var reader = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: SymmetricKey(Rfc8448.serverHandshakeSecret))
+    let (type, flight) = try reader.open(sent[Rfc8448.serverHelloRecord.count..<sent.count])
+    expect(type == .Handshake)
+    assertEqual(flight[0..<8].toArray(), [8, 0, 0, 6, 0, 4, 0, 0])
+    let certificate = flight[10..<10 + Rfc8448.certificate.count].toArray()
+    assertEqual(certificate, Rfc8448.certificate)
+}
+
+@test
+fn theTracesClientCompletesTheHandshakeWithTheServer() throws {
+    var server = traceServer()
+    var client = traceClient()
+    try exchange(&client, &server)
+    require(client.isHandshakeComplete && server.isHandshakeComplete)
+    expect(client.peerCertificates == [traceCertificate()])
+    try client.write(Rfc8448.applicationData)
+    try server.receive(client.takeOutgoing())
+    assertEqual(server.takeReceived(), Rfc8448.applicationData)
+    try server.write([1, 2, 3])
+    try client.receive(server.takeOutgoing())
+    assertEqual(client.takeReceived(), [1, 2, 3])
+    client.close()
+    try server.receive(client.takeOutgoing())
+    expect(server.isPeerClosed && !server.isClosedForWriting)
+    server.close()
+    expect(server.isClosedForWriting)
+    try client.receive(server.takeOutgoing())
+    expect(client.isPeerClosed)
+    _ = expectThrows(TlsError.self) { try server.write([1]) }
+}
+
+@test
+fn theServerWritesNothingBeforeTheClientsFinished() throws {
+    var server = traceServer()
+    try server.receive(Rfc8448.clientHelloRecord)
+    _ = expectThrows(TlsError.self) { try server.write([1]) }
+}
+
+@test(arguments: ["p256", "p384", "ed25519", "rsa"])
+fn everyKindOfKeySignsTheHandshake(_ kind: String) throws {
+    let key: PrivateKey = match kind {
+        case "p256"    => EcdsaPrivateKey<P256>.generate().anyKey
+        case "p384"    => EcdsaPrivateKey<P384>.generate().anyKey
+        case "ed25519" => .Ed25519(Ed25519PrivateKey.generate())
+        default        => .Rsa(Rfc8448.serverRsaKey())
+    }
+    let pki = TestPki(key: key)
+    var server = TlsServerConnection(options: pki.serverOptions())
+    // The verifier takes no RSA key of fewer than 2048 bits, as the trace's is.
+    let options = kind == "rsa" ? TlsClientOptions(trust: .Pinned([pki.leaf])) : pki.clientOptions()
+    var client = TlsClientConnection(host: "localhost", options: options)
+    try exchange(&client, &server)
+    require(client.isHandshakeComplete && server.isHandshakeComplete)
+    expect(client.peerCertificates == [pki.leaf])
+}
+
+@test(arguments: TlsCipherSuite.all)
+fn everySuiteCarriesData(_ suite: TlsCipherSuite) throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.cipherSuites = [suite]
+    var server = TlsServerConnection(options: options)
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    try exchange(&client, &server)
+    expect(client.cipherSuite == suite && server.cipherSuite == suite)
+    var big: U8[>..] = []
+    for i in 0..<40_000 {
+        big.append(U8(i % 251))
+    }
+    try server.write(big)
+    try client.receive(server.takeOutgoing())
+    assertEqual(client.takeReceived(), big)
+}
+
+@test
+fn theServersPreferredSuiteIsChosen() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.cipherSuites = [.ChaCha20Poly1305Sha256, .Aes128GcmSha256]
+    var server = TlsServerConnection(options: options)
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    try exchange(&client, &server)
+    expect(client.cipherSuite == .ChaCha20Poly1305Sha256)
+}
+
+@test
+fn theServersPreferredProtocolIsChosen() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.applicationProtocols = ["h2", "http/1.1"]
+    var server = TlsServerConnection(options: options)
+    var clientOptions = pki.clientOptions()
+    clientOptions.applicationProtocols = ["http/1.1", "h2"]
+    var client = TlsClientConnection(host: "localhost", options: clientOptions)
+    try exchange(&client, &server)
+    expect(server.applicationProtocol == "h2" && client.applicationProtocol == "h2")
+}
+
+@test
+fn aClientThatOffersNoProtocolGetsNone() throws {
+    var server = traceServer(["h2"])
+    var client = traceClient()
+    try exchange(&client, &server)
+    expect(server.applicationProtocol == none && client.applicationProtocol == none)
+}
+
+@test
+fn noProtocolInCommonIsRefused() {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.applicationProtocols = ["h2"]
+    var server = TlsServerConnection(options: options)
+    var clientOptions = pki.clientOptions()
+    clientOptions.applicationProtocols = ["http/1.1"]
+    var client = TlsClientConnection(host: "localhost", options: clientOptions)
+    let error = expectThrows(TlsError.self) { try server.receive(client.takeOutgoing()) }
+    expect(error?.alert == .noApplicationProtocol)
+    let peer = expectThrows(TlsError.self) { try client.receive(server.takeOutgoing()) }
+    expect(peer?.description() == "the other end sent no_application_protocol")
+    _ = expectThrows(TlsError.self) { try server.receive([22]) }
+}
+
+@test
+fn noSuiteInCommonIsAHandshakeFailure() {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var options = pki.serverOptions()
+    options.cipherSuites = [.Aes256GcmSha384]
+    var server = TlsServerConnection(options: options)
+    var clientOptions = pki.clientOptions()
+    clientOptions.cipherSuites = [.Aes128GcmSha256]
+    var client = TlsClientConnection(host: "localhost", options: clientOptions)
+    let error = expectThrows(TlsError.self) { try server.receive(client.takeOutgoing()) }
+    expect(error?.alert == .handshakeFailure)
+    assertEqual(server.takeOutgoing(), [21, 3, 3, 0, 2, 2, 40])
+}
+
+@test
+fn aKeyTheClientTakesNoSignatureOfIsAHandshakeFailure() {
+    let pki = TestPki(key: EcdsaPrivateKey<P521>.generate().anyKey)
+    var server = TlsServerConnection(options: pki.serverOptions())
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    let error = expectThrows(TlsError.self) { try server.receive(client.takeOutgoing()) }
+    expect(error?.alert == .handshakeFailure)
+}
+
+@test
+fn aServerWithNoCertificateFails() {
+    var server = TlsServerConnection(options: TlsServerOptions(certificateChain: [], privateKey: .Ed25519(Ed25519PrivateKey.generate())))
+    var client = TlsClientConnection(host: "localhost", options: TlsClientOptions(trust: .Pinned([])))
+    let error = expectThrows(TlsError.self) { try server.receive(client.takeOutgoing()) }
+    expect(error?.alert == .internalError)
+}
+
+@test
+fn aCertificateOfAnotherHostIsRefusedByTheClientAndTheServerHearsWhy() {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()), host: "other.example")
+    var server = TlsServerConnection(options: pki.serverOptions())
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    let error = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(error?.alert == .badCertificate)
+    let heard = expectThrows(TlsError.self) { try server.receive(client.takeOutgoing()) }
+    expect(heard?.description() == "the other end sent bad_certificate")
+    expect(!server.isHandshakeComplete)
+}
+
+@test
+fn anExpiredCertificateIsRefused() {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()), notAfter: UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!)
+    var server = TlsServerConnection(options: pki.serverOptions())
+    var client = TlsClientConnection(host: "localhost", options: pki.clientOptions())
+    let error = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(error?.alert == .certificateExpired)
+}
+
+@test
+fn aCertificateOfAnUnknownCaIsRefused() {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let other = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()), root: "Another Root")
+    var server = TlsServerConnection(options: pki.serverOptions())
+    var client = TlsClientConnection(host: "localhost", options: other.clientOptions())
+    let error = expectThrows(TlsError.self) { try exchange(&client, &server) }
+    expect(error?.alert == .unknownCa)
+}
+
+@test
+fn aLongChainGoesInSeveralRecords() throws {
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    var chain: Certificate[>..] = [pki.leaf]
+    while chain.count * pki.root.der.count < 40_000 {
+        chain.append(pki.root)
+    }
+    var server = TlsServerConnection(options: TlsServerOptions(certificateChain: chain, privateKey: pki.key))
+    var client = TlsClientConnection(host: "localhost", options: TlsClientOptions(trust: .Pinned([pki.leaf])))
+    try exchange(&client, &server)
+    expect(client.isHandshakeComplete && client.peerCertificates.count == chain.count)
+}
+
+@test
+fn aBadFinishedFromTheClientIsRefused() throws {
+    var server = traceServer()
+    var client = traceClient()
+    try server.receive(client.takeOutgoing())
+    try client.receive(server.takeOutgoing())
+    var finished = client.takeOutgoing()
+    finished[finished.count - 1] = finished[finished.count - 1] ^ 1
+    let error = expectThrows(TlsError.self) { try server.receive(finished) }
+    expect(error?.alert == .badRecordMac)
+}
+
+/// A ClientHello of the extensions given, with the trace's random and
+/// suites.
+fn hello(_ extensions: U8[:], compression: U8[>..] = [1, 0], sessionId: U8[>..] = [0]) -> U8[>..] {
+    var body: U8[>..] = [3, 3]
+    body.append(contentsOf: Rfc8448.serverRandom)
+    body.append(contentsOf: sessionId)
+    body.append(contentsOf: [0, 2, 0x13, 0x01])
+    body.append(contentsOf: compression)
+    body.append(contentsOf: [U8(extensions.count >> 8), U8(extensions.count & 0xFF)])
+    body.append(contentsOf: extensions)
+    var message: U8[>..] = [1, 0, U8(body.count >> 8), U8(body.count & 0xFF)]
+    message.append(contentsOf: body)
+    var record: U8[>..] = [22, 3, 1, U8(message.count >> 8), U8(message.count & 0xFF)]
+    record.append(contentsOf: message)
+    return record
+}
+
+fn versions() -> U8[>..] {
+    return [0, 43, 0, 3, 2, 3, 4]
+}
+
+fn schemes() -> U8[>..] {
+    return [0, 13, 0, 4, 0, 2, 8, 4]
+}
+
+fn x25519Share() -> U8[>..] {
+    var share: U8[>..] = [0, 51, 0, 38, 0, 36, 0, 0x1D, 0, 32]
+    share.append(contentsOf: try! X25519PrivateKey(Rfc8448.clientPrivateKey).publicKey.bytes)
+    return share
+}
+
+@test(arguments: [
+    (hello(joined(schemes(), x25519Share())), 70),
+    (hello(joined(joined([0, 43, 0, 3, 2, 3, 3], schemes()), x25519Share())), 70),
+    (hello(joined(versions(), x25519Share())), 109),
+    (hello(joined(versions(), schemes())), 109),
+    (hello(joined(joined(versions(), schemes()), [0, 51, 0, 8, 0, 6, 0, 0x18, 0, 2, 4, 1])), 40),
+    (hello(joined(joined(versions(), schemes()), [0, 51, 0, 8, 0, 6, 0, 0x1D, 0, 2, 4, 1])), 47),
+    (hello(joined(joined(versions(), versions()), x25519Share())), 47),
+    (hello(joined(joined(versions(), schemes()), x25519Share()), compression: [2, 1, 0]), 47),
+    (hello(joined(joined(versions(), schemes()), x25519Share()), sessionId: joined([33], U8[>..](repeating: 7, count: 33))), 47),
+    (hello(joined(joined(joined(versions(), schemes()), x25519Share()), [0, 0, 0, 7, 0, 5, 0, 0, 2, 0xC3, 0x28])), 47),
+    (hello(joined(joined(versions(), schemes()), x25519Share()))[0..<20].toArray(), 0),
+    ([22, 3, 1, 0, 4, 2, 0, 0, 0], 10),
+    ([23, 3, 3, 0, 1, 0], 10),
+    ([22, 3, 1, 0, 5, 1, 0, 0, 1, 0], 50),
+])
+fn aClientHelloOutOfLineIsRefused(_ record: U8[>..], _ code: Int) {
+    var server = traceServer()
+    if code == 0 {
+        expect((try? server.receive(record)) != none)
+        expect(server.takeOutgoing().isEmpty)
+        return
+    }
+    let error = expectThrows(TlsError.self) { try server.receive(record) }
+    expect(error?.alert == TlsAlert(code: code))
+    assertEqual(server.takeOutgoing(), [21, 3, 3, 0, 2, 2, U8(code)])
+}
+
+@test
+fn aHelloWithASessionIdIsEchoedAndAChangeCipherSpecFollows() throws {
+    let sessionId = joined([32], U8[>..](repeating: 7, count: 32))
+    var server = traceServer()
+    try server.receive(hello(joined(joined(joined(versions(), schemes()), x25519Share()), [0, 0, 0, 9, 0, 7, 0, 0, 4, 0x61, 0x62, 0x63, 0x64]), sessionId: sessionId))
+    let sent = server.takeOutgoing()
+    assertEqual(sent[43..<76].toArray(), sessionId)
+    let length = Int(sent[3]) << 8 | Int(sent[4])
+    assertEqual(sent[5 + length..<5 + length + 6].toArray(), [20, 3, 3, 0, 1, 1])
+    expect(server.serverName == "abcd")
+}
+
+@test
+fn aP256ShareIsTakenWhenThereIsNoX25519One() throws {
+    let key = EcdhPrivateKey<P256>.generate()
+    var share: U8[>..] = [0, 51, 0, 71, 0, 69, 0, 0x17, 0, 65]
+    share.append(contentsOf: key.publicKey.bytes)
+    var server = TlsServerConnection(options: TlsServerOptions(certificateChain: [traceCertificate()], privateKey: .Rsa(Rfc8448.serverRsaKey())))
+    try server.receive(hello(joined(joined(versions(), schemes()), share)))
+    let sent = server.takeOutgoing()
+    // ServerHello: header, version, random, session id, suite, compression, extensions' length, then key_share's group.
+    assertEqual(sent[5 + 4 + 2 + 32 + 1 + 2 + 1 + 2 + 4..<5 + 4 + 2 + 32 + 1 + 2 + 1 + 2 + 6].toArray(), [0, 0x17])
+}
+
+@test
+fn aSecondClientHelloIsUnexpected() throws {
+    var server = traceServer()
+    try server.receive(Rfc8448.clientHelloRecord)
+    _ = server.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try server.receive(Rfc8448.clientHelloRecord) }
+    expect(error?.alert != none)
+}

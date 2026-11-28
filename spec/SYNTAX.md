@@ -418,8 +418,8 @@ fn assert(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> St
 assert(index < count(), "index \(index) is past the end")   // nothing runs in release
 ```
 
-The attribute is written where `@escaping` is, on the parameter or on its
-type (`@autoclosure _ c: () -> Bool` is the same). It is a parameter's, not
+The attribute is written where `@escaping` is, on the parameter's type
+(`@autoclosure _ c: () -> Bool` is S1014, with the fix that moves it). It is a parameter's, not
 a type's: `assert` passed as a value is a function taking a `() -> Bool`, and
 its caller writes the closure. The closure is non-escaping unless the
 parameter is `@escaping` too, and then the callee may keep it. A default
@@ -2220,9 +2220,9 @@ an optimised one; never both. A package's profile may choose with
 | `@immutable` | class | Deeply immutable; implies `Sendable` |
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |
-| `@escaping` | param of function type, or a function type's parameter | Closure may outlive the call (§17): part of the function type |
-| `@autoclosure` | param of type `() -> T` | The argument, written as a `T`, is the body of a closure the callee calls when it wants the value (§5, S3515) |
-| `@Sendable` | param of function type | Closure runs as a task: its captures are Sendable (§19) |
+| `@escaping` | type of a param of function type, or of a function type's parameter | Closure may outlive the call (§17): part of the function type. Written on the type, `f: @escaping () -> Int`; before the parameter it is S1014 |
+| `@autoclosure` | type of a param of type `() -> T` | The argument, written as a `T`, is the body of a closure the callee calls when it wants the value (§5, S3515) |
+| `@Sendable` | type of a param of function type | Closure runs as a task: its captures are Sendable (§19) |
 | `@polymorphic` | generic fn | Single boxed instantiation |
 | `@deprecated("use X")` | any | Warning at use site |
 | `@available(macos, linux)` | any | Platform gate: a use in a build for another platform is S3096 |

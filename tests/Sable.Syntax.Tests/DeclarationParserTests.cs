@@ -72,19 +72,39 @@ public sealed class DeclarationParserTests {
         Assert.False(parameters[2].EllipsisToken.IsNone);
     }
 
-    // Before the parameter or on its type (#125); on a type, the parenthesis
-    // after an attribute is the function type's, not the attribute's.
-    [Theory]
-    [InlineData("fn keep(_ f: @escaping () -> Int) -> () -> Int { }")]
-    [InlineData("fn keep(@escaping _ f: () -> Int) -> () -> Int { }")]
-    public void ParsesEscapingOnAParameterOrItsType(string source) {
+    // On its type (#125); the parenthesis after an attribute there is the
+    // function type's, not the attribute's.
+    [Fact]
+    public void ParsesEscapingOnAParametersType() {
+        const string source = "fn keep(_ f: @escaping () -> Int) -> () -> Int { }";
         var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"));
         Assert.Empty(tree.Diagnostics);
         var parameter = Assert.Single(Assert.IsType<FunctionDeclarationSyntax>(Assert.Single(((CompilationUnitSyntax)tree.Root).Members)).Parameters.Parameters);
-        var attributes = parameter.Type is AttributedTypeSyntax attributed ? attributed.Attributes : parameter.Attributes;
-        Assert.Equal("escaping", Assert.Single(attributes).Name.ToString().Trim());
-        Assert.IsType<FunctionTypeSyntax>(parameter.Type is AttributedTypeSyntax { Type: var inner } ? inner : parameter.Type);
+        var attributed = Assert.IsType<AttributedTypeSyntax>(parameter.Type);
+        Assert.Equal("escaping", Assert.Single(attributed.Attributes).Name.ToString().Trim());
+        Assert.IsType<FunctionTypeSyntax>(attributed.Type);
         Assert.Equal(source, tree.Root.ToFullString());
+    }
+
+    // Before the parameter it is S1014, read as written, and the fix moves
+    // every such attribute onto the type.
+    [Theory]
+    [InlineData("fn keep(@escaping _ f: () -> Int) { }", "fn keep(_ f: @escaping () -> Int) { }")]
+    [InlineData("fn check(@autoclosure @escaping c: () -> Bool) { }", "fn check(c: @autoclosure @escaping () -> Bool) { }")]
+    [InlineData("fn run(@Sendable _ body: inout () -> Int) { }", "fn run(_ body: inout @Sendable () -> Int) { }")]
+    public void AnAttributeOfTheTypeBeforeTheParameterIsMovedOntoIt(string source, string fixedSource) {
+        var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"));
+        var error = Assert.Single(tree.Diagnostics);
+        Assert.Equal(ErrorCode.ERR_AttributeOnParameterType, error.Code);
+        Assert.Equal(source, tree.Root.ToFullString());
+        var fix = Assert.Single(error.Fixes);
+        var text = source;
+        foreach (var change in fix.Changes.OrderByDescending(static c => c.Span.Start)) {
+            text = text[..change.Span.Start] + change.NewText + text[change.Span.End..];
+        }
+
+        Assert.Equal(fixedSource, text);
+        Assert.Empty(SyntaxTree.Parse(new SourceText(text, "test.sb")).Diagnostics);
     }
 
     [Fact]

@@ -11,7 +11,7 @@ fn twice() { }
 @frozen                                 //! S3093 '@frozen' applies to a union, not to a struct
 struct Settled { var n: Int }
 
-fn hold(@escaping _ n: Int) -> Int {    //! S3093 'n' is of type 'Int'
+fn hold(_ n: @escaping Int) -> Int {    //! S3093 'n' is of type 'Int'
     return n
 }
 

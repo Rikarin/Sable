@@ -8,7 +8,7 @@ struct Keeper { var run: () -> Int }
 
 fn call(_ f: () -> Int) -> Int { return f() }
 fn keep(_ f: @escaping () -> Int) -> Keeper { return Keeper(run: f) }
-fn keepToo(@escaping _ f: () -> Int) -> () -> Int { return f }
+fn keepToo(@escaping _ f: () -> Int) -> () -> Int { return f }   //! S1014 part of the parameter's type
 
 fn returned(_ f: () -> Int) -> () -> Int {
     return f                            //! S3205 'f' is a closure that is not @escaping

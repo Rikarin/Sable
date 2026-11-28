@@ -66,4 +66,4 @@ fn forward(_ body: @Sendable async () -> Int) -> Task<Int> {
     return Task.spawn(body)                // checked where its closure is written
 }
 
-fn notAClosure(@Sendable _ n: Int) { }     //! S3093 '@Sendable' applies to a closure parameter
+fn notAClosure(_ n: @Sendable Int) { }     //! S3093 '@Sendable' applies to a closure parameter

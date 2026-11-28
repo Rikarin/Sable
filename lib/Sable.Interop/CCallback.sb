@@ -30,7 +30,7 @@ public final class CCallback<F: CSignature>: Sendable {
 
     /// The closure as a C function and a context, which the function takes
     /// where 'position' says: a 'RawPtr<Opaque>' parameter of `F`.
-    public init(context position: ContextPosition = .Last, @Sendable _ closure: F) {
+    public init(context position: ContextPosition = .Last, _ closure: @Sendable F) {
         function = CFunction<F>.withContext(position)
         context = beginCallback(closure, confined: false)
     }

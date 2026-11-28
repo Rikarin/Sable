@@ -66,6 +66,7 @@ public enum ErrorCode {
     ERR_BraceOnNewLine = 1011,
     ERR_TypealiasIsAlias = 1012,
     ERR_RefIsReferenceType = 1013,
+    ERR_AttributeOnParameterType = 1014,
 
     // ---- Name resolution (S2000-S2999) -----------------------------------
     ERR_DuplicateDeclaration = 2000,

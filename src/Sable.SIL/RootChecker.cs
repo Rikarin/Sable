@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Syntax;
 
 namespace Sable.SIL;
@@ -244,6 +245,26 @@ public static partial class RootChecker {
             );
         }
 
+        // What a call gives back through an address, in the generic convention.
+        bool GenericResults(SilInstruction call, SilValue callee, List<SilValue> arguments) {
+            var grew = false;
+
+            // Compiled once, a closure gives a generic result through an
+            // address: it may be a reference into a region it is given.
+            if (callee is not FunctionRefInst && IndirectResults(arguments).Any()) {
+                grew |= Hold([..arguments.Where(static a => a.Type == SilType.Region).SelectMany(Of).Concat(Of(callee))], IndirectResults(arguments));
+            }
+
+            // Generic code compiled once that may give back what is rooted in a
+            // region of its own, given metadata not yet known: so may this call.
+            if (callee is FunctionRefInst { Function: var generic } && localResults?.GetValueOrDefault(generic) is { } genericRoot
+                && arguments.Any(static a => a.Type == SilType.Metadata && a is not MetadataInst)) {
+                grew |= Hold([new ValueAnchor(call, $"{genericRoot} (in '{GenericName(function, generic)}')")], IndirectResults(arguments));
+            }
+
+            return grew;
+        }
+
         // A reference parameter, a region the caller lends and a closure it gives are rooted in the caller.
         for (var i = 0; i < function.Entry.Arguments.Count; i++) {
             if (function.Entry.Arguments[i].Type is AddressType or InlinePointerType or ThickFunctionType || function.Entry.Arguments[i].Type == SilType.Region) {
@@ -271,15 +292,15 @@ public static partial class RootChecker {
                             break;
 
                         // A closure's context holds what it captured: rooted where that is.
-                        case RefElementAddrInst { Reference: AllocRefInst context } element when contexts.Contains(context):
+                        case RefElementAddrInst element when contexts.Of(element.Reference) is { } context:
                             changed |= Add(element, Of(context));
                             break;
 
                         // A region captured is as a reference into it: it ends with its block. A
                         // box captured — an 'inout' parameter's, a 'var's — holds what is put in it.
-                        case StoreInst { Address: RefElementAddrInst { Reference: AllocRefInst context } } captured
-                            when contexts.Contains(context) && (regionCaptures || captured.Value.Type != SilType.Region):
-                            changed |= Add(context, Of(captured.Value));
+                        case StoreInst { Address: RefElementAddrInst capturedAt } captured
+                            when contexts.Of(capturedAt.Reference) is { } context && (regionCaptures || captured.Value.Type != SilType.Region):
+                            changed |= Add(context, Of(captured.Value).Concat(contexts.Of(captured.Value) is { } inner ? Of(inner) : []).ToList());
                             break;
 
                         case PartialApplyInst { Context: { } context } closure:
@@ -381,9 +402,10 @@ public static partial class RootChecker {
                                 : Add(borrowed, Of(borrowed.Address).Concat(RootSlot(borrowed.Address) is { } borrowSlot ? stored.GetValueOrDefault(borrowSlot) ?? [] : []));
                             break;
 
-                        // A value holding references holds their anchors.
-                        case StructInst or TupleInst or EnumInst when HoldsReference(instruction.Type):
-                            changed |= Add(instruction, instruction.Operands.Where(static o => HoldsReference(o.Type)).SelectMany(Of).ToList());
+                        // A value holding references holds their anchors; so does
+                        // one holding a generic value, which may be one ('Box<T>').
+                        case StructInst or TupleInst or EnumInst when HoldsReference(instruction.Type) || function.IsUnspecialised && SilType.MentionsOpaque(instruction.Type):
+                            changed |= Add(instruction, instruction.Operands.Where(o => HoldsReference(o.Type) || function.IsUnspecialised && SilType.MentionsOpaque(o.Type)).SelectMany(Of).ToList());
                             break;
 
                         case StructExtractInst extract when HoldsReference(extract.Type):
@@ -441,20 +463,7 @@ public static partial class RootChecker {
                             }
 
                             changed |= Lent(apply.Arguments);
-
-                            // Compiled once, a closure gives a generic result through an
-                            // address: it may be a reference into a region it is given.
-                            if (apply.Callee is not FunctionRefInst && IndirectResults(apply.Arguments).Any()) {
-                                changed |= Hold([..apply.Arguments.Where(static a => a.Type == SilType.Region).SelectMany(Of).Concat(Of(apply.Callee))], IndirectResults(apply.Arguments));
-                            }
-
-                            // Generic code compiled once that may give back what is rooted in a
-                            // region of its own, given metadata not yet known: so may this call.
-                            if (apply.Callee is FunctionRefInst { Function: var generic } && localResults?.GetValueOrDefault(generic) is { } genericRoot
-                                && apply.Arguments.Any(static a => a.Type == SilType.Metadata && a is not MetadataInst)) {
-                                changed |= Hold([new ValueAnchor(apply, $"{genericRoot} (in '{GenericName(function, generic)}')")], IndirectResults(apply.Arguments));
-                            }
-
+                            changed |= GenericResults(apply, apply.Callee, [..apply.Arguments]);
                             break;
 
                         // A generic value kept in a variable: what was put there, as it may be a reference.
@@ -497,9 +506,14 @@ public static partial class RootChecker {
                             break;
                         }
 
-                        case TryApplyInst tryApply when tryApply.Normal.Arguments is [var result] && HoldsReference(result.Type):
-                            changed |= Add(result, CallResult(tryApply.Callee, [..tryApply.Arguments], result.Type, summaries, Of, Contents));
+                        // As an apply: its result, on to the normal block.
+                        case TryApplyInst tryApply:
+                            if (tryApply.Normal.Arguments is [var result] && HoldsReference(result.Type)) {
+                                changed |= Add(result, CallResult(tryApply.Callee, [..tryApply.Arguments], result.Type, summaries, Of, Contents));
+                            }
+
                             changed |= Lent(tryApply.Arguments);
+                            changed |= GenericResults(tryApply, tryApply.Callee, [..tryApply.Arguments]);
                             break;
                     }
                 }
@@ -567,11 +581,34 @@ public static partial class RootChecker {
         anchor is ParameterAnchor { Index: var i } && i < function.Entry.Arguments.Count && function.Entry.Arguments[i].Type is AddressType;
 
     /// <summary>Whether a store is into a variable's own storage, whose anchors follow what is stored, rather than memory that outlives the function.</summary>
-    static bool IntoVariable(StoreInst store, HashSet<AllocRefInst> contexts) =>
+    static bool IntoVariable(StoreInst store, ContextSet contexts) =>
         store.Address is AllocStackInst
-        || store.Address is RefElementAddrInst { Reference: AllocRefInst context } && contexts.Contains(context)
+        || store.Address is RefElementAddrInst element && contexts.Of(element.Reference) is not null
         || store.Address is BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique", Operands: [AllocStackInst, ..] }
         || ClosuresOnly(store.Value.Type) && RootSlot(store.Address) is not null;
+
+    /// <summary>
+    ///     What an instruction puts into memory that outlives the function:
+    ///     a store, and what is appended to, set in or stored into an array
+    ///     reached through an address that is not a variable's (an object's
+    ///     field, a region's memory, the caller's storage). Into a variable
+    ///     the anchors follow what is put there instead.
+    /// </summary>
+    static IEnumerable<(SilInstruction At, SilValue Address, SilValue Value)> Puts(SilInstruction instruction, ContextSet contexts) {
+        switch (instruction) {
+            case StoreInst store when HoldsReference(store.Value.Type) && !IntoVariable(store, contexts):
+                yield return (store, store.Address, store.Value);
+                break;
+            case BuiltinInst { Name: var name, Operands: [{ Type: AddressType { Pointee: var array } } at, ..] } builtin
+                when name.StartsWith("array_", StringComparison.Ordinal) && HoldsReference(array) && RootSlot(at) is null
+                     && !(at is RefElementAddrInst boxed && contexts.Of(boxed.Reference) is not null):
+                foreach (var value in builtin.Operands.Skip(1).Where(static o => o.Type is not AddressType && HoldsReference(o.Type))) {
+                    yield return (instruction, at, value);
+                }
+
+                break;
+        }
+    }
 
     /// <summary>
     ///     The closure parameters a function keeps past its call: stores into
@@ -592,12 +629,14 @@ public static partial class RootChecker {
         foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
             // What came from the caller's storage, put back there ('inout' written
             // back), is not kept: the caller's variable holds it as it did.
-            if (instruction is StoreInst store && !IntoVariable(store, contexts)) {
-                if (anchors.GetValueOrDefault(store.Address) is not { Count: > 0 } into || !into.All(a => IsStorageParameter(a, function))
-                    || !(anchors.GetValueOrDefault(store.Value) ?? []).All(into.Contains)) {
-                    Keep(store.Value);
+            foreach (var (_, address, value) in Puts(instruction, contexts)) {
+                if (anchors.GetValueOrDefault(address) is not { Count: > 0 } into || !into.All(a => IsStorageParameter(a, function))
+                    || !(anchors.GetValueOrDefault(value) ?? []).All(into.Contains)) {
+                    Keep(value);
                 }
-            } else if (instruction is not StoreInst) {
+            }
+
+            if (instruction is not StoreInst) {
                 foreach (var argument in KeptArguments(instruction, function, escaping).Arguments) {
                     Keep(argument);
                 }
@@ -612,14 +651,16 @@ public static partial class RootChecker {
     ///     function of the module, the closure parameters it keeps
     ///     (<see cref="Escaping" />); for any other callee — a closure, a
     ///     method or requirement dispatched to, a function without a body —
-    ///     every closure. Not '@escaping' says nothing there: a closure's type
-    ///     cannot say it, and a conformance or an override may add it.
+    ///     every closure its type does not say it only borrows
+    ///     (<see cref="ApplyInst.Lent" />, the parameters not '@escaping'):
+    ///     the type holds of every closure of it, and an override or a
+    ///     conformance may not add '@escaping' (S3210).
     /// </summary>
     static (string? Keeper, List<SilValue> Arguments) KeptArguments(SilInstruction instruction, SilFunction function, Dictionary<string, HashSet<int>> escaping) {
-        (SilValue? callee, List<SilValue> arguments) = instruction switch {
-            ApplyInst apply => (apply.Callee, apply.Arguments.ToList()),
-            TryApplyInst tryApply => (tryApply.Callee, tryApply.Arguments.ToList()),
-            _ => ((SilValue?)null, new List<SilValue>()),
+        (SilValue? callee, List<SilValue> arguments, ImmutableArray<int> lent) = instruction switch {
+            ApplyInst apply => (apply.Callee, apply.Arguments.ToList(), apply.Lent),
+            TryApplyInst tryApply => (tryApply.Callee, tryApply.Arguments.ToList(), tryApply.Lent),
+            _ => ((SilValue?)null, new List<SilValue>(), ImmutableArray<int>.Empty),
         };
         if (callee is null) {
             return (null, []);
@@ -631,14 +672,14 @@ public static partial class RootChecker {
                 : (null, []);
         }
 
-        List<SilValue> closures = [..arguments.Where(static a => a.Type is ThickFunctionType || a.Type is AddressType { Pointee: var p } && ClosuresOnly(p))];
+        List<SilValue> closures = [..arguments.Where((a, i) => !lent.Contains(i) && (a.Type is ThickFunctionType || a.Type is AddressType { Pointee: var p } && ClosuresOnly(p)))];
         return closures.Count == 0
             ? (null, [])
             : (callee switch {
-                FunctionRefInst reference => $"'{reference.Function}', whose body is not seen, may keep it past the call",
-                ClassMethodInst method => $"the method '{method.Method}' may keep it past the call (an override may)",
-                BuiltinInst { Name: var witness } when witness.StartsWith("witness", StringComparison.Ordinal) => "the protocol requirement called here may keep it past the call (a conformance may)",
-                _ => "the closure called here may keep it past the call (a closure's type cannot say it does not)",
+                FunctionRefInst reference => $"'{reference.Function}', whose body is not seen, may keep it past the call (its parameter is '@escaping')",
+                ClassMethodInst method => $"the method '{method.Method}' may keep it past the call (its parameter is '@escaping')",
+                BuiltinInst { Name: var witness } when witness.StartsWith("witness", StringComparison.Ordinal) => "the protocol requirement called here may keep it past the call",
+                _ => "the closure called here may keep it past the call (its type's parameter is '@escaping')",
             }, closures);
     }
 
@@ -679,18 +720,59 @@ public static partial class RootChecker {
     ///     A box a context captures — an 'inout' parameter's copy, a 'var'
     ///     closures share — is one too: it is reached only through them.
     /// </remarks>
-    static HashSet<AllocRefInst> Contexts(SilFunction function) {
+    static ContextSet Contexts(SilFunction function) {
         var instructions = function.Blocks.SelectMany(static b => b.Instructions).ToList();
-        var contexts = instructions.OfType<PartialApplyInst>().Select(static p => p.Context).OfType<AllocRefInst>().ToHashSet();
+        var contexts = new ContextSet();
+        contexts.UnionWith(instructions.OfType<PartialApplyInst>().Select(static p => p.Context).OfType<AllocRefInst>());
+
+        // A 'var' closures share is a box kept in a variable of its own until
+        // a closure captures it: the variable holds only that box.
+        var boxed = new Dictionary<AllocStackInst, AllocRefInst?>();
+        foreach (var store in instructions.OfType<StoreInst>()) {
+            if (store.Address is AllocStackInst { ElementType: ClassType { Name: var slotName } } slot && slotName.StartsWith("Box$of$", StringComparison.Ordinal)) {
+                boxed[slot] = (store.Value is CopyValueInst copied ? copied.Value : store.Value) is AllocRefInst made
+                              && (!boxed.TryGetValue(slot, out var earlier) || ReferenceEquals(earlier, made))
+                    ? made
+                    : null;
+            }
+        }
+
+        foreach (var (slot, box) in boxed) {
+            if (box is not null) {
+                contexts.Slots[slot] = box;
+            }
+        }
+
         foreach (var store in instructions.OfType<StoreInst>()) {
             if (store.Address is RefElementAddrInst { Reference: AllocRefInst context } && contexts.Contains(context)
-                && (store.Value is CopyValueInst copy ? copy.Value : store.Value) is AllocRefInst { Type: ClassType { Name: var name } } box
+                && contexts.Box(store.Value) is { Type: ClassType { Name: var name } } box
                 && name.StartsWith("Box$of$", StringComparison.Ordinal)) {
                 contexts.Add(box);
             }
         }
 
         return contexts;
+    }
+
+    /// <summary>
+    ///     The objects made as closures' contexts, and the boxes they capture,
+    ///     with the variables a box is kept in until it is captured.
+    /// </summary>
+    sealed class ContextSet : HashSet<AllocRefInst> {
+        public Dictionary<AllocStackInst, AllocRefInst> Slots { get; } = [];
+
+        /// <summary>The object made here that a reference is: itself, a copy, or read from the variable it is kept in.</summary>
+        public AllocRefInst? Box(SilValue reference) =>
+            reference switch {
+                AllocRefInst made => made,
+                CopyValueInst copy => Box(copy.Value),
+                LoadInst { Address: AllocStackInst slot } when Slots.TryGetValue(slot, out var box) => box,
+                LoadBorrowInst { Address: AllocStackInst slot } when Slots.TryGetValue(slot, out var box) => box,
+                _ => null,
+            };
+
+        /// <summary>The context or box a reference is, if it is one.</summary>
+        public AllocRefInst? Of(SilValue reference) => Box(reference) is { } box && Contains(box) ? box : null;
     }
 
     /// <summary>
@@ -807,7 +889,7 @@ public static partial class RootChecker {
 
         var output = function.Entry.Arguments[outIndex];
         return function.Blocks.SelectMany(static b => b.Instructions).OfType<StoreInst>()
-            .Where(s => ReferenceEquals(s.Address, output) && s.Value.Type is OpaqueType)
+            .Where(s => ReferenceEquals(s.Address, output) && SilType.MentionsOpaque(s.Value.Type))
             .Select(s => LocalRoot(s.Value, function, anchors)).FirstOrDefault(static r => r is not null);
     }
 
@@ -854,14 +936,10 @@ public static partial class RootChecker {
         // What a closure captures is held to where the closure goes, not to the heap its context is in.
         var contexts = Contexts(function);
         foreach (var block in function.Blocks) {
-            foreach (var instruction in block.Instructions) {
-                if (instruction is not StoreInst store || !HoldsReference(store.Value.Type) || IntoVariable(store, contexts)) {
-                    continue;
-                }
-
-                var destination = anchors.GetValueOrDefault(store.Address) ?? [];
+            foreach (var (instruction, address, value) in block.Instructions.SelectMany(i => Puts(i, contexts))) {
+                var destination = anchors.GetValueOrDefault(address) ?? [];
                 var heap = destination.Contains(HeapAnchor.Instance);
-                foreach (var anchor in anchors.GetValueOrDefault(store.Value) ?? []) {
+                foreach (var anchor in anchors.GetValueOrDefault(value) ?? []) {
                     // A closure parameter kept is the caller's to check (CheckEscapingClosures).
                     if (destination.Contains(anchor) && !(heap && anchor is not HeapAnchor) || IsClosureParameter(anchor, function)) {
                         continue;
@@ -881,7 +959,7 @@ public static partial class RootChecker {
                     };
                     diagnostics.Error(
                         ErrorCode.ERR_ReferenceOutlivesRoot,
-                        SpanOf(store, source),
+                        SpanOf(instruction, source),
                         $"cannot store a reference rooted in {root} into {into}: what is stored there may refer only into the same region. "
                         + "To fix it: allocate what it refers to in that region too (r.alloc(…)); or store a copy of the value instead of a reference to it"
                     );
@@ -955,6 +1033,14 @@ public static partial class RootChecker {
             }
         }
 
+        // The read of a variable a value is, through copies.
+        static SilValue? Read(SilValue value) =>
+            value switch {
+                LoadInst { Address: AllocStackInst } or LoadBorrowInst { Address: AllocStackInst } => value,
+                CopyValueInst copy => Read(copy.Value),
+                _ => null,
+            };
+
         // What can be invalidated under a reference: a region's slot, a block's variable or parameter.
         IEnumerable<Anchor> RegionsOf(SilValue value) =>
             (anchors.GetValueOrDefault(value) ?? []).Where(static a => a is LocalAnchor or ParameterAnchor);
@@ -970,6 +1056,13 @@ public static partial class RootChecker {
         var exitReset = new Dictionary<SilBlock, Dictionary<Anchor, SilInstruction>>();
         var exitStale = new Dictionary<SilBlock, HashSet<AllocStackInst>>();
         var exitFresh = new Dictionary<SilBlock, HashSet<SilValue>>();
+
+        // A variable assigned after a slot died holds what it was given, not
+        // what it held: for each variable, the dead slots what it may hold
+        // was taken from before they died; and what each read of a variable
+        // may hold of them.
+        var exitUnclean = new Dictionary<SilBlock, HashSet<(AllocStackInst Holder, AllocStackInst Dead)>>();
+        var readUnclean = new Dictionary<SilValue, HashSet<AllocStackInst>>();
         var reported = new HashSet<SilValue>();
         var reportedAt = new HashSet<(SilInstruction, int)>();
         var reportedUses = new HashSet<(AllocStackInst, SilLocation?)>();
@@ -979,8 +1072,10 @@ public static partial class RootChecker {
                 var dead = new Dictionary<AllocStackInst, SilInstruction>();
                 var resets = new Dictionary<Anchor, SilInstruction>();
                 var stale = new HashSet<AllocStackInst>();
+                var unclean = new HashSet<(AllocStackInst Holder, AllocStackInst Dead)>();
                 HashSet<SilValue>? fresh = null;
                 foreach (var predecessor in predecessors[block]) {
+                    unclean.UnionWith(exitUnclean.GetValueOrDefault(predecessor) ?? []);
                     foreach (var (slot, at) in exit.GetValueOrDefault(predecessor) ?? []) {
                         dead.TryAdd(slot, at);
                     }
@@ -1000,6 +1095,16 @@ public static partial class RootChecker {
                 }
 
                 fresh ??= [];
+
+                // What a variable held of a slot that dies, it holds of a dead one.
+                void Died(AllocStackInst slot) {
+                    var anchor = new LocalAnchor(slot);
+                    foreach (var (holder, held) in holderAnchors) {
+                        if (held.Contains(anchor)) {
+                            unclean.Add((holder, slot));
+                        }
+                    }
+                }
 
                 // A block argument is fresh when every edge into it passes a fresh value.
                 SilValue? PassedOn(SilBlock from, int index) =>
@@ -1058,17 +1163,25 @@ public static partial class RootChecker {
                         }
                     }
 
+                    if (((instruction as LoadInst)?.Address ?? (instruction as LoadBorrowInst)?.Address) is AllocStackInst readFrom && HoldsReference(instruction.Type)) {
+                        readUnclean[instruction] = [..unclean.Where(p => ReferenceEquals(p.Holder, readFrom)).Select(static p => p.Dead)];
+                    }
+
                     switch (instruction) {
                         case DestroyAddrInst { Address: AllocStackInst slot }:
                             dead[slot] = instruction;
+                            Died(slot);
                             continue;
 
                         case LoadInst { Kind: LoadKind.Take, Address: AllocStackInst slot }:
                             dead[slot] = instruction;
+                            Died(slot);
                             continue;
 
                         case StoreInst { Address: AllocStackInst slot } stored:
                             dead.Remove(slot);
+                            var given = RegionsOf(stored.Value).OfType<LocalAnchor>().Select(static a => a.Slot).ToHashSet();
+                            unclean.RemoveWhere(p => ReferenceEquals(p.Holder, slot) && !given.Contains(p.Dead));
                             if (fresh.Contains(stored.Value) || !RegionsOf(stored.Value).Any(resets.ContainsKey)) {
                                 stale.Remove(slot);
                             } else {
@@ -1146,8 +1259,11 @@ public static partial class RootChecker {
 
                         foreach (var anchor in anchors.GetValueOrDefault(operand) ?? []) {
                             // 'r.v' reads through 'r' and then through the field's
-                            // address: one use, said once.
-                            if (anchor is LocalAnchor { Slot: var slot } && dead.TryGetValue(slot, out var ended) && reported.Add(operand)
+                            // address: one use, said once. A variable read after it
+                            // was given something else holds none of what it had.
+                            if (anchor is LocalAnchor { Slot: var slot } && dead.TryGetValue(slot, out var ended)
+                                && !(Read(operand) is { } read && readUnclean.TryGetValue(read, out var mayHold) && !mayHold.Contains(slot))
+                                && reported.Add(operand)
                                 && reportedUses.Add((slot, instruction.Location))) {
                                 var where = ended.Location is { } location ? $"line {location.Line}" : "earlier";
                                 diagnostics.Error(
@@ -1177,6 +1293,12 @@ public static partial class RootChecker {
                 var previousResets = exitReset.GetValueOrDefault(block);
                 if (previousResets is null || previousResets.Count != resets.Count) {
                     exitReset[block] = resets;
+                    changed = true;
+                }
+
+                var previousUnclean = exitUnclean.GetValueOrDefault(block);
+                if (previousUnclean is null || !previousUnclean.SetEquals(unclean)) {
+                    exitUnclean[block] = unclean;
                     changed = true;
                 }
 

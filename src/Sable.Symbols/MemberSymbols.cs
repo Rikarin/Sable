@@ -387,6 +387,9 @@ public sealed class FunctionSymbol : Symbol {
     public FunctionTypeSymbol FunctionType =>
         new([..Parameters.Select(static p => p.Type)], ReturnType, IsAsync, ThrownType) {
             InOutParameters = FunctionTypeSymbol.InOutOf(Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)),
+            // One no source declares (a memberwise initialiser's, a setter's) is
+            // not held to what '@escaping' says, so it is taken to keep its closure.
+            EscapingParameters = FunctionTypeSymbol.EscapingOf(Parameters.Select(static p => (p.IsEscaping || p.IsSynthesized && !p.Name.StartsWith('$'), p.Type))),
         };
 
     public override string ToString() => $"{QualifiedName}{SignatureString()}";

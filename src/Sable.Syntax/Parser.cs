@@ -1938,7 +1938,16 @@ internal sealed class Parser {
                     simple = false;
                 }
 
-                var type = ParseType();
+                // '(@escaping () -> Int) -> ()': a function type's parameter
+                // it may keep. A tuple's element cannot be, which the binder says.
+                GreenNode type;
+                if (At(SyntaxKind.AtToken)) {
+                    type = new AttributedTypeGreen(ParseAttributes(onType: true), ParseType());
+                    simple = false;
+                } else {
+                    type = ParseType();
+                }
+
                 inner ??= type;
                 items.Add(new TupleTypeElementGreen(name, colon, modifier, type));
 
@@ -2399,7 +2408,7 @@ internal sealed class Parser {
         var identifier = At(SyntaxKind.UnderscoreToken) ? EatToken() : EatIdentifier();
         var colon = TryEatToken(SyntaxKind.ColonToken);
         var modifier = colon is null ? null : TryEatToken(SyntaxKind.InoutKeyword);
-        var type = colon is null ? null : ParseType();
+        var type = colon is null ? null : At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
         return new ClosureParameterGreen(identifier, colon, modifier, type);
     }
 
@@ -2456,6 +2465,8 @@ internal sealed class Parser {
                 case SyntaxKind.CapitalSelfKeyword:
                 case SyntaxKind.ThrowsKeyword:
                 case SyntaxKind.RethrowsKeyword:
+                // '(f: @escaping () -> Int) in'.
+                case SyntaxKind.AtToken:
                 // An array's length, 'U8[16]', or a value argument, 'Buf<Int, 4>'.
                 case SyntaxKind.IntegerLiteralToken when Peek(offset - 1).Kind is SyntaxKind.OpenBracketToken or SyntaxKind.DotDotToken or SyntaxKind.CommaToken:
                     continue;

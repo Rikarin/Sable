@@ -111,6 +111,10 @@ public sealed partial class Compilation {
             ModuleDeclarationSyntax => (AttributeTargets.Module, "a module declaration"),
             // 'f(_ k: @escaping () -> Int)': the parameter's, written on its type.
             AttributedTypeSyntax { Parent: ParameterSyntax } => (AttributeTargets.Parameter, "a parameter"),
+            // '(@escaping () -> Int) -> ()', '{ (k: @escaping () -> Int) in … }':
+            // a function type's or a closure's parameter, which says only that.
+            AttributedTypeSyntax { Parent: TupleTypeElementSyntax { Parent: TupleTypeSyntax { Parent: FunctionTypeSyntax } } or ClosureParameterSyntax } =>
+                (AttributeTargets.Parameter, "a function type's parameter"),
             AttributedTypeSyntax => (AttributeTargets.None, "a type"),
             _ => null,
         };
@@ -161,6 +165,12 @@ public sealed partial class Compilation {
             var applies = (known.Targets & target) != 0
                 && !(name == "immortal" && attribute.Parent is FieldDeclarationSyntax field
                     && (field.LetOrVarKeyword.Kind != SyntaxKind.LetKeyword || !field.Modifiers.Any(static m => m.Kind == SyntaxKind.StaticKeyword)));
+
+            // Of a function type's parameter, or a closure's, only '@escaping' is said.
+            if (applies && name != "escaping" && attribute.Parent is AttributedTypeSyntax { Parent: TupleTypeElementSyntax or ClosureParameterSyntax }) {
+                ReportDeclaration(ErrorCode.ERR_AttributeDoesNotApply, attribute.Span, $"'@{name}' applies to {known.Where}, not to a function type's parameter");
+                continue;
+            }
 
             if (!applies) {
                 ReportDeclaration(

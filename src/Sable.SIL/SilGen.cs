@@ -11655,7 +11655,7 @@ public sealed partial class SilGen {
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } existentialReceiver
                 && Sub(existentialReceiver.Type) is ExistentialTypeSymbol && !IsMemberOfInstance(existentialReceiver, callee, SlotName(callee))) {
                 return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType) && generator.OwnShape(callee) is null
-                    ? ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call)
+                    ? ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call, callee)
                     : OpenedExistential(existentialReceiver, callee, callee.IsMutating, call,
                         (self, opened) => {
                             var opening = Opening(call.Substitution, opened);
@@ -11823,6 +11823,7 @@ public sealed partial class SilGen {
                 BeginAccess(arguments[0], modify: true, borrows);
             }
 
+            var firstArgument = arguments.Count;
             for (var i = 0; i < passed; i++) {
                 // A value of a type parameter's type, to unspecialised code: borrowed where it is.
                 // So is an optional or a tuple of them, laid out at run time.
@@ -11958,6 +11959,11 @@ public sealed partial class SilGen {
                 Unhold(handed);
             }
 
+            // The closures the callee's parameters say it does not keep: one argument each.
+            var lentArguments = arguments.Count == firstArgument + passed
+                ? Lent(arguments, Enumerable.Range(0, passed).Where(i => i < callee.Parameters.Length && callee.Parameters[i] is { IsEscaping: false, IsCallersStorage: false, IsSynthesized: false, Type: FunctionTypeSymbol }).Select(i => firstArgument + i))
+                : [];
+
             if (variadicAt >= 0) {
                 // To unspecialised code, gathered as the type they are here, and seen as the callee's.
                 var taken = type.Parameters[arguments.Count];
@@ -12044,7 +12050,7 @@ public sealed partial class SilGen {
             var invoked = Invoke(code, type, arguments, borrows, call.Syntax,
                 cannotThrow: genericError is { CannotThrow: true } || callee.IsRethrows && RethrownBy(call) is null
                              && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
-                hopBack: back, errorSlot: genericError?.Slot);
+                hopBack: back, errorSlot: genericError?.Slot, lent: lentArguments);
             if (genericOut is { } written) {
                 return ShareWritten(TakeOut(invoked, written.Slot), back);
             }
@@ -12072,11 +12078,13 @@ public sealed partial class SilGen {
         ///     or <c>try_apply</c> with the borrows ended on both of its edges.
         /// </summary>
         /// <param name="hopBack">After a call into an actor: where the task ran before, to hop back to on either way out.</param>
+        /// <param name="lent">The arguments the callee's type says it does not keep, closures given to parameters not '@escaping' (<see cref="ApplyInst.Lent" />).</param>
         SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false,
-            SilValue? hopBack = null, AllocStackInst? errorSlot = null) {
+            SilValue? hopBack = null, AllocStackInst? errorSlot = null, ImmutableArray<int> lent = default) {
             BeginAccesses(borrows);
+            lent = lent.IsDefault ? [] : lent;
             if (type.Thrown is null) {
-                var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
+                var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]) { Lent = lent });
                 if (hopBack is not null) {
                     HopBack(hopBack, type.Result == SilType.Unit ? null : apply);
                 }
@@ -12098,7 +12106,7 @@ public sealed partial class SilGen {
                 }
             }
 
-            Jump(new TryApplyInst(reference, type.Result, [..arguments], normal, errorBlock));
+            Jump(new TryApplyInst(reference, type.Result, [..arguments], normal, errorBlock) { Lent = lent });
 
             // Already off the temporaries: a borrow of a place is ended, an
             // access closed, a temporary destroyed.
@@ -12524,9 +12532,10 @@ public sealed partial class SilGen {
         ///     mutating method, a property's setter — is given the value's
         ///     address, the box first made the existential's own.
         /// </summary>
-        SilValue? ExistentialCall(BoundExpression receiver, string slot, IReadOnlyList<BoundExpression> argumentExpressions, BoundNode at) {
+        /// <param name="requirement">The requirement called, whose parameters say which closures its witnesses do not keep.</param>
+        SilValue? ExistentialCall(BoundExpression receiver, string slot, IReadOnlyList<BoundExpression> argumentExpressions, BoundNode at, FunctionSymbol? requirement = null) {
             var layout = LowerType(receiver.Type) as StructType;
-            if (layout is null || generator.RequirementOf(layout, slot) is not { Type: { } type } requirement
+            if (layout is null || generator.RequirementOf(layout, slot) is not { Type: { } type } required
                 || type.Parameters.Length != argumentExpressions.Count + 2 || type.Thrown is AddressType
                 || type.Parameters[0] is not (OpaqueType or AddressType { Pointee: OpaqueType })) {
                 return Missing(at, $"calling '{slot}' through '{Sub(receiver.Type).ToDisplayString()}'");
@@ -12563,7 +12572,7 @@ public sealed partial class SilGen {
             SilValue self, metadata, table;
             if (existential is not null) {
                 metadata = Emit(new StructExtractInst(existential, 1));
-                table = Emit(new StructExtractInst(existential, SilGen.ExistentialTables + requirement.Part));
+                table = Emit(new StructExtractInst(existential, SilGen.ExistentialTables + required.Part));
                 self = Emit(new BuiltinInst("box_project", type.Parameters[0], Emit(new StructExtractInst(existential, 0)), metadata));
             } else {
                 if (Address(receiver, borrows) is not { } address) {
@@ -12572,13 +12581,17 @@ public sealed partial class SilGen {
                 }
 
                 metadata = Emit(new LoadInst(Emit(new StructElementAddrInst(address, 1))));
-                table = Emit(new LoadInst(Emit(new StructElementAddrInst(address, SilGen.ExistentialTables + requirement.Part))));
+                table = Emit(new LoadInst(Emit(new StructElementAddrInst(address, SilGen.ExistentialTables + required.Part))));
                 BeginAccess(address, modify: true, borrows);
                 self = Emit(new BuiltinInst("box_project_unique", type.Parameters[0], Emit(new StructElementAddrInst(address, 0)), metadata));
             }
 
-            var code = Emit(new BuiltinInst($"witness_generic:{requirement.Entry}", type, SilGen.RequirementTable(Emit, table, requirement)));
-            return Invoke(code, type, [self, ..arguments, metadata], borrows, at.Syntax);
+            var code = Emit(new BuiltinInst($"witness_generic:{required.Entry}", type, SilGen.RequirementTable(Emit, table, required)));
+            List<SilValue> passed = [self, ..arguments, metadata];
+            var lent = requirement is null || requirement.Parameters.Length != arguments.Count
+                ? []
+                : Lent(passed, Enumerable.Range(0, arguments.Count).Where(i => requirement.Parameters[i] is { IsEscaping: false, IsCallersStorage: false, IsSynthesized: false, Type: FunctionTypeSymbol }).Select(i => i + 1));
+            return Invoke(code, type, passed, borrows, at.Syntax, lent: lent);
         }
 
         /// <summary><c>self</c>, as a closure captured it: a copy out of the context.</summary>
@@ -12959,6 +12972,10 @@ public sealed partial class SilGen {
         }
 
         /// <summary>A call through a closure: the closure and the arguments, all borrowed for the call.</summary>
+        /// <summary>Of these argument indices, the closures: what a call's <see cref="ApplyInst.Lent" /> names.</summary>
+        static ImmutableArray<int> Lent(List<SilValue> arguments, IEnumerable<int> indices) =>
+            [..indices.Where(i => i < arguments.Count && arguments[i].Type is ThickFunctionType)];
+
         SilValue? IndirectCall(BoundIndirectCall call) {
             Locate(call.Syntax);
             if (Borrow(call.Callee) is not { Type: ThickFunctionType thick } callee) {
@@ -13010,7 +13027,12 @@ public sealed partial class SilGen {
                 arguments.Add(place.Passed);
             }
 
-            var invoked = Invoke(callee, thick.Signature, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot);
+            // What the closure's type says it does not keep: an argument for each parameter, before the hidden ones.
+            var lent = functionType is null
+                ? []
+                : Lent(arguments, Enumerable.Range(0, call.Arguments.Length).Where(i => !functionType.IsEscaping(i) && !functionType.IsInOut(i)
+                    && i < functionType.ParameterTypes.Length && Sub(functionType.ParameterTypes[i]) is FunctionTypeSymbol));
+            var invoked = Invoke(callee, thick.Signature, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot, lent: lent);
             return into is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 

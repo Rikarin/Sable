@@ -100,3 +100,53 @@ struct Tally {
         })
     }
 }
+
+// '@escaping' is part of a function type: '(@escaping () -> Int) -> ()' may
+// keep the closure it is given, and fits only where that is wanted; a closure
+// of '(() -> Int) -> ()' may not keep its own.
+final class Holder {
+    var kept: (() -> Int)? = none
+
+    fn hold(_ f: @escaping () -> Int) { kept = f }
+    fn look(_ f: () -> Int) -> Int { return f() }
+}
+
+fn functionTypes(_ holder: Holder) {
+    let keeps: (@escaping () -> Int) -> () = holder.hold
+    let looks: (@escaping () -> Int) -> Int = holder.look
+    let lends: (() -> Int) -> () = holder.hold   //! S3004 this function does not have the type wanted here
+    let stores: (() -> Int) -> () = { f in holder.kept = f }   //! S3205 'f' is a closure that is not @escaping
+    let storesToo: (() -> Int) -> () = { holder.kept = $0 }   //! S3205 '$0' is a closure that is not @escaping
+    let mayStore: (@escaping () -> Int) -> () = { f in holder.kept = f }
+    let says: (@escaping () -> Int) -> () = { (f: @escaping () -> Int) in holder.kept = f }
+    let saysNot: (() -> Int) -> () = { (f: @escaping () -> Int) in holder.kept = f }   //! S3004 expected '(() -> Int) -> Void' but found '(@escaping () -> Int) -> Void'
+}
+
+fn passedOnThroughAClosure(_ f: () -> Int, _ run: (() -> Int) -> Int) -> Int {
+    return run(f) + run(() => f() + 1)
+}
+
+fn notAClosure(_ run: (@escaping Int) -> Int) { }   //! S3093 '@escaping' applies to a closure parameter
+
+// An override or a conformance may not add '@escaping' (S3210): a call
+// through the original lends its closure only for the call.
+protocol Runner {
+    fn run(_ f: () -> Int) -> Int
+    fn later(_ f: @escaping () -> Int)
+}
+
+final class KeepingRunner: Runner {
+    var kept: (() -> Int)? = none
+    fn run(_ f: @escaping () -> Int) -> Int { return f() }   //! S3210 'KeepingRunner.run' meets 'Runner.run', whose 'f' is not '@escaping'
+    fn later(_ f: () -> Int) { }
+}
+
+class Base {
+    fn run(_ f: () -> Int) -> Int { return f() }
+    fn later(_ f: @escaping () -> Int) { }
+}
+
+class Derived: Base {
+    override fn run(_ f: @escaping () -> Int) -> Int { return f() }   //! S3210 'Derived.run' overrides 'Base.run', whose 'f' is not '@escaping'
+    override fn later(_ f: () -> Int) { }
+}

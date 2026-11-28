@@ -1869,8 +1869,33 @@ implicitly through a weak `self` is an error until it is unwrapped. An
 unowned capture is the object itself, and reading it once the object is gone
 traps. `[weak x = expression]` captures what the expression gives.
 
-An escaping closure must be declared `@escaping` on the parameter; non-escaping
-closures are stack-allocated and cost nothing.
+A closure parameter is non-escaping unless its type says `@escaping`
+(`fn on(_ handler: @escaping () -> Void)`): one that is not may only be
+called, or passed on to another parameter that is not `@escaping` either —
+not stored, returned or captured by a closure that may escape (S3205).
+Non-escaping closures are stack-allocated and cost nothing.
+
+`@escaping` is part of the function type, as in Swift: `(@escaping () -> Int)
+-> Void` is a function that may keep the closure it is given, and `(() ->
+Int) -> Void` one that may not. A function that keeps less fits where one
+that may keep more is wanted, not the other way round (S3004):
+
+```sable
+let keep: (@escaping () -> Int) -> Void = keeper.keep    // keep's parameter is @escaping
+let look: (@escaping () -> Int) -> Void = keeper.look    // look's is not: it fits too
+let lend: (() -> Int) -> Void = keeper.keep              // error: keep may keep it
+```
+
+A closure of a type whose parameter is not `@escaping` may not keep what it
+is given (`{ f in kept = f }`, `{ kept = $0 }`: S3205); one whose parameter
+is, or that says so itself (`{ (f: @escaping () -> Int) in kept = f }`),
+may. A method that overrides another, or meets a protocol's requirement,
+may not add `@escaping` to a parameter the original does not have it on
+(S3210): a caller through the original lends its closure only for the call.
+So what a closure parameter's type says holds of every callee, a closure
+value, a method dispatched to or a requirement included — which the root
+checker (docs/04 §3.3) relies on to let a closure that captured a region
+reference be given to one that does not keep it.
 
 Inside a `mutating` member, a closure that does not escape may change `self`,
 as the member may: `each(n) { i in total += i; log.append(i) }`. It runs
@@ -2195,7 +2220,7 @@ an optimised one; never both. A package's profile may choose with
 | `@immutable` | class | Deeply immutable; implies `Sendable` |
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |
-| `@escaping` | param of function type | Closure may outlive the call |
+| `@escaping` | param of function type, or a function type's parameter | Closure may outlive the call (§17): part of the function type |
 | `@autoclosure` | param of type `() -> T` | The argument, written as a `T`, is the body of a closure the callee calls when it wants the value (§5, S3515) |
 | `@Sendable` | param of function type | Closure runs as a task: its captures are Sendable (§19) |
 | `@polymorphic` | generic fn | Single boxed instantiation |

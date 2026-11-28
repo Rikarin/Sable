@@ -8322,8 +8322,11 @@ public sealed partial class Binder {
             // does a 'v' whose type the context gives as '(inout Int) -> ()'.
             var inOut = !parameterSyntax.ModifierToken.IsNone
                 || parameterSyntax.Type is null && expected is not null && expected.IsInOut(i);
+            // '(k: @escaping () -> Int) in' may keep the closure it is given; so
+            // may a 'k' whose type the context gives as '(@escaping () -> Int) -> ()'.
             var parameter = new ParameterSymbol(parameterSyntax.Identifier.Text, null, symbol, parameterSyntax, i) {
                 Modifier = inOut ? ParameterModifier.InOut : ParameterModifier.None,
+                IsEscaping = parameterSyntax.Type is { } written ? TypeBinder.IsEscaping(written) : expected?.IsEscaping(i) == true,
             };
 
             TypeSymbol parameterType;
@@ -8357,6 +8360,7 @@ public sealed partial class Binder {
                 var implicitType = expected.ParameterTypes[i];
                 var parameter = new ParameterSymbol($"${i}", null, symbol, null, i) {
                     Modifier = expected.IsInOut(i) ? ParameterModifier.InOut : ParameterModifier.None,
+                    IsEscaping = expected.IsEscaping(i),
                 };
                 parameter.TypeResolver = () => implicitType;
                 parameters.Add(parameter);
@@ -8384,7 +8388,10 @@ public sealed partial class Binder {
             symbol.ReturnType,
             symbol.IsAsync,
             declaredThrown ?? _closureThrows
-        ) { InOutParameters = FunctionTypeSymbol.InOutOf(symbol.Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)) };
+        ) {
+            InOutParameters = FunctionTypeSymbol.InOutOf(symbol.Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)),
+            EscapingParameters = FunctionTypeSymbol.EscapingOf(symbol.Parameters.Select(static p => (p.IsEscaping, p.Type))),
+        };
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
     }
@@ -11030,7 +11037,7 @@ public sealed partial class Binder {
                 substitution.Apply(type.ReturnType),
                 type.IsAsync,
                 type.ThrownType is null ? null : substitution.Apply(type.ThrownType)
-            ) { InOutParameters = type.InOutParameters };
+            ) { InOutParameters = type.InOutParameters, EscapingParameters = type.EscapingParameters };
 
     // =======================================================================
     // Patterns

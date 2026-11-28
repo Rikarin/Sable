@@ -1550,6 +1550,15 @@ public sealed class ApplyInst(SilValue callee, SilType resultType, params SilVal
     public override SilType Type { get; } = resultType;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "apply";
+
+    /// <summary>
+    ///     <c>apply [lent 1]</c>: the closure arguments the callee's type says
+    ///     it does not keep, its parameters not <c>@escaping</c>; empty when
+    ///     the callee's type says nothing of them. What the root checker reads
+    ///     for a callee whose body it does not see (a closure, a method an
+    ///     override may replace, a requirement).
+    /// </summary>
+    public ImmutableArray<int> Lent { get; set; } = [];
 }
 
 /// <summary><c>br bb2(%0)</c>: jumps, passing values to the target's arguments.</summary>
@@ -1632,6 +1641,9 @@ public sealed class TryApplyInst(SilValue callee, SilType resultType, SilValue[]
     public override bool HasResult => false;
     public override bool IsTerminator => true;
     public override string Opcode => "try_apply";
+
+    /// <summary>The closure arguments the callee does not keep (<see cref="ApplyInst.Lent" />).</summary>
+    public ImmutableArray<int> Lent { get; set; } = [];
 }
 
 /// <summary><c>unreachable</c>: control cannot get here.</summary>

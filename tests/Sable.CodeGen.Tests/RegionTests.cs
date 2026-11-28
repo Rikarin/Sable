@@ -352,13 +352,45 @@ public sealed class RegionTests {
                           }
 
                           protocol Taker {
-                              fn take(_ f: () -> Int)
+                              fn take(_ f: @escaping () -> Int)
                           }
 
                           class KeepingTaker: Taker {
                               var kept: () -> Int = { 0 }
                               fn take(_ f: @escaping () -> Int) {
                                   kept = f
+                              }
+                          }
+
+                          protocol Peeker {
+                              fn peek(_ f: () -> Int) -> Int
+                          }
+
+                          class Looker: Peeker {
+                              fn peek(_ f: () -> Int) -> Int {
+                                  return f() + 1
+                              }
+                          }
+
+                          class Caller {
+                              var kept: () -> Int = { 0 }
+
+                              fn call(_ f: () -> Int) -> Int {
+                                  return f()
+                              }
+
+                              fn hold(_ f: @escaping () -> Int) {
+                                  kept = f
+                              }
+                          }
+
+                          class LoudCaller: Caller {
+                              override fn call(_ f: () -> Int) -> Int {
+                                  return f() * 2
+                              }
+
+                              override fn hold(_ f: @escaping () -> Int) {
+                                  kept = { f() * 2 }
                               }
                           }
 
@@ -382,6 +414,31 @@ public sealed class RegionTests {
                               keeper.kept = fs[0]
                           }
 
+                          class Hold3 {
+                              var f: () -> Int = { 0 }
+                              var fs: (() -> Int)[>..] = []
+                          }
+
+                          fn putClosure(_ slot: inout () -> Int, _ c: @escaping () -> Int) {
+                              slot = c
+                          }
+
+                          fn addClosure(_ list: inout (() -> Int)[>..], _ c: @escaping () -> Int) {
+                              list.append(c)
+                          }
+
+                          fn boxRegion<T>(_ body: (Region) -> T) -> Box<T> {
+                              region a {
+                                  return Box(held: body(a))
+                              }
+                          }
+
+                          fn tryRegion<R>(_ body: (Region) throws -> R) throws -> R {
+                              region a {
+                                  return try body(a)
+                              }
+                          }
+
                           fn wrap(_ f: inout () -> Int) -> () -> Int {
                               return { f() + 1 }
                           }
@@ -393,10 +450,31 @@ public sealed class RegionTests {
     // A generic caller compiled once passes on the metadata it is given.
     [InlineData(GenericsMode.Specialised, "let n = passOn { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(n.value)", "cannot return a reference rooted in region 'a' (as Test.withRegion<Node&>)")]
     [InlineData(GenericsMode.Unspecialised, "let n = passOn { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(n.value)", "'Test.passOn<T>' would return a reference rooted in region 'a' (in 'Test.withRegion<R>')")]
-    // A closure given to a closure value, a protocol requirement or a method an override may change, may be kept.
-    [InlineData(GenericsMode.Specialised, "let h = Holder2()\nlet k: (() -> Int) -> () = h.keep\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept())", "and the closure called here may keep it past the call")]
-    [InlineData(GenericsMode.Unspecialised, "let h = Holder2()\nlet k: (() -> Int) -> () = h.keep\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept())", "and the closure called here may keep it past the call")]
+    // A closure put in an object's field or array, there or through an address lent to a call.
+    [InlineData(GenericsMode.Specialised, "let o = Hold3()\n" + InRegion + "    o.fs.append({ n.value })\n}\nprint(o.fs[0]())", "cannot store a reference rooted in region 'a' into an object's field")]
+    [InlineData(GenericsMode.Unspecialised, "let o = Hold3()\n" + InRegion + "    o.fs.append({ n.value })\n}\nprint(o.fs[0]())", "cannot store a reference rooted in region 'a' into an object's field")]
+    [InlineData(GenericsMode.Specialised, "let o = Hold3()\n" + InRegion + "    addClosure(&o.fs, { n.value })\n}\nprint(o.fs[0]())", "and 'Test.addClosure' keeps it past the call")]
+    [InlineData(GenericsMode.Specialised, "let o = Hold3()\n" + InRegion + "    putClosure(&o.f, { n.value })\n}\nprint(o.f())", "and 'Test.putClosure' keeps it past the call")]
+    // Closures read from an array in a region's memory are rooted in the region.
+    [InlineData(GenericsMode.Specialised, "var outside: () -> Int = { 0 }\n" + InRegion + "    let held = a.alloc(Calls(fs: []))\n    held.fs.append({ n.value })\n    outside = held.fs[0]\n}\nprint(outside())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    // A 'var' closures share holds what is put in it: the closures that captured it hold that.
+    [InlineData(GenericsMode.Specialised, "var reader: () -> Int = { 0 }\n" + InRegion + "    var cur = n\n    reader = { cur.value }\n}\nprint(reader())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Unspecialised, "var reader: () -> Int = { 0 }\n" + InRegion + "    var cur = n\n    reader = { cur.value }\n}\nprint(reader())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Specialised, "let keeper = Keeper()\n" + InRegion + "    var cur = n\n    keeper.kept = { cur.value }\n}\nprint(keeper.kept())", "cannot store a reference rooted in region 'a' into an object's field")]
+    // A closure variable given another closure on one path only, after the region ended, may still hold the first.
+    [InlineData(GenericsMode.Specialised, "var f: () -> Int = { 0 }\nvar flag = false\n" + InRegion + "    f = { n.value }\n}\nif flag {\n    f = { 2 }\n}\nprint(f())", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    [InlineData(GenericsMode.Specialised, "var f: () -> Int = { 0 }\nfor i in 0..<2 {\n    print(f())\n    region a {\n        let n = a.alloc(Node { value: i, label: \"x\" })\n        f = { n.value }\n    }\n}", "this closure captured a reference into region 'a', which is gone — the region ended")]
+    // A generic result compiled once, in a generic struct's field or given by a call that may throw.
+    [InlineData(GenericsMode.Specialised, "let b = boxRegion { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(b.held.value)", "cannot return a reference rooted in region 'a' (as Test.boxRegion<Node&>)")]
+    [InlineData(GenericsMode.Unspecialised, "let b = boxRegion { r in r.alloc(Node { value: 5, label: \"x\" }) }\nprint(b.held.value)", "'Test.boxRegion<T>' would return a reference rooted in region 'a'")]
+    [InlineData(GenericsMode.Specialised, "do {\n    let n = try tryRegion { r in r.alloc(Node { value: 5, label: \"x\" }) }\n    print(n.value)\n} catch {\n}", "cannot return a reference rooted in region 'a' (as Test.tryRegion<Node&>)")]
+    [InlineData(GenericsMode.Unspecialised, "do {\n    let n = try tryRegion { r in r.alloc(Node { value: 5, label: \"x\" }) }\n    print(n.value)\n} catch {\n}", "'Test.tryRegion<R>' would return a reference rooted in region 'a'")]
+    // A closure given to a closure value, a protocol requirement or a method an override may change, whose type says '@escaping', may be kept.
+    [InlineData(GenericsMode.Specialised, "let h = Holder2()\nlet k: (@escaping () -> Int) -> () = h.keep\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept())", "and the closure called here may keep it past the call (its type's parameter is '@escaping')")]
+    [InlineData(GenericsMode.Unspecialised, "let h = Holder2()\nlet k: (@escaping () -> Int) -> () = h.keep\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept())", "and the closure called here may keep it past the call (its type's parameter is '@escaping')")]
     [InlineData(GenericsMode.Specialised, "let t = KeepingTaker()\nlet taker: any Taker = t\n" + InRegion + "    taker.take({ n.value })\n}\nprint(t.kept())", "and the protocol requirement called here may keep it past the call")]
+    [InlineData(GenericsMode.Specialised, "let c: Caller = LoudCaller()\n" + InRegion + "    c.hold({ n.value })\n}\nprint(c.kept())", "may keep it past the call (its parameter is '@escaping')")]
+    [InlineData(GenericsMode.Unspecialised, "let c: Caller = LoudCaller()\n" + InRegion + "    c.hold({ n.value })\n}\nprint(c.kept())", "may keep it past the call (its parameter is '@escaping')")]
     // An array in a field of a variable, appended to there or through 'inout'.
     [InlineData(GenericsMode.Specialised, "var s = Bag(items: [])\n" + InRegion + "    s.items.append(n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
     [InlineData(GenericsMode.Unspecialised, "var s = Bag(items: [])\n" + InRegion + "    s.items.append(n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
@@ -423,17 +501,25 @@ public sealed class RegionTests {
     public void WhatTheRoutesUseInsideTheRegionIsAllowed(GenericsMode mode) {
         using var _ = SilGen.UseGenerics(mode);
         Assert.Equal(
-            "5\n6\n7\n1 5\n2\n6\n7\n9\n0 2\n1 2\n",
+            "5\n6\n3\n4\n7\n1 5\n2\n6\n7\n5 6 10\n15\n6\n4\n5\n12\n9\n0 2\n1 2\n",
             AssertAgree(
                 Program(
                     Declarations + "\n" + Escapes + "\n" + Routes,
                     """
                         print(passOn { r in r.alloc(Node { value: 5, label: "x" }).value })
                         print(passOn { r in r.alloc(Node { value: 6, label: "y" }).toOwned() }.value)
+                        print(boxRegion { r in r.alloc(Node { value: 3, label: "z" }).value }.held)
+                        do {
+                            print(try tryRegion { r in r.alloc(Node { value: 4, label: "w" }).toOwned() }.value)
+                        } catch {
+                        }
                         let h = Holder2()
-                        let k: (() -> Int) -> () = h.keep
+                        let k: (@escaping () -> Int) -> () = h.keep
                         let t = KeepingTaker()
                         let taker: any Taker = t
+                        let peek: (() -> Int) -> Int = { f in f() }
+                        let peeker: any Peeker = Looker()
+                        let caller: Caller = LoudCaller()
                         region a {
                             let n = a.alloc(Node { value: 5, label: "x" })
                             let seven = 7
@@ -452,7 +538,25 @@ public sealed class RegionTests {
                             var calls = Calls(fs: [])
                             calls.fs.append({ n.value + 2 })
                             print(calls.fs[0]())
+                            print("\(peek({ n.value })) \(peeker.peek({ n.value })) \(caller.call({ n.value }))")
+                            let held = a.alloc(Calls(fs: []))
+                            held.fs.append({ n.value * 3 })
+                            print(held.fs[0]())
+                            var cur = n
+                            let bump = { cur = a.alloc(Node { value: cur.value + 1, label: "b" }) }
+                            bump()
+                            print(callNow({ cur.value }))
                         }
+                        var later: () -> Int = { 0 }
+                        for i in 0..<2 {
+                            region c {
+                                let n = c.alloc(Node { value: 4 + i, label: "c" })
+                                later = { n.value }
+                                print(later())
+                            }
+                            later = { 12 }
+                        }
+                        print(later())
                         let keeper = Keeper()
                         var heap: (() -> Int)[>..] = [{ 9 }]
                         keepFirst(keeper, &heap)

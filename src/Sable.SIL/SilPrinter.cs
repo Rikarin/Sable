@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 
@@ -504,6 +505,7 @@ public static class SilPrinter {
                         break;
 
                     case TryApplyInst tryApply:
+                        AppendLent(builder, tryApply.Lent);
                         builder.Append(' ').Append(Name(tryApply.Callee)).Append('(')
                             .Append(string.Join(", ", tryApply.Arguments.Select(Name)))
                             .Append(") : $").Append(tryApply.ResultType)
@@ -606,6 +608,7 @@ public static class SilPrinter {
                         break;
 
                     case ApplyInst apply:
+                        AppendLent(builder, apply.Lent);
                         builder.Append(' ').Append(Name(apply.Callee)).Append('(')
                             .Append(string.Join(", ", apply.Arguments.Select(Name)))
                             .Append(") : $").Append(apply.Type);
@@ -638,6 +641,15 @@ public static class SilPrinter {
     }
 
     /// <summary>A string as SIL text writes it: quoted, with escapes for what cannot appear bare.</summary>
+    /// <summary>
+    ///     <c> [lent 1, 2]</c>: the closure arguments a call's callee does not keep.
+    /// </summary>
+    static void AppendLent(StringBuilder builder, ImmutableArray<int> lent) {
+        if (!lent.IsEmpty) {
+            builder.Append(" [lent ").Append(string.Join(", ", lent)).Append(']');
+        }
+    }
+
     /// <summary>
     ///     What a nominal type's declaration says after its body: a generic
     ///     instance's type arguments and its name as Sable writes it, and the

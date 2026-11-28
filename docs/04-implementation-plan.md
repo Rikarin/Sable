@@ -605,14 +605,24 @@ is rejected in its body naming the instance; compiled once, its body is
 summarised as giving back a value rooted in its region, and each call with
 a reference among its types is rejected instead; a generic caller compiled
 once that passes its own metadata on is summarised the same, so the call
-is checked where the metadata becomes concrete. An array of references
-holds what is appended, set or lent to it, in a variable or a part of one.
-A closure given to a callee not known — a closure value, a protocol
-requirement, a method an override may change — is taken to be kept: a
-closure's type cannot say `@escaping`, and a conformance or an override
-may add it. A closure made of an `inout` parameter holds what the caller's
+is checked where the metadata becomes concrete — through a generic
+struct's field (`Box<T>`) and a call that may throw too. An array of
+references holds what is appended, set or lent to it, in a variable or a
+part of one; one in an object's or a region's memory holds what is put in
+it there, held to rule 4 as a store is, and a variable's address lent to a
+call that keeps what it is given is kept. A closure given to a callee not
+known — a closure value, a protocol requirement, a method an override may
+change, a function without a body — is kept unless the callee's type says
+its parameter is not `@escaping`: `@escaping` is part of the function type
+(SYNTAX.md §17), SilGen records the closures a call only lends on the
+`apply` (`apply [lent 1]`), and a conformance or an override may not add it
+(S3210). A closure made of an `inout` parameter holds what the caller's
 variable held, and one that took a reference before its region's
-`reset()` may not be called after it. Non-escape now deletes allocations rather than
+`reset()` may not be called after it. A `var` closures share is a box that
+holds what is put in it, inside the region or out: the closures that
+capture it hold that. A closure variable given another closure on every
+path after a region ended no longer holds the first (flow-sensitively, per
+variable). Non-escape now deletes allocations rather than
 ARC traffic (§3.7), from summaries of the same shape. Deferred: references
 in arrays, summaries serialised into a `.sbi` (the `.sbi` itself is
 Phase 5's), secondary diagnostic labels, and rule 5's specialisation by

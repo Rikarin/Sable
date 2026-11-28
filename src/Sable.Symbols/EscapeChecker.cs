@@ -33,11 +33,11 @@ internal static class EscapeChecker {
         walker.Visit(body);
     }
 
-    /// <summary>A closure parameter that is not '@escaping'.</summary>
+    /// <summary>A closure parameter that is not '@escaping': of a function, a closure ('k in', or '$0').</summary>
     static bool IsNonEscapingClosure(ParameterSymbol parameter) =>
         parameter is { IsEscaping: false, IsCallersStorage: false }
         && parameter.Type is FunctionTypeSymbol
-        && parameter.IsDeclared;
+        && (parameter.IsDeclared || parameter.Name.StartsWith('$'));
 
     static bool IsByAddress(ParameterSymbol parameter) => parameter.IsCallersStorage;
 
@@ -94,11 +94,26 @@ internal static class EscapeChecker {
 
                     break;
 
+                // A closure called: what its type says of each parameter, as
+                // a declared function's does.
                 case BoundIndirectCall { Callee: var callee } indirect:
                     _allowed.Add(Unwrapped(callee));
                     for (var i = 0; i < indirect.Arguments.Length; i++) {
-                        if (callee.Type is FunctionTypeSymbol called && called.IsInOut(i)) {
+                        if (callee.Type is not FunctionTypeSymbol called) {
+                            continue;
+                        }
+
+                        if (called.IsInOut(i)) {
                             SelfWritten(indirect.Arguments[i]);
+                        } else if (!called.IsEscaping(i) && i < called.ParameterTypes.Length && called.ParameterTypes[i] is FunctionTypeSymbol) {
+                            switch (Unwrapped(indirect.Arguments[i])) {
+                                case BoundClosure closure:
+                                    _contained.Add(closure);
+                                    break;
+                                case var passed:
+                                    _allowed.Add(passed);
+                                    break;
+                            }
                         }
                     }
 

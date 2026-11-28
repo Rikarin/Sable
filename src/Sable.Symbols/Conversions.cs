@@ -171,7 +171,11 @@ internal sealed class Conversions(CoreTypes core) {
             for (var i = 0; i < from.ParameterTypes.Length; i++) {
                 // 'inout' is how the argument is passed: '(Int) -> ()' does
                 // not take an Int where it is.
-                if (from.ParameterTypes[i].Equals(to.ParameterTypes[i]) && from.IsInOut(i) == to.IsInOut(i)) {
+                // '@escaping' is what the function may do with a closure it is
+                // given: one that keeps it does not fit where callers lend
+                // theirs only for the call, but one that does not keep it
+                // fits anywhere.
+                if (from.ParameterTypes[i].Equals(to.ParameterTypes[i]) && from.IsInOut(i) == to.IsInOut(i) && (!from.IsEscaping(i) || to.IsEscaping(i))) {
                     continue;
                 }
 

@@ -315,7 +315,11 @@ internal static class ConformanceChecker {
                     + mismatch,
                     overridden.DeclaredHere("the member it overrides")
                 );
+                continue;
             }
+
+            ReportEscapingAdded(function, overridden, $"'{type.Name}.{function.Name}' overrides '{overridden.ContainingSymbol?.Name}.{overridden.Name}'",
+                "a call through the base", "the member it overrides", diagnostics);
         }
     }
 
@@ -366,6 +370,31 @@ internal static class ConformanceChecker {
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     A closure parameter <c>@escaping</c> where the member it stands for
+    ///     (the base method it overrides, the requirement it meets) is not
+    ///     (S3210): a caller through that one lends its closure for the call
+    ///     only, and may have captured what dies after it.
+    /// </summary>
+    static void ReportEscapingAdded(FunctionSymbol function, FunctionSymbol original, string what, string caller, string where, DiagnosticBag diagnostics) {
+        for (var i = 0; i < function.Parameters.Length && i < original.Parameters.Length; i++) {
+            var parameter = function.Parameters[i];
+            if (!parameter.IsEscaping || parameter.Type is not FunctionTypeSymbol || original.Parameters[i].IsEscaping) {
+                continue;
+            }
+
+            Report(
+                diagnostics,
+                ErrorCode.ERR_EscapingAdded,
+                function,
+                $"{what}, whose '{original.Parameters[i].Name}' is not '@escaping', but its '{parameter.Name}' is: {caller} lends the closure only "
+                + $"for the call, so it may not be kept; take '@escaping' off '{parameter.Name}', or put it on the original too",
+                original.DeclaredHere(where)
+            );
+            return;
+        }
     }
 
     /// <summary>
@@ -879,6 +908,9 @@ internal static class ConformanceChecker {
                 return;
             }
 
+            ReportEscapingAdded(candidate, requirement, $"'{type.ToDisplayString()}.{candidate.Name}' meets '{protocol.Name}.{requirement.Name}'",
+                "a call through the protocol", $"'{protocol.Name}' requires it here", diagnostics);
+
             // An async requirement waits: its witness hops into the actor.
             if (!requirement.IsAsync) {
                 ReportIsolatedWitness(type, protocol, candidate, diagnostics, required);
@@ -1157,7 +1189,7 @@ internal static class ConformanceChecker {
                     SubstituteSelf(function.ReturnType, protocol, conformer),
                     function.IsAsync,
                     function.ThrownType is null ? null : SubstituteSelf(function.ThrownType, protocol, conformer)
-                ) { IsRethrows = function.IsRethrows, InOutParameters = function.InOutParameters },
+                ) { IsRethrows = function.IsRethrows, InOutParameters = function.InOutParameters, EscapingParameters = function.EscapingParameters },
 
             // 'Decoded<Self>': Self as a type argument, or deeper.
             NamedTypeSymbol { IsConstructed: true } constructed when protocol.SelfTypeParameter is { } selfParameter =>

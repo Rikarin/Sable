@@ -49,18 +49,19 @@ public struct TlsRecordCipher: Sendable {
         if content.count > TlsRecordCipher.maximumContentByteCount || padding < 0 || content.count + 1 + padding > TlsRecordCipher.maximumContentByteCount + 1 {
             throw TlsError.Failed(.internalError, reason: "a record of \(content.count) bytes and \(padding) of padding is too long")
         }
-        var text = content.toArray()
-        text.append(U8(type.code))
-        for _ in 0..<padding {
-            text.append(0)
-        }
-        let length = text.count + 16
+        let length = content.count + 1 + padding + 16
         let header: U8[>..] = [23, 3, 3, U8(length >> 8), U8(length & 0xFF)]
-        let box = try aead.seal(text, nonce: nextNonce(), associatedData: header)
+        // The content is sealed where it is to go, after the header.
         var record = header
-        record.append(contentsOf: box.ciphertext)
-        record.append(contentsOf: box.tag)
-        secureZero(&text)
+        record.reserveCapacity(5 + length)
+        record.append(contentsOf: content)
+        record.append(U8(type.code))
+        for _ in 0..<padding {
+            record.append(0)
+        }
+        var tag = U8[>..](repeating: 0, count: 16)
+        try aead.seal(inPlace: &record[5..<record.count], nonce: nextNonce(), associatedData: header, tag: &tag)
+        record.append(contentsOf: tag)
         return record
     }
 
@@ -76,12 +77,11 @@ public struct TlsRecordCipher: Sendable {
         if record[0] != 23 {
             throw TlsError.Failed(.unexpectedMessage, reason: "a record of type \(record[0]) where a protected one should be")
         }
-        let body = record[5..<record.count - 16]
-        let tag = record[record.count - 16..<record.count]
-        var text: U8[>..] = []
+        var text = record[5..<record.count - 16].toArray()
         do {
-            text = try aead.open(body, nonce: nextNonce(), tag: tag, associatedData: record[0..<5])
+            try aead.open(inPlace: &text, nonce: nextNonce(), tag: record[record.count - 16..<record.count], associatedData: record[0..<5])
         } catch {
+            secureZero(&text)
             throw TlsError.Failed(.badRecordMac, reason: "a record that does not open")
         }
         var end = text.count
@@ -97,9 +97,8 @@ public struct TlsRecordCipher: Sendable {
         guard let type = TlsContentType.of(code: Int(text[end - 1])) else {
             throw TlsError.Failed(.unexpectedMessage, reason: "a record of content type \(text[end - 1])")
         }
-        let content = text[0..<end - 1].toArray()
-        secureZero(&text)
-        return (type, content)
+        text.removeLast(text.count - end + 1)
+        return (type, text)
     }
 
     mutating fn nextNonce() -> U8[>..] {
@@ -121,21 +120,21 @@ union RecordAead: Sendable {
     Gcm(AesGcm)
     ChaCha(ChaCha20Poly1305)
 
-    fn seal(_ text: U8[:], nonce: U8[:], associatedData: U8[:]) throws(TlsError) -> SealedBox {
+    fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(TlsError) {
         do {
-            return match self {
-                case .Gcm(let cipher)    => try cipher.seal(text, nonce: nonce, associatedData: associatedData)
-                case .ChaCha(let cipher) => try cipher.seal(text, nonce: nonce, associatedData: associatedData)
+            match self {
+                case .Gcm(let cipher)    => try cipher.seal(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: &tag)
+                case .ChaCha(let cipher) => try cipher.seal(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: &tag)
             }
         } catch {
             throw TlsError.Failed(.internalError, reason: "a record that would not seal: \(error.description())")
         }
     }
 
-    fn open(_ text: U8[:], nonce: U8[:], tag: U8[:], associatedData: U8[:]) throws(CryptoError) -> U8[>..] {
-        return match self {
-            case .Gcm(let cipher)    => try cipher.open(text, nonce: nonce, tag: tag, associatedData: associatedData)
-            case .ChaCha(let cipher) => try cipher.open(text, nonce: nonce, tag: tag, associatedData: associatedData)
+    fn open(inPlace text: inout U8[:], nonce: U8[:], tag: U8[:], associatedData: U8[:]) throws(CryptoError) {
+        match self {
+            case .Gcm(let cipher)    => try cipher.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
+            case .ChaCha(let cipher) => try cipher.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
         }
     }
 }

@@ -10,6 +10,10 @@ import Sable.Crypto.X509
 /// the connection's own.
 struct TlsRecords: Sendable {
     var incoming: U8[>..] = []
+
+    /// Where in the incoming bytes the next record starts: those before it
+    /// are read.
+    var incomingAt = 0
     var handshakeBytes: U8[>..] = []
     var outgoing: U8[>..] = []
     var received: U8[>..] = []
@@ -75,23 +79,37 @@ struct TlsRecords: Sendable {
                     return message
                 }
             }
-            if incoming.count < 5 {
+            let at = incomingAt
+            if incoming.count - at < 5 {
+                keepUnread()
                 return none
             }
-            let length = Int(incoming[3]) << 8 | Int(incoming[4])
+            let length = Int(incoming[at + 3]) << 8 | Int(incoming[at + 4])
             if length > TlsRecordCipher.maximumContentByteCount + 256 {
                 throw TlsError.Failed(.recordOverflow, reason: "a record of \(length) bytes")
             }
-            if incoming.count < 5 + length {
+            if incoming.count - at < 5 + length {
+                keepUnread()
                 return none
             }
-            let record = incoming[0..<5 + length].toArray()
-            incoming = incoming[5 + length..<incoming.count].toArray()
-            try readRecord(record)
+            incomingAt = at + 5 + length
+            // The bytes shared, not copied, while the record in them is read.
+            let bytes = incoming
+            try readRecord(bytes[at..<at + 5 + length])
         }
     }
 
-    mutating fn readRecord(_ record: U8[>..]) throws(TlsError) {
+    /// The incoming bytes not yet read kept, those read let go.
+    mutating fn keepUnread() {
+        if incomingAt == incoming.count {
+            incoming.removeAll(keepingCapacity: true)
+        } else if incomingAt > 0 {
+            incoming = incoming[incomingAt..<incoming.count].toArray()
+        }
+        incomingAt = 0
+    }
+
+    mutating fn readRecord(_ record: U8[:]) throws(TlsError) {
         let outer = Int(record[0])
         if outer == 20 && !isConnected {
             if record.count != 6 || record[5] != 1 {
@@ -130,7 +148,11 @@ struct TlsRecords: Sendable {
                 if !isConnected {
                     throw TlsError.Failed(.unexpectedMessage, reason: "application data before the handshake is over")
                 }
-                received.append(contentsOf: content)
+                if received.isEmpty {
+                    received = content
+                } else {
+                    received.append(contentsOf: content)
+                }
             }
             case .ChangeCipherSpec => throw TlsError.Failed(.unexpectedMessage, reason: "a protected change_cipher_spec")
         }
@@ -188,7 +210,12 @@ struct TlsRecords: Sendable {
         var at = 0
         while at < bytes.count {
             let end = bytes.count - at > TlsRecordCipher.maximumContentByteCount ? at + TlsRecordCipher.maximumContentByteCount : bytes.count
-            outgoing.append(contentsOf: try writer!.seal(bytes[at..<end], type: .ApplicationData))
+            let record = try writer!.seal(bytes[at..<end], type: .ApplicationData)
+            if outgoing.isEmpty {
+                outgoing = record
+            } else {
+                outgoing.append(contentsOf: record)
+            }
             at = end
         }
     }

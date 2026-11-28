@@ -901,10 +901,12 @@ public static class NativeBuild {
         // are discarded from the executable, by LLVM's objcopy or binutils'.
         // Not every hidden one is made local: CI's GNU ld left a closure (the
         // message of a precondition) GLOBAL HIDDEN in the executable, so every
-        // hidden symbol is made local here first, then the local ones go.
+        // hidden symbol is made local here first, then the local ones go. LLVM's
+        // --discard-all also drops every debug section, from which a stripped
+        // frame is named: they are kept by name (both objcopys take this).
         foreach (var tool in (string[])[Path.Combine(Path.GetDirectoryName(CompilerPath) ?? "", "llvm-objcopy"), "llvm-objcopy", "objcopy"]) {
             try {
-                if (Run(tool, ["--localize-hidden", "--discard-all", executable]).ExitCode == 0) {
+                if (Run(tool, ["--localize-hidden", "--discard-all", "-w", "--keep-section=.debug*", executable]).ExitCode == 0) {
                     return;
                 }
             } catch (System.ComponentModel.Win32Exception) {

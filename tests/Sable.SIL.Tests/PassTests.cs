@@ -1795,6 +1795,89 @@ public sealed class PassTests {
     }
 
     /// <summary>
+    ///     An array kept in a field and passed to a function that writes no
+    ///     field is lent to it, not copied: the object holds it while the
+    ///     callee runs. Passed to one that may write a field — this one, so
+    ///     that the array would go while lent — it is copied as before.
+    /// </summary>
+    [Fact]
+    public void AFieldsArrayIsLentToACalleeThatWritesNoField() {
+        var module = Lowered(
+            """
+            class Pool {
+                var bytes: U8[>..] = []
+                var seen = 0
+            }
+            @inline(never)
+            fn sum(_ a: U8[>..]) -> Int {
+                var total = 0
+                for b in a {
+                    total += Int(b)
+                }
+                return total
+            }
+            @inline(never)
+            fn replace(_ a: U8[>..], _ pool: Pool) -> Int {
+                pool.bytes = []
+                return sum(a)
+            }
+            @inline(never)
+            fn lent(_ pool: Pool) -> Int { return sum(pool.bytes) }
+            @inline(never)
+            fn copied(_ pool: Pool) -> Int { return replace(pool.bytes, pool) }
+            fn run() -> Int {
+                let pool = Pool()
+                pool.bytes = [1, 2, 3]
+                let first = lent(pool)
+                return first * 100 + copied(pool) * 10 + lent(pool)
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.Equal(0, Copies(module, "M.lent"));
+        Assert.Equal(1, Copies(module, "M.copied"));
+        Assert.Equal(660L, new SilInterpreter(module).Run("M.run"));
+    }
+
+
+    /// <summary>
+    ///     What a callee may write is summarised again each time the pass
+    ///     runs: a store into a field a pass between two runs took out of the
+    ///     callee no longer keeps its caller's array from being lent, and one
+    ///     put into it would not be missed.
+    /// </summary>
+    [Fact]
+    public void WhatACalleeWritesIsSummarisedForEachRun() {
+        var module = Lowered(
+            """
+            class Pool {
+                var bytes: U8[>..] = []
+                var seen = 0
+            }
+            @inline(never)
+            fn count(_ a: U8[>..], _ pool: Pool) -> Int {
+                pool.seen = 1
+                return a.count
+            }
+            @inline(never)
+            fn lent(_ pool: Pool) -> Int { return count(pool.bytes, pool) }
+            """
+        );
+        var pass = new BorrowLoads();
+        pass.Run(module);
+        Assert.Equal(1, Copies(module, "M.lent"));
+
+        // As a later pass might: the store goes, and with it what 'count' writes.
+        foreach (var block in module.Find("M.count")!.Blocks) {
+            block.Instructions.RemoveAll(static i => i is StoreInst { Address: RefElementAddrInst });
+        }
+
+        pass.Run(module);
+        Assert.Equal(0, Copies(module, "M.lent"));
+    }
+
+    /// <summary>
     ///     A <c>let</c> field of an object a caller lends is borrowed across a
     ///     call; a <c>var</c> field, which the call could change, is copied,
     ///     and so is one of an object that goes before the copy does.

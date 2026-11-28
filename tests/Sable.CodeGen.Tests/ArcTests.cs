@@ -44,6 +44,39 @@ public sealed class ArcTests {
                                 """;
 
     /// <summary>
+    ///     A field's array passed to a function that writes no field is lent,
+    ///     not retained; passed to one that empties the field while it runs,
+    ///     it is kept alive by a copy, and the callee still sees its boxes.
+    /// </summary>
+    [Fact]
+    public void AFieldsArrayLentToACallStaysAliveWhileItRuns() =>
+        Assert.Equal(
+            "1\nbye x\nbye y\n1 0\n",
+            AssertAgree(
+                Program(
+                    Declarations + """
+
+                                   class Shelf {
+                                       var boxes: Box[>..] = []
+                                   }
+
+                                   fn emptied(_ boxes: Box[>..], _ shelf: Shelf) -> Int {
+                                       shelf.boxes = []
+                                       return find(boxes, "y")
+                                   }
+                                   """,
+                    """
+                        let shelf = Shelf()
+                        shelf.boxes = [Box("x", none), Box("y", none)]
+                        print("\(find(shelf.boxes, "y"))")
+                        let found = emptied(shelf.boxes, shelf)
+                        print("\(found) \(shelf.boxes.count)")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
     ///     The loop's copy of 'boxes' keeps x and y alive after 'boxes = []',
     ///     and goes as the loop ends: 'kept = []' is then their last reference.
     /// </summary>

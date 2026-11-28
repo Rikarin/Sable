@@ -1,0 +1,376 @@
+module Sable.Syntax
+
+import Sable.Text
+
+/// A piece of a syntax tree as it is stored: a node, a token or a piece of
+/// trivia, with its kind, its width and what it is made of, and no position.
+/// Green nodes are immutable and know nothing of their parent, so one may be
+/// shared by many trees: an incremental reparse keeps the green nodes an
+/// edit did not reach (SyntaxReuse). A SyntaxNode gives one its place.
+///
+/// Every byte of the text is in exactly one token or piece of trivia, so the
+/// tree gives back the text it was parsed from (`fullText`). Widths are in
+/// UTF-8 bytes and count trivia.
+///
+/// A kind is a language's number for what it is (a generated `<Language>Kind`
+/// enum, from `@syntax`); 0 is a list's (`GreenNode.listKind`).
+///
+/// ```sable
+/// let space = GreenNode.trivia(9, " ")
+/// let x = GreenNode.token(1, "x", trailing: [space])
+/// let plus = GreenNode.token(2, "+", trailing: [space])
+/// let y = GreenNode.token(1, "y")
+/// let sum = GreenNode.node(20, [x, plus, y])
+/// assert(sum.fullText == "x + y")
+/// assert(sum.width == 5 && sum.slotCount == 3)
+/// assert(sum.slot(1)!.text == "+" && sum.slot(1)!.trailingTrivia[0].text == " ")
+/// ```
+@immutable
+public final class GreenNode: Sendable {
+    /// The kind of a list: a node whose children are the items of one slot.
+    public static let listKind: U16 = 0
+
+    /// What it is: the language's kind.
+    public let kind: U16
+    /// How many bytes of the text it takes, its trivia counted.
+    public let width: Int
+    /// A token's or a piece of trivia's text, without its trivia; "" for a
+    /// node.
+    public let text: String
+    let shape: GreenShape
+    let marks: GreenMarks
+    let children: GreenNode?[>..]
+    let leading: GreenNode[>..]
+    let trailing: GreenNode[>..]
+    /// The errors found here, relative to its start, its trivia counted:
+    /// its own, not its children's.
+    public let ownDiagnostics: SyntaxDiagnostic[>..]
+
+    init(kind: U16, width: Int, text: String, shape: GreenShape, marks: GreenMarks, children: GreenNode?[>..], leading: GreenNode[>..], trailing: GreenNode[>..], diagnostics: SyntaxDiagnostic[>..]) {
+        self.kind = kind
+        self.width = width
+        self.text = text
+        self.shape = shape
+        self.marks = marks
+        self.children = children
+        self.leading = leading
+        self.trailing = trailing
+        self.ownDiagnostics = diagnostics
+    }
+
+    // ---- Making them ------------------------------------------------------
+
+    /// A token: its text, and the trivia before and after it.
+    public static fn token(_ kind: U16, _ text: String, leading: GreenNode[>..] = [], trailing: GreenNode[>..] = [], diagnostics: SyntaxDiagnostic[>..] = []) -> GreenNode {
+        var width = text.utf8Count
+        for piece in leading {
+            precondition(piece.isTrivia, "a token's leading trivia is trivia")
+            width += piece.width
+        }
+        for piece in trailing {
+            precondition(piece.isTrivia, "a token's trailing trivia is trivia")
+            width += piece.width
+        }
+        var marks: GreenMarks = []
+        if !diagnostics.isEmpty {
+            marks = .Diagnostics
+        }
+        return GreenNode(kind: kind, width: width, text: text, shape: .Token, marks: marks, children: [], leading: leading, trailing: trailing, diagnostics: diagnostics)
+    }
+
+    /// A token the text does not have, where the parser expected one: no
+    /// text, no width, and usually a diagnostic that says what was expected.
+    public static fn missing(_ kind: U16, diagnostics: SyntaxDiagnostic[>..] = []) -> GreenNode {
+        var marks: GreenMarks = .Missing
+        if !diagnostics.isEmpty {
+            marks = marks | .Diagnostics
+        }
+        return GreenNode(kind: kind, width: 0, text: "", shape: .Token, marks: marks, children: [], leading: [], trailing: [], diagnostics: diagnostics)
+    }
+
+    /// A piece of trivia: what a token carries that is not part of the
+    /// grammar, as white space and comments.
+    public static fn trivia(_ kind: U16, _ text: String) -> GreenNode {
+        return GreenNode(kind: kind, width: text.utf8Count, text: text, shape: .Trivia, marks: [], children: [], leading: [], trailing: [], diagnostics: [])
+    }
+
+    /// A node of those children, a slot each: none for an optional child
+    /// that is not there.
+    public static fn node(_ kind: U16, _ children: GreenNode?[>..], diagnostics: SyntaxDiagnostic[>..] = []) -> GreenNode {
+        var width = 0
+        var marks: GreenMarks = []
+        if !diagnostics.isEmpty {
+            marks = .Diagnostics
+        }
+        for child in children {
+            if let child = child {
+                precondition(!child.isTrivia, "a node's child is a node or a token, not trivia")
+                width += child.width
+                marks = marks | child.inherited
+            }
+        }
+        return GreenNode(kind: kind, width: width, text: "", shape: .Node, marks: marks, children: children, leading: [], trailing: [], diagnostics: diagnostics)
+    }
+
+    /// A node of those children, every slot filled.
+    public static fn node(_ kind: U16, _ children: GreenNode[>..], diagnostics: SyntaxDiagnostic[>..] = []) -> GreenNode {
+        var slots: GreenNode?[>..] = []
+        slots.reserveCapacity(children.count)
+        for child in children {
+            slots.append(child)
+        }
+        return GreenNode.node(kind, slots, diagnostics: diagnostics)
+    }
+
+    /// A list: a node of `listKind` whose children are a slot's items, nodes
+    /// or tokens (a separated list's separators among them).
+    public static fn list(_ items: GreenNode[>..]) -> GreenNode {
+        return GreenNode.node(GreenNode.listKind, items)
+    }
+
+    /// The same node with those diagnostics as well as its own.
+    public fn adding(diagnostics more: SyntaxDiagnostic[>..]) -> GreenNode {
+        var all = ownDiagnostics
+        all.append(contentsOf: more)
+        let marks = more.isEmpty ? self.marks : self.marks | .Diagnostics
+        return GreenNode(kind: kind, width: width, text: text, shape: shape, marks: marks, children: children, leading: leading, trailing: trailing, diagnostics: all)
+    }
+
+    /// The same node with another child in one slot: none takes it away.
+    public fn replacing(slot index: Int, with child: GreenNode?) -> GreenNode {
+        precondition(isNode, "only a node has slots")
+        var children = self.children
+        children[index] = child
+        return GreenNode.node(kind, children, diagnostics: ownDiagnostics)
+    }
+
+    /// The same token with other trivia.
+    public fn withTrivia(leading: GreenNode[>..], trailing: GreenNode[>..]) -> GreenNode {
+        precondition(isToken, "only a token has trivia")
+        if isMissing {
+            return self
+        }
+        return GreenNode.token(kind, text, leading: leading, trailing: trailing, diagnostics: ownDiagnostics)
+    }
+
+    // ---- What it is -------------------------------------------------------
+
+    /// Whether it is a token, missing or not.
+    public var isToken: Bool => shape == .Token
+    /// Whether it is a piece of trivia.
+    public var isTrivia: Bool => shape == .Trivia
+    /// Whether it is a node, a list among them.
+    public var isNode: Bool => shape == .Node
+    /// Whether it is a list.
+    public var isList: Bool => shape == .Node && kind == GreenNode.listKind
+    /// Whether it is a token the parser expected and the text does not have.
+    public var isMissing: Bool => marks.contains(.Missing)
+    /// Whether it or anything in it has a missing token.
+    public var containsMissing: Bool => marks.contains(.Missing) || marks.contains(.ContainsMissing)
+    /// Whether it or anything in it has a diagnostic.
+    public var containsDiagnostics: Bool => marks.contains(.Diagnostics) || marks.contains(.ContainsDiagnostics)
+
+    // What a node made of this one knows of it.
+    var inherited: GreenMarks {
+        get {
+            var marks: GreenMarks = []
+            if containsMissing {
+                marks = marks | .ContainsMissing
+            }
+            if containsDiagnostics {
+                marks = marks | .ContainsDiagnostics
+            }
+            return marks
+        }
+    }
+
+    // ---- What it is made of -----------------------------------------------
+
+    /// How many slots a node has, empty ones counted: 0 for a token.
+    public var slotCount: Int => children.count
+
+    /// What is in a slot of a node: none when it is empty.
+    public fn slot(_ index: Int) -> GreenNode? {
+        return children[index]
+    }
+
+    /// A token's trivia before its text.
+    public var leadingTrivia: GreenNode[>..] => leading
+    /// A token's trivia after its text.
+    public var trailingTrivia: GreenNode[>..] => trailing
+
+    /// The offset of a slot from the node's start.
+    public fn offset(ofSlot index: Int) -> Int {
+        var offset = 0
+        for i in 0..<index {
+            if let child = children[i] {
+                offset += child.width
+            }
+        }
+        return offset
+    }
+
+    /// Its first token that takes a byte or is missing, or none for a node
+    /// of none.
+    public var firstToken: GreenNode? {
+        get {
+            if isToken {
+                return self
+            }
+            for child in children {
+                if let child = child {
+                    if let token = child.firstToken {
+                        return token
+                    }
+                }
+            }
+            return none
+        }
+    }
+
+    /// Its last token.
+    public var lastToken: GreenNode? {
+        get {
+            if isToken {
+                return self
+            }
+            var i = children.count - 1
+            while i >= 0 {
+                if let child = children[i] {
+                    if let token = child.lastToken {
+                        return token
+                    }
+                }
+                i -= 1
+            }
+            return none
+        }
+    }
+
+    /// How many bytes of trivia it starts with: a token's leading trivia, or
+    /// a node's first token's.
+    public var leadingWidth: Int {
+        get {
+            guard let token = firstToken else {
+                return 0
+            }
+            var width = 0
+            for piece in token.leading {
+                width += piece.width
+            }
+            return width
+        }
+    }
+
+    /// How many bytes of trivia it ends with.
+    public var trailingWidth: Int {
+        get {
+            guard let token = lastToken else {
+                return 0
+            }
+            var width = 0
+            for piece in token.trailing {
+                width += piece.width
+            }
+            return width
+        }
+    }
+
+    // ---- Its text ---------------------------------------------------------
+
+    /// The text it was made from, its trivia included.
+    public var fullText: String {
+        get {
+            if shape != .Node {
+                if leading.isEmpty && trailing.isEmpty {
+                    return text
+                }
+            }
+            let builder = TextBuilder(capacity: width)
+            write(into: builder)
+            return builder.build()
+        }
+    }
+
+    /// Writes its full text.
+    public fn write(into builder: TextBuilder) {
+        if shape == .Node {
+            for child in children {
+                if let child = child {
+                    child.write(into: builder)
+                }
+            }
+            return
+        }
+        for piece in leading {
+            builder.append(piece.text)
+        }
+        builder.append(text)
+        for piece in trailing {
+            builder.append(piece.text)
+        }
+    }
+
+    /// Whether the two are the same tree: kinds, texts, trivia, slots and
+    /// diagnostics alike, whether or not they are the same objects.
+    public fn isEquivalent(to other: GreenNode) -> Bool {
+        if self === other {
+            return true
+        }
+        if kind != other.kind || shape != other.shape || width != other.width || marks != other.marks || text != other.text {
+            return false
+        }
+        if ownDiagnostics != other.ownDiagnostics {
+            return false
+        }
+        if !GreenNode.equivalent(leading, other.leading) || !GreenNode.equivalent(trailing, other.trailing) {
+            return false
+        }
+        if children.count != other.children.count {
+            return false
+        }
+        for i in 0..<children.count {
+            if let a = children[i] {
+                guard let b = other.children[i] else {
+                    return false
+                }
+                if !a.isEquivalent(to: b) {
+                    return false
+                }
+            } else if let _ = other.children[i] {
+                return false
+            }
+        }
+        return true
+    }
+
+    static fn equivalent(_ a: GreenNode[>..], _ b: GreenNode[>..]) -> Bool {
+        if a.count != b.count {
+            return false
+        }
+        for i in 0..<a.count {
+            if !a[i].isEquivalent(to: b[i]) {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+// What a GreenNode is.
+@derive(Equatable)
+enum GreenShape: U8 {
+    Node
+    Token
+    Trivia
+}
+
+// What a GreenNode or what is in it has.
+@flags
+enum GreenMarks: U8 {
+    None = 0
+    Missing = 1
+    ContainsMissing = 2
+    Diagnostics = 4
+    ContainsDiagnostics = 8
+}

@@ -1,0 +1,86 @@
+module Sable.Syntax
+
+import Sable.Serialize
+
+/// A parsed text: the text, the file it came from, and its tree, whose root
+/// gives back the text exactly. It finds an offset's line and column.
+///
+/// ```sable
+/// let text = "a\nbc"
+/// let root = GreenNode.node(20, [GreenNode.token(1, "a", trailing: [GreenNode.trivia(9, "\n")]), GreenNode.token(1, "bc")])
+/// let tree = SyntaxTree(text, root, path: "x.calc")
+/// assert(tree.root.fullText == text)
+/// let at = tree.position(of: 3)
+/// assert(at.line == 2 && at.column == 2)
+/// assert(tree.lineCount == 2)
+/// ```
+@immutable
+public final class SyntaxTree: Sendable {
+    /// The text it was parsed from.
+    public let text: String
+    /// The file the text is from, or "".
+    public let path: String
+    /// Its root.
+    public let root: SyntaxNode
+    let lineStarts: Int[>..]
+
+    /// The tree of a text: its root's full text is the text, which traps if it
+    /// is not.
+    public init(_ text: String, _ root: GreenNode, path: String = "") {
+        precondition(root.width == text.utf8Count, "a tree's root takes the whole text")
+        self.text = text
+        self.path = path
+        self.root = SyntaxNode(root)
+        self.lineStarts = SyntaxTree.lines(of: text)
+    }
+
+    static fn lines(of text: String) -> Int[>..] {
+        var starts: Int[>..] = [0]
+        let bytes = text.utf8
+        var i = 0
+        let count = bytes.count
+        while i < count {
+            let byte = bytes[i]
+            if byte == 0x0A {
+                starts.append(i + 1)
+            } else if byte == 0x0D {
+                if i + 1 < count && bytes[i + 1] == 0x0A {
+                    i += 1
+                }
+                starts.append(i + 1)
+            }
+            i += 1
+        }
+        return starts
+    }
+
+    /// How many lines the text has: one more than its line breaks.
+    public var lineCount: Int => lineStarts.count
+
+    /// The line and column of an offset, both from 1; the column counts
+    /// scalars. An offset past the end traps.
+    public fn position(of offset: Int) -> Position {
+        precondition(offset >= 0 && offset <= text.utf8Count, "an offset within the text")
+        var low = 0
+        var high = lineStarts.count - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if lineStarts[middle] <= offset {
+                low = middle
+            } else {
+                high = middle - 1
+            }
+        }
+        let start = lineStarts[low]
+        let column = text[String.Index(utf8Offset: start)..<String.Index(utf8Offset: offset)].count + 1
+        return Position(offset: offset, line: low + 1, column: column)
+    }
+
+    /// The offset a line starts at, from 1.
+    public fn offset(ofLine line: Int) -> Int {
+        return lineStarts[line - 1]
+    }
+
+    /// Every diagnostic of the tree, in order.
+    public var diagnostics: SyntaxDiagnostic[>..] => root.diagnostics
+}

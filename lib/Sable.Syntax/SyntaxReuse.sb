@@ -1,0 +1,172 @@
+module Sable.Syntax
+
+/// What a parser may take from the old tree as it parses the text again after
+/// an edit: an incremental reparse. The parser asks, at each place it would
+/// parse a node, for an old green node that starts there; it gets one only if
+/// no change reached it, and takes it whole, its lexer moving on past its
+/// width. So a reparse makes new nodes for what the edit touched and the
+/// nodes it is in, and keeps the rest of the old tree.
+///
+/// A node is kept only if no change comes within `margin` bytes of it (an
+/// edit next to a token can change what the token is: `ab` and `c` become
+/// `abc`), and it has no missing token and no diagnostic. A parser whose
+/// lexer looks further ahead than one byte past a token passes a wider
+/// margin.
+///
+/// The parser asks with the new text's positions, in order as it goes; it
+/// may ask at a position again, or earlier, at the cost of looking again from
+/// the root.
+///
+/// ```sable
+/// // An old tree of 'a b' (kinds: 1 a token, 5 a word, 20 the list).
+/// fn word(_ text: String, _ space: String) -> GreenNode {
+///     let trailing: GreenNode[>..] = space.isEmpty ? [] : [GreenNode.trivia(9, space)]
+///     return GreenNode.node(5, [GreenNode.token(1, text, trailing: trailing)])
+/// }
+/// let old = SyntaxTree("a b", GreenNode.node(20, [word("a", " "), word("b", "")]))
+/// // 'a b' becomes 'x a b': three bytes put at the start.
+/// var reuse = SyntaxReuse(old, [TextChange(TextSpan(start: 0, length: 0), "x  ")])
+/// assert(reuse.take(at: 0, where: { $0.kind == 5 }) == none)  // new text
+/// assert(reuse.take(at: 3, where: { $0.kind == 5 }) == none)  // next to the change
+/// assert(reuse.take(at: 5, where: { $0.kind == 5 })!.fullText == "b")
+/// assert(reuse.reusedCount == 1)
+/// ```
+public struct SyntaxReuse {
+    let root: GreenNode?
+    let changes: TextChange[>..]
+    let margin: Int
+    var path: ReuseStep[>..] = []
+    var last: Int = -1
+    /// How many nodes it has given.
+    public private(set) var reusedCount: Int = 0
+    /// How many bytes of text the nodes it has given take.
+    public private(set) var reusedWidth: Int = 0
+
+    /// What may be kept of the old tree after the changes, which are in the
+    /// old text's positions, in order and apart.
+    public init(_ old: SyntaxTree, _ changes: TextChange[:], margin: Int = 1) {
+        self.init(old: old.root.green, changes, margin: margin)
+    }
+
+    /// The same, of an old root.
+    public init(old root: GreenNode, _ changes: TextChange[:], margin: Int = 1) {
+        TextChange.check(changes, within: root.width)
+        precondition(margin >= 0, "a margin of 0 bytes or more")
+        self.root = root
+        self.changes = changes.toArray()
+        self.margin = margin
+    }
+
+    /// Nothing to keep: what a first parse has.
+    public static var nothing: SyntaxReuse => SyntaxReuse(root: none, changes: [], margin: 0)
+
+    init(root: GreenNode?, changes: TextChange[>..], margin: Int) {
+        self.root = root
+        self.changes = changes
+        self.margin = margin
+    }
+
+    /// Where a position of the new text was in the old one, or none for text
+    /// a change put there.
+    public fn oldPosition(of position: Int) -> Int? {
+        var delta = 0
+        for change in changes {
+            let start = change.span.start + delta
+            if position < start {
+                return position - delta
+            }
+            if position < start + change.newText.utf8Count {
+                return none
+            }
+            delta += change.delta
+        }
+        return position - delta
+    }
+
+    /// The largest old node or token that starts at the position of the new
+    /// text, that no change came near, and that `accept` takes: none if there
+    /// is none. The parser goes on past its width.
+    public mutating fn take(at position: Int, where accept: (GreenNode) -> Bool) -> GreenNode? {
+        guard let root = root else {
+            return none
+        }
+        guard let old = oldPosition(of: position) else {
+            return none
+        }
+        if old < last || path.isEmpty {
+            path = [ReuseStep(node: root, start: 0, slot: 0, childStart: 0)]
+        }
+        last = old
+        // Up to the innermost step that holds the position.
+        while path.count > 1 && !path[path.count - 1].holds(old) {
+            path.removeLast()
+        }
+        if !path[0].holds(old) {
+            return none
+        }
+        while true {
+            let top = path[path.count - 1]
+            if top.start == old && isKept(top.node, at: top.start) && accept(top.node) {
+                reusedCount += 1
+                reusedWidth += top.node.width
+                return top.node
+            }
+            if !top.node.isNode {
+                return none
+            }
+            // Along the step's slots to the one that holds the position.
+            var step = top
+            while step.slot < step.node.slotCount {
+                if let child = step.node.slot(step.slot) {
+                    if old < step.childStart + child.width {
+                        break
+                    }
+                    step.childStart += child.width
+                }
+                step.slot += 1
+            }
+            path[path.count - 1] = step
+            if step.slot == step.node.slotCount {
+                return none
+            }
+            let child = step.node.slot(step.slot)!
+            if child.isToken && step.childStart != old {
+                return none
+            }
+            path.append(ReuseStep(node: child, start: step.childStart, slot: 0, childStart: step.childStart))
+        }
+    }
+
+    // Whether no change comes within the margin of the node there, and it has
+    // nothing a parse would make again.
+    fn isKept(_ node: GreenNode, at start: Int) -> Bool {
+        if node.width == 0 || node.containsMissing || node.containsDiagnostics {
+            return false
+        }
+        let end = start + node.width
+        for change in changes {
+            let near = change.span.start - margin
+            let far = change.span.end + margin
+            if near >= end {
+                return true
+            }
+            if start < far && near < end {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+// A node on the way down to the last position asked for, and how far along
+// its slots that position is.
+struct ReuseStep {
+    var node: GreenNode
+    var start: Int
+    var slot: Int
+    var childStart: Int
+
+    fn holds(_ offset: Int) -> Bool {
+        return offset >= start && offset < start + node.width
+    }
+}

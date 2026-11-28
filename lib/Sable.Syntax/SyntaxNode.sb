@@ -1,0 +1,351 @@
+module Sable.Syntax
+
+import Sable.Text
+
+/// A node of a syntax tree in its place: a GreenNode with its position in the
+/// text and its parent. Red nodes are made as the tree is walked, one for
+/// each step down, and none is kept: two made for the same place are `==`,
+/// not the same object. A language's typed nodes (from `@syntax`) wrap one.
+///
+/// ```sable
+/// let x = GreenNode.token(1, "x", trailing: [GreenNode.trivia(9, " ")])
+/// let sum = GreenNode.node(20, [x, GreenNode.token(2, "+", trailing: [GreenNode.trivia(9, " ")]), GreenNode.token(1, "y")])
+/// let root = SyntaxNode(GreenNode.node(30, [sum, GreenNode.token(3, ";")]))
+/// let plus = root.token(at: 2)!
+/// assert(plus.text == "+" && plus.span == TextSpan(start: 2, length: 1))
+/// assert(plus.parent!.kind == 20 && plus.parent!.parent! == root)
+/// assert(root.childNode(0)!.span == TextSpan(start: 0, length: 5))
+/// assert(root.tokens.map({ $0.text }) == ["x", "+", "y", ";"])
+/// ```
+@immutable
+public final class SyntaxNode: Sendable, Equatable, Hashable, Debug {
+    /// What it is, without its place.
+    public let green: GreenNode
+    /// Where it starts in the text, its leading trivia counted.
+    public let position: Int
+    /// The node it is in, or none for the root.
+    public let parent: SyntaxNode?
+    /// Which of its parent's slots it is in.
+    public let indexInParent: Int
+
+    /// The root of a tree: the green node at position 0.
+    public init(_ green: GreenNode) {
+        precondition(green.isNode, "a SyntaxNode is of a node; a token is a SyntaxToken")
+        self.green = green
+        self.position = 0
+        self.parent = none
+        self.indexInParent = 0
+    }
+
+    init(_ green: GreenNode, position: Int, parent: SyntaxNode?, index: Int) {
+        self.green = green
+        self.position = position
+        self.parent = parent
+        self.indexInParent = index
+    }
+
+    public operator == (lhs: SyntaxNode, rhs: SyntaxNode) -> Bool {
+        return lhs.green === rhs.green && lhs.position == rhs.position
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(position)
+        hasher.combine(green.kind)
+        hasher.combine(green.width)
+    }
+
+    /// Its kind and its full span: `SyntaxNode(20, 0..<5)`.
+    public fn debugDescription() -> String {
+        return "SyntaxNode(\(green.kind), \(position)..<\(position + green.width))"
+    }
+
+    // ---- What it is -------------------------------------------------------
+
+    /// The language's kind.
+    public var kind: U16 => green.kind
+    /// Whether it is a list of a slot's items.
+    public var isList: Bool => green.isList
+    /// Whether it or anything in it is a token the text does not have.
+    public var containsMissing: Bool => green.containsMissing
+    /// Whether it or anything in it has a diagnostic.
+    public var containsDiagnostics: Bool => green.containsDiagnostics
+
+    /// Where it is, its trivia counted.
+    public var fullSpan: TextSpan => TextSpan(start: position, length: green.width)
+    /// Where it is, without the trivia before its first token and after its
+    /// last.
+    public var span: TextSpan {
+        get {
+            let start = position + green.leadingWidth
+            let end = position + green.width - green.trailingWidth
+            return end >= start ? TextSpan(from: start, to: end) : TextSpan(start: start, length: 0)
+        }
+    }
+
+    /// Its text, its trivia included.
+    public var fullText: String => green.fullText
+    /// Its text, without the trivia at either end.
+    public var text: String {
+        get {
+            let full = green.fullText
+            let lead = green.leadingWidth
+            let end = green.width - green.trailingWidth
+            return end > lead ? TextSpan(from: lead, to: end).of(full) : ""
+        }
+    }
+
+    /// The root of its tree.
+    public var root: SyntaxNode {
+        get {
+            var node = self
+            while let up = node.parent {
+                node = up
+            }
+            return node
+        }
+    }
+
+    /// The nodes it is in, its parent first.
+    public var ancestors: SyntaxNode[>..] {
+        get {
+            var all: SyntaxNode[>..] = []
+            var node = parent
+            while let up = node {
+                all.append(up)
+                node = up.parent
+            }
+            return all
+        }
+    }
+
+    // ---- Its children -----------------------------------------------------
+
+    /// How many slots it has, empty ones counted.
+    public var slotCount: Int => green.slotCount
+
+    /// What is in a slot, in its place: none when the slot is empty.
+    public fn child(_ index: Int) -> SyntaxElement? {
+        guard let child = green.slot(index) else {
+            return none
+        }
+        return element(child, at: position + green.offset(ofSlot: index), index: index)
+    }
+
+    /// The node in a slot, or none when the slot is empty or has a token.
+    public fn childNode(_ index: Int) -> SyntaxNode? {
+        guard let child = green.slot(index) else {
+            return none
+        }
+        if !child.isNode {
+            return none
+        }
+        return SyntaxNode(child, position: position + green.offset(ofSlot: index), parent: self, index: index)
+    }
+
+    /// The token in a slot, or none when the slot is empty or has a node.
+    public fn childToken(_ index: Int) -> SyntaxToken? {
+        guard let child = green.slot(index) else {
+            return none
+        }
+        if !child.isToken {
+            return none
+        }
+        return SyntaxToken(child, position: position + green.offset(ofSlot: index), parent: self, index: index)
+    }
+
+    /// What is in its slots, in order, the empty ones left out.
+    public var children: SyntaxElement[>..] {
+        get {
+            var all: SyntaxElement[>..] = []
+            var at = position
+            for i in 0..<green.slotCount {
+                if let child = green.slot(i) {
+                    all.append(element(child, at: at, index: i))
+                    at += child.width
+                }
+            }
+            return all
+        }
+    }
+
+    /// The nodes in its slots, in order.
+    public var childNodes: SyntaxNode[>..] {
+        get {
+            var all: SyntaxNode[>..] = []
+            var at = position
+            for i in 0..<green.slotCount {
+                if let child = green.slot(i) {
+                    if child.isNode {
+                        all.append(SyntaxNode(child, position: at, parent: self, index: i))
+                    }
+                    at += child.width
+                }
+            }
+            return all
+        }
+    }
+
+    fn element(_ child: GreenNode, at offset: Int, index: Int) -> SyntaxElement {
+        if child.isToken {
+            return .Token(SyntaxToken(child, position: offset, parent: self, index: index))
+        }
+        return .Node(SyntaxNode(child, position: offset, parent: self, index: index))
+    }
+
+    // ---- Its tokens -------------------------------------------------------
+
+    /// Every token in it, in order, the missing ones among them.
+    public var tokens: SyntaxToken[>..] {
+        get {
+            var all: SyntaxToken[>..] = []
+            collectTokens(into: &all)
+            return all
+        }
+    }
+
+    fn collectTokens(into all: inout SyntaxToken[>..]) {
+        var at = position
+        for i in 0..<green.slotCount {
+            if let child = green.slot(i) {
+                if child.isToken {
+                    all.append(SyntaxToken(child, position: at, parent: self, index: i))
+                } else {
+                    SyntaxNode(child, position: at, parent: self, index: i).collectTokens(into: &all)
+                }
+                at += child.width
+            }
+        }
+    }
+
+    /// Its first token, or none for a node of none.
+    public var firstToken: SyntaxToken? {
+        get {
+            var at = position
+            for i in 0..<green.slotCount {
+                if let child = green.slot(i) {
+                    if child.isToken {
+                        return SyntaxToken(child, position: at, parent: self, index: i)
+                    }
+                    if let token = SyntaxNode(child, position: at, parent: self, index: i).firstToken {
+                        return token
+                    }
+                    at += child.width
+                }
+            }
+            return none
+        }
+    }
+
+    /// Its last token.
+    public var lastToken: SyntaxToken? {
+        get {
+            var i = green.slotCount - 1
+            var end = position + green.width
+            while i >= 0 {
+                if let child = green.slot(i) {
+                    let at = end - child.width
+                    if child.isToken {
+                        return SyntaxToken(child, position: at, parent: self, index: i)
+                    }
+                    if let token = SyntaxNode(child, position: at, parent: self, index: i).lastToken {
+                        return token
+                    }
+                    end = at
+                }
+                i -= 1
+            }
+            return none
+        }
+    }
+
+    /// The token whose full span, its trivia counted, has the offset; at the
+    /// end of the node, its last token. None for an offset outside it.
+    public fn token(at offset: Int) -> SyntaxToken? {
+        if offset < position || offset > position + green.width {
+            return none
+        }
+        if offset == position + green.width {
+            return lastToken
+        }
+        var node = self
+        while true {
+            var at = node.position
+            var next: SyntaxNode? = none
+            for i in 0..<node.green.slotCount {
+                if let child = node.green.slot(i) {
+                    if offset < at + child.width {
+                        if child.isToken {
+                            return SyntaxToken(child, position: at, parent: node, index: i)
+                        }
+                        next = SyntaxNode(child, position: at, parent: node, index: i)
+                        break
+                    }
+                    at += child.width
+                }
+            }
+            guard let down = next else {
+                return none
+            }
+            node = down
+        }
+    }
+
+    /// The smallest node whose span holds the whole span.
+    public fn node(covering span: TextSpan) -> SyntaxNode? {
+        if !fullSpan.contains(span) {
+            return none
+        }
+        var node = self
+        while true {
+            var found: SyntaxNode? = none
+            for child in node.childNodes {
+                if child.fullSpan.contains(span) && (span.length > 0 || span.start < child.fullSpan.end) {
+                    found = child
+                    break
+                }
+            }
+            guard let down = found else {
+                return node
+            }
+            node = down
+        }
+    }
+
+    // ---- Diagnostics and changes ------------------------------------------
+
+    /// Every diagnostic in it, in the text's positions, in order.
+    public var diagnostics: SyntaxDiagnostic[>..] {
+        get {
+            var all: SyntaxDiagnostic[>..] = []
+            SyntaxNode.collect(green, at: position, into: &all)
+            return all
+        }
+    }
+
+    static fn collect(_ green: GreenNode, at position: Int, into all: inout SyntaxDiagnostic[>..]) {
+        if !green.containsDiagnostics {
+            return
+        }
+        for diagnostic in green.ownDiagnostics {
+            all.append(diagnostic.moved(by: position))
+        }
+        var at = position
+        for i in 0..<green.slotCount {
+            if let child = green.slot(i) {
+                SyntaxNode.collect(child, at: at, into: &all)
+                at += child.width
+            }
+        }
+    }
+
+    /// The same tree with another green node in this one's place, and that
+    /// node, in it: the nodes it is in are made again, the rest shared.
+    public fn replacing(with replacement: GreenNode) -> SyntaxNode {
+        precondition(replacement.isNode, "a node is replaced by a node")
+        guard let up = parent else {
+            return SyntaxNode(replacement)
+        }
+        let newParent = up.replacing(with: up.green.replacing(slot: indexInParent, with: replacement))
+        return SyntaxNode(replacement, position: position, parent: newParent, index: indexInParent)
+    }
+}

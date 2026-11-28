@@ -1256,6 +1256,15 @@ Sable.Serialize.Asn1 ASN.1 (X.690): AsnReader and AsnWriter by BER, CER
                     reader shares the bytes; AsnTag, AsnBitString,
                     ObjectIdentifier (128 numbers of 128 bits), AsnError at
                     its byte
+Sable.Syntax        Lossless syntax trees for languages parsed by hand
+                    (Roslyn's model): GreenNode (immutable, shareable,
+                    widths not positions, trivia on tokens, missing
+                    tokens, diagnostics), SyntaxNode/SyntaxToken/
+                    SyntaxTrivia made on demand with positions and parents,
+                    SyntaxTree (lines and columns), TextSpan, TextChange,
+                    SyntaxReuse for incremental reparses; '@syntax' on a
+                    union writes a language's kinds, typed views, green
+                    factories and a visitor
 Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     a full mode: wait — the sender's backpressure — or
                     drop oldest, newest or the write; close(error:);
@@ -1930,6 +1939,46 @@ as good as `zstd --train`'s.
   tar's, as the format asks. Nothing is said of owners as files are made.
 - Not there: encryption, archives in parts, other methods of zip's, and
   zlib-wrapped or brotli tars known by their bytes.
+
+### Syntax trees
+
+`Sable.Syntax` is for languages whose parsers are written by hand, as
+Roslyn's are and as the compiler's own is: Vixen's Raven, VXML and VCSS
+(#325), and the self-hosted compiler. It holds no parser and no grammar.
+
+- **Green and red.** A `GreenNode` is a node, a token or a piece of trivia:
+  its kind (the language's `U16`), its width in UTF-8 bytes and what it is
+  made of, with no position and no parent, so that trees can share it. Every
+  byte of the text is in one token or piece of trivia, and the root's
+  `fullText` is the text. A `SyntaxNode` is a green node in its place, made
+  as the tree is walked and not kept; two for one place are `==`.
+- **Errors are in the tree.** A parser puts a missing token (no text, no
+  width) where it expected one, and a `SyntaxDiagnostic` on the token or node
+  it is about, relative to it. A node knows whether anything in it has
+  either.
+- **Incremental reparse.** `SyntaxReuse` maps the new text's positions to the
+  old one's across the edits, and gives the parser, where it asks, the largest
+  old node that starts there, that no edit came within a margin of, and that
+  has no missing token or diagnostic. The parser takes it whole and moves its
+  lexer past it. So a reparse makes the nodes of what the edit touched and of
+  the nodes holding it; it still walks the list the kept nodes are in, which
+  is not balanced.
+- **`@syntax`** on a union describes a language: a case with no payload is a
+  kind of token (`@trivia`: of trivia), one with a payload a kind of node,
+  each labelled value a slot, `@category("...")` the categories it is in. For
+  a union `L` it writes `LKind`, a `<Case>Syntax` view for each kind of node
+  and a `<Category>Syntax` for each category, with an accessor per slot and a
+  `make` that builds the green node, and `LVisitor`, whose `walk` calls each
+  kind's `visit`. `tests/lib/Sable.Syntax/Calc.sb` is a language described
+  this way, with a parser that reparses incrementally.
+- **Shared views and shared slots.** `@kinds("UnaryPlus", "UnaryMinus")` on a
+  node case gives several kinds one view, whose `make` takes the kind. `@base`
+  makes a case a category rather than a kind: its slots are ones each of its
+  nodes has, by name and type, and its view reads them from whichever node it
+  is. A `@base` case may be in a category itself, so categories nest: a name
+  is a type and an expression. `SyntaxTokenList` is a slot of tokens, as a
+  declaration's modifiers. `tests/lib/Sable.Syntax/Raven.sb` and `Vxml.sb`
+  are Vixen's Raven and VXML, translated from their `Syntax.xml`.
 
 ### Geometry
 

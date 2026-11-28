@@ -1,0 +1,217 @@
+module GreenNodeTests
+
+// GreenNode, TextSpan, TextChange, SyntaxTree and the red nodes over hand-made
+// trees, of no language.
+
+import Sable.Syntax
+import Sable.Testing
+
+let word: U16 = 1
+let comma: U16 = 2
+let space: U16 = 9
+let pair: U16 = 20
+let root: U16 = 30
+
+fn token(_ text: String, _ trailing: String = "") -> GreenNode {
+    let trivia: GreenNode[>..] = trailing.isEmpty ? [] : [GreenNode.trivia(space, trailing)]
+    return GreenNode.token(word, text, trailing: trivia)
+}
+
+@test
+fn aNodesWidthIsItsChildrensTriviaCounted() {
+    let node = GreenNode.node(pair, [token("ab", " "), GreenNode.token(comma, ",", leading: [GreenNode.trivia(space, "  ")]), token("c")])
+    assertEqual(node.width, 7)
+    assertEqual(node.fullText, "ab   ,c")
+    assertEqual(node.slotCount, 3)
+    assertEqual(node.offset(ofSlot: 2), 6)
+    assertEqual(node.leadingWidth, 0)
+    assertEqual(node.trailingWidth, 0)
+    assertEqual(node.firstToken!.text, "ab")
+    assertEqual(node.lastToken!.text, "c")
+    expect(node.isNode && !node.isToken && !node.isTrivia && !node.isList)
+    assertEqual(node.slot(1)!.leadingTrivia.count, 1)
+    assertEqual(node.slot(1)!.leadingWidth, 2)
+    assertEqual(node.slot(0)!.trailingWidth, 1)
+}
+
+@test
+fn anEmptySlotTakesNoWidth() {
+    let node = GreenNode.node(pair, [token("a"), none, token("b")])
+    assertEqual(node.width, 2)
+    assertEqual(node.slotCount, 3)
+    expect(node.slot(1) == none)
+    assertEqual(node.offset(ofSlot: 2), 1)
+    let red = SyntaxNode(node)
+    expect(red.child(1) == none && red.childNode(1) == none && red.childToken(1) == none)
+    assertEqual(red.children.count, 2)
+    assertEqual(red.childToken(2)!.position, 1)
+    expect(red.childNode(0) == none, "slot 0 has a token")
+    expect(red.childToken(0) != none)
+}
+
+@test
+fn aNodeOfNoTokensHasNoFirstOrLast() {
+    let empty = GreenNode.node(pair, [none, GreenNode.list([])])
+    expect(empty.firstToken == none && empty.lastToken == none)
+    assertEqual(empty.leadingWidth, 0)
+    assertEqual(empty.trailingWidth, 0)
+    let red = SyntaxNode(empty)
+    expect(red.firstToken == none && red.lastToken == none)
+    assertEqual(red.span, TextSpan(start: 0, length: 0))
+    assertEqual(red.text, "")
+    assertEqual(red.tokens.count, 0)
+}
+
+@test
+fn listsAndTheirItems() {
+    let list = GreenNode.list([token("a"), GreenNode.token(comma, ","), token("b")])
+    expect(list.isList && list.isNode)
+    assertEqual(list.kind, GreenNode.listKind)
+    assertEqual(list.fullText, "a,b")
+}
+
+@test
+fn missingTokensAndDiagnosticsAreMarkedUpTheTree() {
+    let missing = GreenNode.missing(comma, diagnostics: [SyntaxDiagnostic("E1", "expected ','", TextSpan(start: 0, length: 0))])
+    expect(missing.isMissing && missing.isToken && missing.containsMissing && missing.containsDiagnostics)
+    assertEqual(missing.width, 0)
+    let inner = GreenNode.node(pair, [token("a"), missing])
+    let outer = GreenNode.node(root, [inner, token("b")])
+    expect(outer.containsMissing && outer.containsDiagnostics && !outer.isMissing)
+    expect(!outer.slot(1)!.containsMissing)
+    let silent = GreenNode.missing(comma)
+    expect(silent.containsMissing && !silent.containsDiagnostics)
+    let marked = token("x").adding(diagnostics: [SyntaxDiagnostic("E2", "odd", TextSpan(start: 0, length: 1))])
+    expect(marked.containsDiagnostics && !marked.containsMissing)
+    assertEqual(marked.ownDiagnostics.count, 1)
+    let same = marked.adding(diagnostics: [])
+    assertEqual(same.ownDiagnostics.count, 1)
+    let red = SyntaxNode(GreenNode.node(root, [token("abc", " "), marked]))
+    assertEqual(red.diagnostics, [SyntaxDiagnostic("E2", "odd", TextSpan(start: 4, length: 1))])
+    assertEqual(red.childToken(1)!.diagnostics.map({ $0.span.start }), [4])
+}
+
+@test
+fn equivalenceComparesWhatTheTreesAreMadeOf() {
+    let a = GreenNode.node(pair, [token("a", " "), none, token("b")])
+    let b = GreenNode.node(pair, [token("a", " "), none, token("b")])
+    expect(a !== b && a.isEquivalent(to: b) && a.isEquivalent(to: a))
+    expect(!a.isEquivalent(to: GreenNode.node(pair, [token("a", " "), none, token("c")])), "another text")
+    expect(!a.isEquivalent(to: GreenNode.node(root, [token("a", " "), none, token("b")])), "another kind")
+    expect(!a.isEquivalent(to: GreenNode.node(pair, [token("a", "  "), none, token("b")])), "other trivia")
+    expect(!a.isEquivalent(to: GreenNode.node(pair, [token("a", " "), token(""), token("b")])), "a slot filled")
+    expect(!GreenNode.node(pair, [token("a", " "), token(""), token("b")]).isEquivalent(to: a), "a slot emptied")
+    expect(!a.isEquivalent(to: GreenNode.node(pair, [token("a", " "), none])), "fewer slots")
+    expect(!token("a").isEquivalent(to: token("a").adding(diagnostics: [SyntaxDiagnostic("E", "e", TextSpan(start: 0, length: 0))])), "a diagnostic")
+    let lead = GreenNode.token(word, "a", leading: [GreenNode.trivia(space, " ")])
+    expect(!lead.isEquivalent(to: GreenNode.token(word, "a", leading: [GreenNode.trivia(space, "\t")])), "other leading trivia")
+    expect(!lead.isEquivalent(to: GreenNode.token(word, "a", leading: [GreenNode.trivia(space, " "), GreenNode.trivia(space, "")])), "more leading trivia")
+}
+
+@test
+fn replacingASlotOrTrivia() {
+    let node = GreenNode.node(pair, [token("a"), token("b")])
+    let swapped = node.replacing(slot: 1, with: token("cd"))
+    assertEqual(swapped.fullText, "acd")
+    assertEqual(swapped.width, 3)
+    expect(swapped.slot(0)! === node.slot(0)!)
+    assertEqual(node.replacing(slot: 0, with: none).fullText, "b")
+    let spaced = token("x").withTrivia(leading: [GreenNode.trivia(space, " ")], trailing: [GreenNode.trivia(space, "\n")])
+    assertEqual(spaced.fullText, " x\n")
+    assertEqual(spaced.width, 3)
+    let missing = GreenNode.missing(word)
+    expect(missing.withTrivia(leading: [GreenNode.trivia(space, " ")], trailing: []) === missing, "a missing token takes no trivia")
+}
+
+@test
+fn spans() {
+    let span = TextSpan(from: 2, to: 5)
+    assertEqual(span.length, 3)
+    expect(span.contains(TextSpan(start: 3, length: 2)) && !span.contains(TextSpan(start: 4, length: 2)))
+    expect(span.touches(TextSpan(start: 5, length: 0)) && span.touches(TextSpan(start: 0, length: 2)))
+    expect(!span.touches(TextSpan(start: 6, length: 1)))
+    expect(!span.overlaps(TextSpan(start: 3, length: 0)), "an empty span shares no byte")
+    expect(TextSpan(start: 3, length: 0).isEmpty && !span.isEmpty)
+    assertEqual(TextSpan(start: 1, length: 2).of("aéb"), "é")
+    expectPanic("no negative length") {
+        _ = TextSpan(start: 0, length: -1)
+    }
+    expectPanic("ends where it starts or after") {
+        _ = TextSpan(from: 3, to: 2)
+    }
+}
+
+@test
+fn changesAreMadeInOrder() {
+    let text = "one two three"
+    let changes = [
+        TextChange(TextSpan(start: 0, length: 3), "1"),
+        TextChange(TextSpan(start: 4, length: 0), "and "),
+        TextChange(TextSpan(start: 8, length: 5), ""),
+    ]
+    assertEqual(TextChange.apply(changes, to: text), "1 and two ")
+    assertEqual(changes.map({ $0.delta }), [-2, 4, -5])
+    assertEqual(TextChange.apply([], to: text), text)
+    expectPanic("in order and apart") {
+        _ = TextChange.apply([TextChange(TextSpan(start: 4, length: 1), ""), TextChange(TextSpan(start: 2, length: 3), "")], to: text)
+    }
+    expectPanic("within the text") {
+        _ = TextChange.apply([TextChange(TextSpan(start: 12, length: 5), "")], to: text)
+    }
+}
+
+@test
+fn linesAndColumns() {
+    let text = "ab\r\ncé\rd\n"
+    let tree = SyntaxTree(text, GreenNode.node(root, [GreenNode.token(word, text)]), path: "a.txt")
+    assertEqual(tree.path, "a.txt")
+    assertEqual(tree.lineCount, 4)
+    let at = tree.position(of: 7)
+    assertEqual(at.line, 2)
+    assertEqual(at.column, 3)
+    assertEqual(tree.position(of: 0).column, 1)
+    assertEqual(tree.position(of: 8).line, 3)
+    assertEqual(tree.position(of: 10).line, 4)
+    assertEqual(tree.offset(ofLine: 3), 8)
+    assertEqual(tree.diagnostics.count, 0)
+    expectPanic("takes the whole text") {
+        _ = SyntaxTree("abc", GreenNode.node(root, [GreenNode.token(word, "ab")]))
+    }
+}
+
+@test
+fn aRedNodeIsMadeOfANodeOnly() {
+    expectPanic("a token is a SyntaxToken") {
+        _ = SyntaxNode(token("x"))
+    }
+    expectPanic("not trivia") {
+        _ = GreenNode.node(pair, [GreenNode.trivia(space, " ")])
+    }
+    expectPanic("leading trivia is trivia") {
+        _ = GreenNode.token(word, "a", leading: [token("b")])
+    }
+    expectPanic("trailing trivia is trivia") {
+        _ = GreenNode.token(word, "a", trailing: [token("b")])
+    }
+}
+
+@test
+fn elementsSayWhatTheyAre() {
+    let red = SyntaxNode(GreenNode.node(root, [token("a", " "), GreenNode.node(pair, [token("b")])]))
+    let first = red.children[0]
+    let second = red.children[1]
+    expect(first.token != none && first.node == none)
+    expect(second.node != none && second.token == none)
+    assertEqual(first.span, TextSpan(start: 0, length: 1))
+    assertEqual(first.fullSpan, TextSpan(start: 0, length: 2))
+    assertEqual(second.span, TextSpan(start: 2, length: 1))
+    expect(first.green === red.green.slot(0)!)
+    expect(second.green === red.green.slot(1)!)
+    assertEqual(red.child(1)!.kind, pair)
+    assertEqual(red.childNodes.count, 1)
+    expect(!red.isList && !red.containsMissing && !red.containsDiagnostics)
+    assertEqual(red.debugDescription(), "SyntaxNode(30, 0..<3)")
+    assertEqual(red.firstToken!.debugDescription(), "SyntaxToken(1, \"a\", 0..<1)")
+    assertEqual(red.firstToken!.fullText, "a ")
+    expect(!red.firstToken!.isMissing)
+}

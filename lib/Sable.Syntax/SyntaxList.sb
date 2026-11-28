@@ -1,0 +1,252 @@
+module Sable.Syntax
+
+/// A language's typed node: what `@syntax` writes for each kind of node and
+/// each category, a SyntaxNode it has checked the kind of.
+///
+/// ```sable
+/// struct Word: SyntaxView {
+///     let node: SyntaxNode
+///     static fn cast(_ node: SyntaxNode) -> Word? => node.kind == 5 ? Word { node: node } : none
+/// }
+/// let root = SyntaxNode(GreenNode.node(5, [GreenNode.token(1, "hi")]))
+/// assert(Word.cast(root)!.node.text == "hi")
+/// assert(Word.cast(SyntaxNode(GreenNode.node(6, [GreenNode.token(1, "x")]))) == none)
+/// ```
+public protocol SyntaxView {
+    /// The node it is a view of.
+    var node: SyntaxNode { get }
+
+    /// The view of the node, if the node is of a kind it is a view of.
+    static fn cast(_ node: SyntaxNode) -> Self?
+}
+
+/// The items of a slot that holds a list of nodes, as one view: `@syntax`
+/// writes it for a slot of type `SyntaxList<X>`. An empty slot is an empty
+/// list.
+///
+/// ```sable
+/// struct Item: SyntaxView {
+///     let node: SyntaxNode
+///     static fn cast(_ node: SyntaxNode) -> Item? => node.kind == 5 ? Item { node: node } : none
+/// }
+/// let items = GreenNode.list([GreenNode.node(5, [GreenNode.token(1, "a")]), GreenNode.node(5, [GreenNode.token(1, "b")])])
+/// let root = SyntaxNode(GreenNode.node(20, [items]))
+/// let list = SyntaxList<Item>(root.childNode(0))
+/// assert(list.count == 2 && list[1].node.text == "b")
+/// var texts: String[>..] = []
+/// for item in list {
+///     texts.append(item.node.text)
+/// }
+/// assert(texts == ["a", "b"])
+/// ```
+public struct SyntaxList<Element: SyntaxView>: Sequence {
+    /// The list node, or none for an empty slot.
+    public let node: SyntaxNode?
+
+    public init(_ node: SyntaxNode?) {
+        self.node = node
+    }
+
+    /// How many items it has.
+    public var count: Int => node == none ? 0 : node!.slotCount
+
+    /// Whether it has none.
+    public var isEmpty: Bool => count == 0
+
+    /// The item at the index, counting from 0. An item of another kind than
+    /// the list's traps.
+    public subscript(index: Int) -> Element {
+        get {
+            return Element.cast(node!.childNode(index)!)!
+        }
+    }
+
+    public fn makeIterator() -> SyntaxListIterator<Element> {
+        return SyntaxListIterator<Element>(node, step: 1)
+    }
+}
+
+/// The items of a slot that holds a list of nodes with a token between each
+/// two, as `a, b, c`: `@syntax` writes it for a slot of type
+/// `SeparatedSyntaxList<X>`. The list's children are an item, a separator,
+/// an item and so on; it may end with a separator.
+///
+/// ```sable
+/// struct Name: SyntaxView {
+///     let node: SyntaxNode
+///     static fn cast(_ node: SyntaxNode) -> Name? => node.kind == 5 ? Name { node: node } : none
+/// }
+/// let a = GreenNode.node(5, [GreenNode.token(1, "a")])
+/// let b = GreenNode.node(5, [GreenNode.token(1, "b")])
+/// let root = SyntaxNode(GreenNode.node(20, [GreenNode.list([a, GreenNode.token(2, ","), b])]))
+/// let names = SeparatedSyntaxList<Name>(root.childNode(0))
+/// assert(names.count == 2 && names.separators.map({ $0.text }) == [","])
+/// assert(names[1].node.text == "b")
+/// ```
+public struct SeparatedSyntaxList<Element: SyntaxView>: Sequence {
+    /// The list node, or none for an empty slot.
+    public let node: SyntaxNode?
+
+    public init(_ node: SyntaxNode?) {
+        self.node = node
+    }
+
+    /// How many items it has, separators not counted.
+    public var count: Int => node == none ? 0 : (node!.slotCount + 1) / 2
+
+    /// Whether it has none.
+    public var isEmpty: Bool => count == 0
+
+    /// The item at the index, counting from 0.
+    public subscript(index: Int) -> Element {
+        get {
+            return Element.cast(node!.childNode(index * 2)!)!
+        }
+    }
+
+    /// The tokens between the items, in order.
+    public var separators: SyntaxToken[>..] {
+        get {
+            var all: SyntaxToken[>..] = []
+            if let list = node {
+                var i = 1
+                while i < list.slotCount {
+                    if let token = list.childToken(i) {
+                        all.append(token)
+                    }
+                    i += 2
+                }
+            }
+            return all
+        }
+    }
+
+    public fn makeIterator() -> SyntaxListIterator<Element> {
+        return SyntaxListIterator<Element>(node, step: 2)
+    }
+}
+
+/// Goes through a list's items in order, each found from the last.
+///
+/// ```sable
+/// struct Item: SyntaxView {
+///     let node: SyntaxNode
+///     static fn cast(_ node: SyntaxNode) -> Item? => node.kind == 5 ? Item { node: node } : none
+/// }
+/// let items = GreenNode.list([GreenNode.node(5, [GreenNode.token(1, "a")]), GreenNode.node(5, [GreenNode.token(1, "bc")])])
+/// var each = SyntaxList<Item>(SyntaxNode(GreenNode.node(20, [items])).childNode(0)).makeIterator()
+/// assert(each.next()!.node.position == 0)
+/// assert(each.next()!.node.position == 1)
+/// assert(each.next() == none)
+/// ```
+public struct SyntaxListIterator<Element: SyntaxView>: Iterator {
+    let list: SyntaxNode?
+    let step: Int
+    var index: Int = 0
+    var at: Int = 0
+
+    init(_ list: SyntaxNode?, step: Int) {
+        self.list = list
+        self.step = step
+        self.at = list == none ? 0 : list!.position
+    }
+
+    public mutating fn next() -> Element? {
+        guard let list = list else {
+            return none
+        }
+        while index < list.slotCount {
+            let i = index
+            index += 1
+            guard let child = list.green.slot(i) else {
+                continue
+            }
+            let start = at
+            at += child.width
+            if i % step == 0 && child.isNode {
+                return Element.cast(SyntaxNode(child, position: start, parent: list, index: i))
+            }
+        }
+        return none
+    }
+}
+
+/// The tokens of a slot that holds a list of tokens, as a declaration's
+/// modifiers: `@syntax` writes it for a slot of type `SyntaxList<SyntaxToken>`.
+/// An empty slot is an empty list.
+///
+/// ```sable
+/// let modifiers = GreenNode.list([GreenNode.token(1, "public", trailing: [GreenNode.trivia(9, " ")]), GreenNode.token(1, "static")])
+/// let root = SyntaxNode(GreenNode.node(20, [modifiers]))
+/// let tokens = SyntaxTokenList(root.childNode(0))
+/// assert(tokens.count == 2 && tokens[1].text == "static")
+/// var texts: String[>..] = []
+/// for token in tokens {
+///     texts.append(token.text)
+/// }
+/// assert(texts == ["public", "static"])
+/// ```
+public struct SyntaxTokenList: Sequence {
+    /// The list node, or none for an empty slot.
+    public let node: SyntaxNode?
+
+    public init(_ node: SyntaxNode?) {
+        self.node = node
+    }
+
+    /// How many tokens it has.
+    public var count: Int => node == none ? 0 : node!.slotCount
+
+    /// Whether it has none.
+    public var isEmpty: Bool => count == 0
+
+    /// The token at the index, counting from 0. A node there traps.
+    public subscript(index: Int) -> SyntaxToken {
+        get {
+            return node!.childToken(index)!
+        }
+    }
+
+    public fn makeIterator() -> SyntaxTokenListIterator {
+        return SyntaxTokenListIterator(node)
+    }
+}
+
+/// Goes through a token list's tokens in order, each found from the last.
+///
+/// ```sable
+/// let root = SyntaxNode(GreenNode.node(20, [GreenNode.list([GreenNode.token(1, "a"), GreenNode.token(1, "b")])]))
+/// var tokens = SyntaxTokenList(root.childNode(0)).makeIterator()
+/// assert(tokens.next()?.text == "a")
+/// assert(tokens.next()?.position == 1)
+/// assert(tokens.next() == none)
+/// ```
+public struct SyntaxTokenListIterator: Iterator {
+    let list: SyntaxNode?
+    var index: Int = 0
+    var at: Int = 0
+
+    init(_ list: SyntaxNode?) {
+        self.list = list
+        self.at = list == none ? 0 : list!.position
+    }
+
+    public mutating fn next() -> SyntaxToken? {
+        guard let list = list else {
+            return none
+        }
+        while index < list.slotCount {
+            let i = index
+            index += 1
+            guard let child = list.green.slot(i) else {
+                continue
+            }
+            let start = at
+            at += child.width
+            if child.isToken {
+                return SyntaxToken(child, position: start, parent: list, index: i)
+            }
+        }
+        return none
+    }
+}

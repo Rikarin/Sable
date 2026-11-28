@@ -1,0 +1,294 @@
+module CalcSyntax
+
+// A small language for the tests of Sable.Syntax, described with '@syntax'
+// and parsed by hand as Raven's and VXML's parsers are: statements of
+// assignments and prints, each ending in ';', over sums, products, calls and
+// groups. Its parser reparses incrementally (SyntaxReuse).
+
+import Sable.Syntax
+import Sable.Text
+
+@syntax
+public union Calc {
+    Number
+    Name
+    Plus
+    Star
+    Equals
+    OpenParen
+    CloseParen
+    Semicolon
+    Comma
+    PrintKeyword
+    EndOfFile
+    Bad
+    @trivia
+    Space
+    @trivia
+    Comment
+    @category("Expression")
+    Literal(value: SyntaxToken)
+    @category("Expression")
+    Reference(name: SyntaxToken)
+    @category("Expression")
+    Binary(left: ExpressionSyntax, op: SyntaxToken, right: ExpressionSyntax)
+    @category("Expression")
+    Group(open: SyntaxToken, inner: ExpressionSyntax, close: SyntaxToken)
+    @category("Expression")
+    Call(callee: SyntaxToken, open: SyntaxToken, arguments: SeparatedSyntaxList<ExpressionSyntax>, close: SyntaxToken)
+    @category("Statement")
+    Assignment(name: SyntaxToken, equals: SyntaxToken, value: ExpressionSyntax, semicolon: SyntaxToken)
+    @category("Statement")
+    Print(keyword: SyntaxToken, value: ExpressionSyntax, semicolon: SyntaxToken)
+    @category("Statement")
+    Skipped(token: SyntaxToken)
+    Program(statements: SyntaxList<StatementSyntax>, end: SyntaxToken)
+}
+
+/// Parses Calc, and parses it again after an edit, keeping what the edit
+/// did not reach.
+public struct CalcParser {
+    let text: String
+    let bytes: U8[>..]
+    var at: Int = 0
+    // The token after the last one taken, lexed ahead, and where it starts,
+    // its leading trivia counted.
+    var ahead: GreenNode? = none
+    var aheadStart: Int = 0
+    var reuse: SyntaxReuse
+    /// How many green nodes and tokens the parse made, not counting trivia.
+    public var made: Int = 0
+
+    init(_ text: String, _ reuse: SyntaxReuse) {
+        self.text = text
+        self.bytes = text.utf8Bytes()
+        self.reuse = reuse
+    }
+
+    /// The tree of a text.
+    public static fn parse(_ text: String) -> SyntaxTree {
+        var parser = CalcParser(text, SyntaxReuse.nothing)
+        return SyntaxTree(text, parser.program())
+    }
+
+    /// The tree of the text after the changes, made from the old tree's
+    /// nodes where it can; and the parser, which says how many it made.
+    public static fn reparse(_ old: SyntaxTree, _ changes: TextChange[:]) -> (SyntaxTree, CalcParser) {
+        let text = TextChange.apply(changes, to: old.text)
+        var parser = CalcParser(text, SyntaxReuse(old, changes))
+        let root = parser.program()
+        return (SyntaxTree(text, root), parser)
+    }
+
+    /// How many old nodes it kept.
+    public var reused: Int => reuse.reusedCount
+
+    // ---- Tokens -----------------------------------------------------------
+
+    mutating fn peek() -> GreenNode {
+        if let token = ahead {
+            return token
+        }
+        aheadStart = at
+        let token = lex()
+        ahead = token
+        return token
+    }
+
+    mutating fn peekKind() -> CalcKind {
+        return peek().kind as CalcKind
+    }
+
+    mutating fn take() -> GreenNode {
+        let token = peek()
+        ahead = none
+        return token
+    }
+
+    // The token at 'at', its leading trivia first.
+    mutating fn lex() -> GreenNode {
+        var leading: GreenNode[>..] = []
+        while at < bytes.count {
+            let start = at
+            let byte = bytes[at]
+            if byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D {
+                while at < bytes.count && (bytes[at] == 0x20 || bytes[at] == 0x09 || bytes[at] == 0x0A || bytes[at] == 0x0D) {
+                    at += 1
+                }
+                leading.append(GreenNode.trivia(CalcKind.Space.raw, slice(start, at)))
+            } else if byte == 0x23 {
+                while at < bytes.count && bytes[at] != 0x0A {
+                    at += 1
+                }
+                leading.append(GreenNode.trivia(CalcKind.Comment.raw, slice(start, at)))
+            } else {
+                break
+            }
+        }
+        made += 1
+        if at == bytes.count {
+            return GreenNode.token(CalcKind.EndOfFile.raw, "", leading: leading)
+        }
+        let start = at
+        let byte = bytes[at]
+        var kind = CalcKind.Bad
+        if isDigit(byte) {
+            while at < bytes.count && isDigit(bytes[at]) {
+                at += 1
+            }
+            kind = .Number
+        } else if isLetter(byte) {
+            while at < bytes.count && (isLetter(bytes[at]) || isDigit(bytes[at])) {
+                at += 1
+            }
+            kind = slice(start, at) == "print" ? .PrintKeyword : .Name
+        } else {
+            at += 1
+            kind = match byte {
+                case 0x2B => .Plus
+                case 0x2A => .Star
+                case 0x3D => .Equals
+                case 0x28 => .OpenParen
+                case 0x29 => .CloseParen
+                case 0x3B => .Semicolon
+                case 0x2C => .Comma
+                default   => .Bad
+            }
+            if kind == .Bad {
+                // The whole scalar, not one byte of it.
+                while at < bytes.count && (bytes[at] & 0xC0) == 0x80 {
+                    at += 1
+                }
+            }
+        }
+        let text = slice(start, at)
+        if kind == .Bad {
+            let diagnostic = SyntaxDiagnostic("C1", "'\(text)' is not a token of Calc", TextSpan(start: start - aheadStart, length: at - start))
+            return GreenNode.token(kind.raw, text, leading: leading, diagnostics: [diagnostic])
+        }
+        return GreenNode.token(kind.raw, text, leading: leading)
+    }
+
+    fn slice(_ start: Int, _ end: Int) -> String {
+        return TextSpan(from: start, to: end).of(text)
+    }
+
+    fn isDigit(_ byte: U8) -> Bool {
+        return byte >= 0x30 && byte <= 0x39
+    }
+
+    fn isLetter(_ byte: U8) -> Bool {
+        return (byte >= 0x61 && byte <= 0x7A) || (byte >= 0x41 && byte <= 0x5A) || byte == 0x5F
+    }
+
+    // The token of that kind, or a missing one that says it was expected.
+    mutating fn expect(_ kind: CalcKind, _ what: String) -> GreenNode {
+        if peekKind() == kind {
+            return take()
+        }
+        made += 1
+        return GreenNode.missing(kind.raw, diagnostics: [SyntaxDiagnostic("C2", "expected \(what)", TextSpan(start: 0, length: 0))])
+    }
+
+    // ---- Nodes ------------------------------------------------------------
+
+    mutating fn program() -> GreenNode {
+        var statements: GreenNode[>..] = []
+        while true {
+            // A statement the edit did not reach, taken whole, before its
+            // first token is lexed.
+            if ahead == none {
+                if let kept = reuse.take(at: at, where: { StatementSyntax.isStatement($0.kind) }) {
+                    statements.append(kept)
+                    at += kept.width
+                    continue
+                }
+            }
+            if peekKind() == .EndOfFile {
+                break
+            }
+            statements.append(statement())
+        }
+        made += 2
+        return ProgramSyntax.make(statements: GreenNode.list(statements), end: take())
+    }
+
+    mutating fn statement() -> GreenNode {
+        made += 1
+        let kind = peekKind()
+        if kind == .PrintKeyword {
+            let keyword = take()
+            let value = expression()
+            return PrintSyntax.make(keyword: keyword, value: value, semicolon: expect(.Semicolon, "';'"))
+        }
+        if kind == .Name {
+            let name = take()
+            let equals = expect(.Equals, "'='")
+            let value = expression()
+            return AssignmentSyntax.make(name: name, equals: equals, value: value, semicolon: expect(.Semicolon, "';'"))
+        }
+        let token = take()
+        let skipped = token.adding(diagnostics: [SyntaxDiagnostic("C3", "a statement does not start with this", TextSpan(start: token.leadingWidth, length: token.text.utf8Count))])
+        return SkippedSyntax.make(token: skipped)
+    }
+
+    mutating fn expression() -> GreenNode {
+        var left = term()
+        while peekKind() == .Plus {
+            let op = take()
+            let right = term()
+            made += 1
+            left = BinarySyntax.make(left: left, op: op, right: right)
+        }
+        return left
+    }
+
+    mutating fn term() -> GreenNode {
+        var left = factor()
+        while peekKind() == .Star {
+            let op = take()
+            let right = factor()
+            made += 1
+            left = BinarySyntax.make(left: left, op: op, right: right)
+        }
+        return left
+    }
+
+    mutating fn factor() -> GreenNode {
+        made += 1
+        let kind = peekKind()
+        if kind == .Number {
+            return LiteralSyntax.make(value: take())
+        }
+        if kind == .Name {
+            let name = take()
+            if peekKind() != .OpenParen {
+                return ReferenceSyntax.make(name: name)
+            }
+            let opener = take()
+            var arguments: GreenNode[>..] = []
+            if peekKind() != .CloseParen {
+                arguments.append(expression())
+                while peekKind() == .Comma {
+                    arguments.append(take())
+                    arguments.append(expression())
+                }
+            }
+            return CallSyntax.make(callee: name, `open`: opener, arguments: GreenNode.list(arguments), close: expect(.CloseParen, "')'"))
+        }
+        if kind == .OpenParen {
+            let opener = take()
+            let inner = expression()
+            return GroupSyntax.make(`open`: opener, inner: inner, close: expect(.CloseParen, "')'"))
+        }
+        made += 1
+        return LiteralSyntax.make(value: expect(.Number, "a value"))
+    }
+}
+
+extension StatementSyntax {
+    // Whether a kind is one of Calc's statements.
+    static fn isStatement(_ kind: U16) -> Bool {
+        return kind == CalcKind.Assignment.raw || kind == CalcKind.Print.raw || kind == CalcKind.Skipped.raw
+    }
+}

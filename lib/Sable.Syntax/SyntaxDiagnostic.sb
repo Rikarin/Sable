@@ -1,0 +1,34 @@
+module Sable.Syntax
+
+/// An error a parser found: a code of the language's choosing, what is
+/// wrong, and where. Kept in the tree, on the token or node it is about,
+/// relative to it; a SyntaxNode or SyntaxToken gives it in the text's
+/// positions.
+///
+/// ```sable
+/// let missing = GreenNode.missing(2, diagnostics: [SyntaxDiagnostic("E1", "expected ';'", TextSpan(start: 0, length: 0))])
+/// let root = SyntaxNode(GreenNode.node(9, [GreenNode.token(1, "x"), missing]))
+/// assert(root.diagnostics.map({ $0.span.start }) == [1])
+/// assert(root.diagnostics[0].message == "expected ';'")
+/// ```
+@derive(Equatable, Debug)
+public struct SyntaxDiagnostic: Sendable {
+    /// The language's code for it: `"R0012"`.
+    public let code: String
+    /// What is wrong, for a person.
+    public let message: String
+    /// Where, relative to the start of what it is on, trivia included, when
+    /// kept in a GreenNode; in the text's positions when read from a red one.
+    public let span: TextSpan
+
+    public init(_ code: String, _ message: String, _ span: TextSpan) {
+        self.code = code
+        self.message = message
+        self.span = span
+    }
+
+    /// The same, moved that many bytes on.
+    public fn moved(by offset: Int) -> SyntaxDiagnostic {
+        return SyntaxDiagnostic(code, message, TextSpan(start: span.start + offset, length: span.length))
+    }
+}

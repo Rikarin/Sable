@@ -1,0 +1,137 @@
+module VxmlSyntax
+
+import Sable.Syntax
+
+/// Vxml's kinds of tokens, trivia and nodes, from Vixen's `Core/Vixen.Ui.Markup/Syntax/Syntax.xml`.
+@syntax
+public union Vxml {
+    ComponentKeyword
+    UsingKeyword
+    StaticKeyword
+    NamespaceKeyword
+    TagKeyword
+    InheritsKeyword
+    CodeKeyword
+    IfKeyword
+    ElseKeyword
+    ForKeyword
+    VarKeyword
+    InKeyword
+    SwitchKeyword
+    CaseKeyword
+    DefaultKeyword
+    LessThanToken
+    LessThanSlashToken
+    GreaterThanToken
+    SlashGreaterThanToken
+    EqualsToken
+    QuoteToken
+    AtToken
+    OpenParenToken
+    CloseParenToken
+    OpenBraceToken
+    CloseBraceToken
+    ColonToken
+    IdentifierToken
+    NameToken
+    TextToken
+    ExpressionToken
+    CodeToken
+    CssToken
+    EndOfFileToken
+    @trivia
+    WhitespaceTrivia
+    @trivia
+    CommentTrivia
+    @trivia
+    SkippedTokensTrivia
+    CommaToken
+    InjectKeyword
+    EmptyKeyword
+    RowsKeyword
+    /// Anything that can appear in a run of content: an element, a text run, an interpolation, a
+    /// control-flow directive, a code block or a style block. Content is the one list shape the
+    /// grammar has, and every member of it derives from here.
+    @base
+    Markup
+    /// The right-hand side of an attribute: either a quoted run that may mix literal text with
+    /// interpolations, or a bare expression written without quotes.
+    @base
+    AttributeValue
+    /// A file-level header: @component, @namespace, @tag or @using.
+    @base
+    Directive
+    /// A whole .vxml file. The root of every VXML tree.
+    Document(directives: SyntaxList<DirectiveSyntax>, content: SyntaxList<MarkupSyntax>, endOfFileToken: SyntaxToken)
+    /// @component Counter — the file's one required header.
+    @category("Directive")
+    ComponentDirective(componentKeyword: SyntaxToken, identifier: SyntaxToken)
+    /// @using Vixen.Ui.Controls, @using Prefab = A.B.Prefab or @using static System.Math — copied
+    /// verbatim into the generated file.
+    @category("Directive")
+    UsingDirective(usingKeyword: SyntaxToken, staticKeyword: SyntaxToken?, alias: SyntaxToken?, equalsToken: SyntaxToken?, name: SyntaxToken)
+    /// @namespace Game.Screens — where the generated class goes.
+    @category("Directive")
+    NamespaceDirective(namespaceKeyword: SyntaxToken, name: SyntaxToken)
+    /// @tag task-center — the element name the component's host answers to.
+    @category("Directive")
+    TagDirective(tagKeyword: SyntaxToken, name: SyntaxToken)
+    /// @inherits Vixen.Ui.Controls.Control — what the generated class derives from.
+    @category("Directive")
+    InheritsDirective(inheritsKeyword: SyntaxToken, name: SyntaxToken)
+    /// @inject ITheme Theme — the property that reads an ambient value.
+    @category("Directive")
+    InjectDirective(injectKeyword: SyntaxToken, type: SyntaxToken, name: SyntaxToken)
+    /// @code { … }. VXML never parses C#: the body travels as one token and Roslyn is the only
+    /// thing that ever reads it.
+    @category("Markup")
+    CodeBlock(codeKeyword: SyntaxToken, openBraceToken: SyntaxToken, body: SyntaxToken, closeBraceToken: SyntaxToken)
+    /// A braced run of content — the body of an @if, an @for or an else. Braces rather than Razor's
+    /// } sentinels, per ADR-009.
+    @category("Markup")
+    MarkupBlock(openBraceToken: SyntaxToken, content: SyntaxList<MarkupSyntax>, closeBraceToken: SyntaxToken)
+    /// An opening or self-closing tag with its attributes.
+    StartTag(lessThanToken: SyntaxToken, name: SyntaxToken, attributes: SyntaxList<AttributeSyntax>, greaterThanToken: SyntaxToken)
+    /// A closing tag.
+    EndTag(lessThanSlashToken: SyntaxToken, name: SyntaxToken, greaterThanToken: SyntaxToken)
+    /// An element. A lowercase name is an intrinsic; a name starting with an uppercase letter is a
+    /// component. The parser does not care which — the binder does.
+    @category("Markup")
+    Element(startTag: StartTagSyntax, content: SyntaxList<MarkupSyntax>, endTag: EndTagSyntax?)
+    /// <style scoped>…</style>. A separate node rather than an element because its content is not
+    /// markup and must never be lexed as such.
+    @category("Markup")
+    StyleBlock(startTag: StartTagSyntax, css: SyntaxToken, endTag: EndTagSyntax?)
+    /// One attribute on a tag.
+    Attribute(name: SyntaxToken, equalsToken: SyntaxToken?, value: AttributeValueSyntax?)
+    /// A quoted attribute value. Single and double quotes are both accepted.
+    @category("AttributeValue")
+    QuotedAttributeValue(openQuoteToken: SyntaxToken, content: SyntaxList<MarkupSyntax>, closeQuoteToken: SyntaxToken)
+    /// An unquoted @expr value, as in step=@Step.
+    @category("AttributeValue")
+    ExpressionAttributeValue(expression: InterpolationSyntax)
+    /// A run of literal text. Whitespace that spans a line break never reaches here — the lexer
+    /// makes it trivia, so indentation is formatting and a space you typed is content.
+    @category("Markup")
+    Text(textToken: SyntaxToken)
+    /// @expr — an implicit expression, or a parenthesised one after @(.
+    @category("Markup")
+    Interpolation(atToken: SyntaxToken, expression: SyntaxToken)
+    /// @if (cond) { … } else { … }.
+    @category("Markup")
+    If(ifKeyword: SyntaxToken, openParenToken: SyntaxToken, condition: SyntaxToken, closeParenToken: SyntaxToken, body: MarkupBlockSyntax, else: ElseClauseSyntax?)
+    /// The else arm of an @if.
+    ElseClause(elseKeyword: SyntaxToken, body: MarkupSyntax)
+    /// @for (var i in sequence) { … } — the keyed reconciler's input.
+    @category("Markup")
+    For(forKeyword: SyntaxToken, openParenToken: SyntaxToken, varKeyword: SyntaxToken, identifier: SyntaxToken, commaToken: SyntaxToken?, index: SyntaxToken?, inKeyword: SyntaxToken, sequence: SyntaxToken, closeParenToken: SyntaxToken, body: MarkupBlockSyntax, emptyKeyword: SyntaxToken?, emptyBody: MarkupBlockSyntax?)
+    /// @rows (var index in Count) { <row> … </row> } — a virtualizing control's row template, built
+    /// once per pool slot rather than once per item.
+    @category("Markup")
+    Rows(rowsKeyword: SyntaxToken, openParenToken: SyntaxToken, varKeyword: SyntaxToken, identifier: SyntaxToken, inKeyword: SyntaxToken, count: SyntaxToken, closeParenToken: SyntaxToken, body: MarkupBlockSyntax)
+    /// @switch (subject) { case pattern: … default: … }.
+    @category("Markup")
+    Switch(switchKeyword: SyntaxToken, openParenToken: SyntaxToken, subject: SyntaxToken, closeParenToken: SyntaxToken, openBraceToken: SyntaxToken, sections: SyntaxList<SwitchSectionSyntax>, closeBraceToken: SyntaxToken)
+    /// One arm of an @switch.
+    SwitchSection(keyword: SyntaxToken, pattern: SyntaxToken?, colonToken: SyntaxToken, content: SyntaxList<MarkupSyntax>)
+}

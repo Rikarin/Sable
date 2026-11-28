@@ -541,6 +541,7 @@ public sealed partial class Compilation {
     /// </summary>
     public static readonly IReadOnlyList<(string Module, IReadOnlyList<string> Types, IReadOnlyList<string> Members)> LibraryGeneratorAttributes = [
         ("Sable.DependencyInjection", ["injectable", "container"], ["keyed", "inject", "include", "singleton", "scoped", "transient"]),
+        ("Sable.Syntax", ["syntax"], ["base", "category", "kinds", "trivia"]),
         ("Sable.Testing", ["mockable"], []),
     ];
 

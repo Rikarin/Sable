@@ -1,0 +1,229 @@
+module CalcTests
+
+// Sable.Syntax through a language: Calc (Calc.sb), described with '@syntax'
+// and parsed by hand. Run with
+//     tools/stdlib-coverage.sh Sable.Syntax
+
+import CalcSupport
+import CalcSyntax
+import Sable.Syntax
+import Sable.Testing
+
+@test(arguments: [
+    "",
+    "x = 1;",
+    "x = 1 + 2 * f(3, y); # done\nprint (x);",
+    "  # only a comment",
+    "x = ;",
+    "= = = (",
+    "print f(,);",
+    "é = 1 $ 2;\r\n\tprint x",
+])
+fn aParseGivesBackItsTextByteForByte(_ text: String) {
+    let tree = CalcParser.parse(text)
+    assertEqual(tree.root.fullText, text)
+    assertEqual(tree.root.fullSpan, TextSpan(start: 0, length: text.utf8Count))
+}
+
+@test
+fn anyTextParsesToATreeOfIt() {
+    forAll(CalcText.pieces()) { (pieces: String[>..]) in
+        let text = pieces.joined(separator: "")
+        assertEqual(CalcParser.parse(text).root.fullText, text)
+    }
+}
+
+@test
+fn theTypedNodesReadTheSlots() {
+    let tree = CalcParser.parse("x = 1 + 2 * f(3, y);")
+    let program = require(ProgramSyntax.cast(tree.root))
+    assertEqual(program.statements.count, 1)
+    let assignment = require(program.statements[0].asAssignment)
+    assertEqual(assignment.name.text, "x")
+    assertEqual(assignment.semicolon.text, ";")
+    let sum = require(assignment.value.asBinary)
+    assertEqual(sum.op.text, "+")
+    assertEqual(require(sum.left.asLiteral).value.text, "1")
+    let product = require(sum.right.asBinary)
+    assertEqual(product.op.text, "*")
+    let call = require(product.right.asCall)
+    assertEqual(call.callee.text, "f")
+    assertEqual(call.arguments.count, 2)
+    assertEqual(require(call.arguments[1].asReference).name.text, "y")
+    assertEqual(call.arguments.separators.map({ $0.text }), [","])
+    assertEqual(call.node.text, "f(3, y)")
+    assertEqual(call.kind, CalcKind.Call)
+    assertEqual(call.asExpression.kind, CalcKind.Call)
+    expect(call.asExpression.asLiteral == none, "a call is no literal")
+    expect(ReferenceSyntax.cast(call.node) == none, "a call is no reference")
+    assertEqual(program.end.kind, CalcKind.EndOfFile.raw)
+}
+
+@test
+fn aListIsGoneThroughInOrder() {
+    let tree = CalcParser.parse("a = 1; print a; b = f(a, 2, 3);")
+    let program = require(ProgramSyntax.cast(tree.root))
+    var kinds: CalcKind[>..] = []
+    for statement in program.statements {
+        kinds.append(statement.kind)
+    }
+    assertEqual(kinds, [.Assignment, .Print, .Assignment])
+    let call = require(require(program.statements[2].asAssignment).value.asCall)
+    var texts: String[>..] = []
+    for argument in call.arguments {
+        texts.append(argument.node.text)
+    }
+    assertEqual(texts, ["a", "2", "3"])
+    expect(!call.arguments.isEmpty && !program.statements.isEmpty)
+    let noArguments = require(require(require(ProgramSyntax.cast(CalcParser.parse("x = f();").root)).statements[0].asAssignment).value.asCall)
+    expect(noArguments.arguments.isEmpty && noArguments.arguments.separators.isEmpty)
+}
+
+@test
+fn triviaIsTheNextTokensLeadingTrivia() {
+    let tree = CalcParser.parse("x = 1; # one\n  print x;")
+    let print = tree.root.token(at: 16)!
+    assertEqual(print.text, "print")
+    assertEqual(print.leadingTrivia.map({ $0.text }), [" ", "# one", "\n  "])
+    assertEqual(print.leadingTrivia.map({ $0.kind }), [CalcKind.Space.raw, CalcKind.Comment.raw, CalcKind.Space.raw])
+    assertEqual(print.leadingTrivia[1].span, TextSpan(start: 7, length: 5))
+    assertEqual(print.span, TextSpan(start: 15, length: 5))
+    assertEqual(print.fullSpan, TextSpan(start: 6, length: 14))
+    let statement = print.parent!
+    assertEqual(statement.kind, CalcKind.Print.raw)
+    assertEqual(statement.span, TextSpan(start: 15, length: 8))
+    assertEqual(statement.text, "print x;")
+    assertEqual(print.previous!.text, ";")
+    assertEqual(print.next!.text, "x")
+    expect(tree.root.lastToken!.next == none, "nothing after the end")
+    expect(tree.root.firstToken!.previous == none, "nothing before the start")
+}
+
+@test
+fn errorsAreDiagnosticsInTheTextsPositions() {
+    let tree = CalcParser.parse("x = ;\nprint 1 $ 2;\n)")
+    let found = tree.diagnostics.map({ "\($0.code)@\(tree.position(of: $0.span.start).line):\(tree.position(of: $0.span.start).column) \($0.message)" })
+    assertEqual(found, [
+        // A missing token is where the last token ended, before the trivia.
+        "C2@1:4 expected a value",
+        "C2@2:8 expected ';'",
+        "C1@2:9 '$' is not a token of Calc",
+        "C3@2:9 a statement does not start with this",
+        "C3@2:11 a statement does not start with this",
+        "C3@2:12 a statement does not start with this",
+        "C3@3:1 a statement does not start with this",
+    ])
+    expect(tree.root.containsDiagnostics && tree.root.containsMissing)
+    let clean = CalcParser.parse("x = 1;")
+    expect(!clean.root.containsDiagnostics && !clean.root.containsMissing)
+    assertEqual(clean.diagnostics.count, 0)
+}
+
+@test
+fn aMissingTokenTakesNoText() {
+    let tree = CalcParser.parse("x = 1")
+    let assignment = require(require(ProgramSyntax.cast(tree.root)).statements[0].asAssignment)
+    expect(assignment.semicolon.isMissing)
+    assertEqual(assignment.semicolon.span, TextSpan(start: 5, length: 0))
+    assertEqual(assignment.semicolon.diagnostics.map({ $0.span.start }), [5])
+    assertEqual(tree.root.fullText, "x = 1")
+}
+
+@test
+fn theKindsKnowWhatTheyAre() {
+    expect(CalcKind.Number.isToken && !CalcKind.Number.isTrivia && !CalcKind.Number.isNode)
+    expect(CalcKind.Comment.isTrivia && !CalcKind.Comment.isToken)
+    expect(CalcKind.Program.isNode && !CalcKind.Program.isToken)
+    assertEqual(CalcKind.Number.raw, 1)
+    assertEqual(CalcKind.of(CalcKind.Print.raw), CalcKind.Print)
+    expect(CalcKind.of(0) == none, "0 is a list's")
+    expect(CalcKind.of(500) == none, "not Calc's")
+}
+
+// Counts the nodes of each kind it visits, and goes into no call.
+struct Counter: CalcVisitor {
+    var literals = 0
+    var references = 0
+    var calls = 0
+    var statements = 0
+
+    mutating fn visit(_ node: LiteralSyntax) -> Bool {
+        literals += 1
+        return true
+    }
+
+    mutating fn visit(_ node: ReferenceSyntax) -> Bool {
+        references += 1
+        return true
+    }
+
+    mutating fn visit(_ node: CallSyntax) -> Bool {
+        calls += 1
+        return false
+    }
+
+    mutating fn visit(_ node: AssignmentSyntax) -> Bool {
+        statements += 1
+        return true
+    }
+
+    mutating fn visit(_ node: PrintSyntax) -> Bool {
+        statements += 1
+        return true
+    }
+}
+
+@test
+fn aVisitorSeesEachNodeOfItsKindsAndGoesWhereItSays() {
+    let tree = CalcParser.parse("a = 1 + b; print f(c, 2) * (d); bad")
+    var counter = Counter()
+    counter.walk(tree.root)
+    // 'bad' is an assignment with no '=', value or ';'.
+    assertEqual(counter.statements, 3)
+    assertEqual(counter.calls, 1)
+    // The call's 'c' and '2' are not visited; 'bad''s missing value is.
+    assertEqual(counter.literals, 2)
+    assertEqual(counter.references, 2)
+}
+
+@test
+fn replacingANodeMakesANewTreeThatSharesTheRest() {
+    let tree = CalcParser.parse("a = 1;\nb = 2;\nc = 3;")
+    let second = tree.root.childNode(0)!.childNode(1)!
+    let other = CalcParser.parse("b = 22;").root.childNode(0)!.childNode(0)!.green
+    let replaced = second.replacing(with: other)
+    assertEqual(replaced.root.fullText, "a = 1;b = 22;\nc = 3;")
+    assertEqual(replaced.root.fullText.utf8Count, replaced.root.green.width)
+    expect(replaced.root.childNode(0)!.childNode(0)!.green === tree.root.childNode(0)!.childNode(0)!.green, "the first statement is shared")
+    expect(replaced.parent!.green !== second.parent!.green, "the list is made again")
+}
+
+@test
+fn findingTheNodeThatCoversASpan() {
+    let tree = CalcParser.parse("x = 1 + 22;")
+    assertEqual(tree.root.node(covering: TextSpan(start: 8, length: 2))!.kind, CalcKind.Literal.raw)
+    assertEqual(tree.root.node(covering: TextSpan(start: 4, length: 5))!.kind, CalcKind.Binary.raw)
+    assertEqual(tree.root.node(covering: TextSpan(start: 0, length: 11))!.kind, CalcKind.Assignment.raw)
+    expect(tree.root.node(covering: TextSpan(start: 5, length: 20)) == none, "past the end")
+    assertEqual(tree.root.token(at: 11)!.kind, CalcKind.EndOfFile.raw)
+    expect(tree.root.token(at: 12) == none, "past the end")
+}
+
+@test
+fn redNodesAreEqualByPlaceNotByObject() {
+    let tree = CalcParser.parse("x = 1;")
+    let a = tree.root.childNode(0)!
+    let b = tree.root.childNode(0)!
+    expect(a == b && a !== b)
+    assertEqual(a.hashValue, b.hashValue)
+    let token = tree.root.firstToken!
+    assertEqual(token, tree.root.token(at: 0)!)
+    assertEqual(token.hashValue, tree.root.token(at: 0)!.hashValue)
+    let views = ProgramSyntax.cast(tree.root)!
+    assertEqual(views, ProgramSyntax.cast(tree.root)!)
+    assertEqual(views.hashValue, ProgramSyntax.cast(tree.root)!.hashValue)
+    // The statements' list, in the program.
+    assertEqual(a.ancestors.count, 1)
+    expect(a.root == tree.root)
+    assertEqual(a.indexInParent, 0)
+}

@@ -1,0 +1,153 @@
+module ReuseTests
+
+// Incremental reparses (SyntaxReuse) through Calc: a reparse is the tree a
+// whole parse gives, and makes nodes for what the edit touched alone.
+
+import CalcSupport
+import CalcSyntax
+import Sable.Syntax
+import Sable.Testing
+
+// The tree a reparse after the change gives is the whole parse's.
+fn reparsesAsAWholeParse(_ text: String, _ change: TextChange) {
+    let old = CalcParser.parse(text)
+    let (tree, _) = CalcParser.reparse(old, [change])
+    let whole = CalcParser.parse(tree.text)
+    require(tree.root.green.isEquivalent(to: whole.root.green), "the reparse of '\(text)' after \(change) is '\(tree.root.fullText)', whose tree is not the whole parse's")
+}
+
+@test(arguments: [
+    ("x = 1;\ny = 2;\nz = 3;", 11, 1, "20"),
+    ("x = 1;\ny = 2;\nz = 3;", 0, 0, "w = 0;\n"),
+    ("x = 1;\ny = 2;\nz = 3;", 6, 7, ""),
+    ("x = 1;\ny = 2;\nz = 3;", 20, 0, "\nprint z;"),
+    ("ab = 1;\ncd = 2;", 2, 0, "c"),
+    ("ab = 1;cd = 2;", 7, 0, "x"),
+    ("x = 1; y = 2;", 6, 0, "#"),
+    ("x = 1;\ny = 2;", 5, 1, ""),
+    ("x = 1\ny = 2;", 5, 0, ";"),
+    ("print x;print y;", 5, 0, "x"),
+])
+fn editsReparseAsAWholeParse(_ text: String, _ start: Int, _ length: Int, _ inserted: String) {
+    reparsesAsAWholeParse(text, TextChange(TextSpan(start: start, length: length), inserted))
+}
+
+@test
+fn anyEditOfAnyTextReparsesAsAWholeParse() {
+    forAll(CalcText.pieces().flatMap({ pieces in
+        CalcText.edits(of: pieces.count).map({ edit in (pieces, edit) })
+    }), cases: 400) { (pair: (String[>..], (Int, Int, String[>..]))) in
+        reparsesAsAWholeParse(pair.0.joined(separator: ""), CalcText.change(pair.0, pair.1))
+    }
+}
+
+@test
+fn anyEditOfAProgramReparsesAsAWholeParse() {
+    forAll(CalcText.statements().flatMap({ pieces in
+        CalcText.edits(of: pieces.count).map({ edit in (pieces, edit) })
+    }), cases: 400) { (pair: (String[>..], (Int, Int, String[>..]))) in
+        reparsesAsAWholeParse(pair.0.joined(separator: ""), CalcText.change(pair.0, pair.1))
+    }
+}
+
+@test
+fn severalEditsAtOnceReparseAsAWholeParse() {
+    let text = "a = 1;\nb = 2;\nc = 3;\nd = 4;\ne = 5;"
+    let old = CalcParser.parse(text)
+    let changes = [
+        TextChange(TextSpan(start: 4, length: 1), "10"),
+        TextChange(TextSpan(start: 18, length: 1), "30"),
+        TextChange(TextSpan(start: 34, length: 0), "\nprint a;"),
+    ]
+    let (tree, parser) = CalcParser.reparse(old, changes)
+    assertEqual(tree.text, "a = 10;\nb = 2;\nc = 30;\nd = 4;\ne = 5;\nprint a;")
+    expect(tree.root.green.isEquivalent(to: CalcParser.parse(tree.text).root.green))
+    // 'b = 2;' and 'd = 4;' are kept; 'e = 5;' ends next to the third change.
+    assertEqual(parser.reused, 2)
+}
+
+// A program of that many statements, each on its line.
+fn program(_ count: Int) -> String {
+    var lines: String[>..] = []
+    for i in 0..<count {
+        lines.append("v\(i) = \(i) + f(\(i), 2);")
+    }
+    return lines.joined(separator: "\n")
+}
+
+@test(arguments: [10, 100, 1000])
+fn aReparseMakesNodesForTheEditNotForTheFile(_ count: Int) {
+    let text = program(count)
+    let old = CalcParser.parse(text)
+    // The middle statement's first number.
+    let middle = count / 2
+    let at = old.root.childNode(0)!.childNode(middle)!.childNode(2)!.span.start
+    let (tree, parser) = CalcParser.reparse(old, [TextChange(TextSpan(start: at, length: 0), "9")])
+    expect(tree.root.green.isEquivalent(to: CalcParser.parse(tree.text).root.green))
+    assertEqual(parser.reused, count - 1)
+    // One statement's 11 tokens and 6 nodes, and the program's node, list and
+    // end: the same for any length of file.
+    assertEqual(parser.made, 20)
+    // The other statements are the old tree's own nodes.
+    expect(tree.root.childNode(0)!.childNode(0)!.green === old.root.childNode(0)!.childNode(0)!.green)
+    expect(tree.root.childNode(0)!.childNode(count - 1)!.green === old.root.childNode(0)!.childNode(count - 1)!.green)
+}
+
+@test
+fn aFirstParseKeepsNothing() {
+    var reuse = SyntaxReuse.nothing
+    expect(reuse.take(at: 0, where: { _ in true }) == none)
+    assertEqual(reuse.reusedCount, 0)
+}
+
+@test
+fn positionsMapBackAcrossChanges() {
+    let old = CalcParser.parse("abcdefghij")
+    let reuse = SyntaxReuse(old, [
+        TextChange(TextSpan(start: 2, length: 2), "XYZ"),
+        TextChange(TextSpan(start: 6, length: 1), ""),
+    ])
+    // ab XYZ ef hij
+    assertEqual(reuse.oldPosition(of: 0), 0)
+    assertEqual(reuse.oldPosition(of: 1), 1)
+    expect(reuse.oldPosition(of: 2) == none && reuse.oldPosition(of: 4) == none)
+    assertEqual(reuse.oldPosition(of: 5), 4)
+    assertEqual(reuse.oldPosition(of: 6), 5)
+    assertEqual(reuse.oldPosition(of: 7), 7)
+    assertEqual(reuse.oldPosition(of: 9), 9)
+}
+
+@test
+fn takingAgainEarlierLooksAgainFromTheRoot() {
+    let old = CalcParser.parse("a = 1;\nb = 2;\nc = 3;")
+    var reuse = SyntaxReuse(old, [])
+    let isStatement = { (green: GreenNode) -> Bool in green.kind == CalcKind.Assignment.raw }
+    assertEqual(reuse.take(at: 13, where: isStatement)!.fullText, "\nc = 3;")
+    assertEqual(reuse.take(at: 0, where: isStatement)!.fullText, "a = 1;")
+    assertEqual(reuse.take(at: 6, where: isStatement)!.fullText, "\nb = 2;")
+    // Inside a statement, at no node's start.
+    expect(reuse.take(at: 9, where: isStatement) == none)
+    expect(reuse.take(at: 20, where: isStatement) == none, "past the end")
+    assertEqual(reuse.reusedCount, 3)
+    assertEqual(reuse.reusedWidth, 20)
+}
+
+@test
+fn aNodeWithAnErrorIsParsedAgain() {
+    let old = CalcParser.parse("a = ;\nb = 2;")
+    var reuse = SyntaxReuse(old, [])
+    expect(reuse.take(at: 0, where: { _ in true }) == none || reuse.take(at: 0, where: { $0.kind == CalcKind.Assignment.raw }) == none)
+    let (_, parser) = CalcParser.reparse(old, [])
+    assertEqual(parser.reused, 1)
+}
+
+@test
+fn aWiderMarginKeepsLess() {
+    let old = CalcParser.parse("a = 1;  b = 2;")
+    let change = [TextChange(TextSpan(start: 7, length: 0), " ")]
+    var near = SyntaxReuse(old, change)
+    var wide = SyntaxReuse(old, change, margin: 3)
+    let isStatement = { (green: GreenNode) -> Bool in green.kind == CalcKind.Assignment.raw }
+    expect(near.take(at: 0, where: isStatement) != none)
+    expect(wide.take(at: 0, where: isStatement) == none)
+}

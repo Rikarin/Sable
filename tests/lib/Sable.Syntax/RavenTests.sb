@@ -1,0 +1,117 @@
+module RavenTests
+
+// Raven's node types, written by '@syntax' from its description (Raven.sb,
+// translated from Vixen's Raven/Vixen.Raven/Syntax/Syntax.xml): trees made
+// with the views' 'make', read back through views and categories.
+
+import RavenSyntax
+import Sable.Syntax
+import Sable.Testing
+
+fn token(_ kind: RavenKind, _ text: String, _ space: Bool = false) -> GreenNode {
+    var trailing: GreenNode[>..] = []
+    if space {
+        trailing.append(GreenNode.trivia(RavenKind.WhitespaceTrivia.raw, " "))
+    }
+    return GreenNode.token(kind.raw, text, trailing: trailing)
+}
+
+fn name(_ text: String) -> GreenNode {
+    return IdentifierNameSyntax.make(identifier: token(.IdentifierToken, text))
+}
+
+// 'static const x: float = -a.b' as a field.
+fn field() -> SyntaxNode {
+    let qualified = QualifiedNameSyntax.make(left: name("a"), dotToken: token(.DotToken, "."), right: name("b"))
+    let negated = PrefixUnaryExpressionSyntax.make(.UnaryMinusExpression, operatorToken: token(.OperatorToken, "-"), operand: qualified)
+    let initializer = EqualsValueClauseSyntax.make(equalsToken: token(.EqualsToken, "=", true), value: negated)
+    let declaration = VariableDeclarationSyntax.make(
+        .ConstDeclaration,
+        keyword: token(.ConstKeyword, "const", true),
+        identifier: token(.IdentifierToken, "x"),
+        colonToken: token(.ColonToken, ":", true),
+        type: PredefinedTypeSyntax.make(keyword: token(.FloatKeyword, "float", true)),
+        initializer: initializer
+    )
+    let modifiers = GreenNode.list([token(.StaticKeyword, "static", true)])
+    return SyntaxNode(FieldDeclarationSyntax.make(attributeLists: GreenNode.list([]), modifiers: modifiers, declaration: declaration))
+}
+
+@test
+fn ravensTreeIsReadThroughItsViews() {
+    let root = field()
+    assertEqual(root.fullText, "static const x: float = -a.b")
+    let member = require(MemberDeclarationSyntax.cast(root))
+    assertEqual(member.modifiers.count, 1)
+    assertEqual(member.modifiers[0].text, "static")
+    expect(member.attributeLists.isEmpty)
+    let declaration = require(member.asBaseFieldDeclaration).declaration
+    assertEqual(declaration.kind, .ConstDeclaration)
+    assertEqual(declaration.identifier.text, "x")
+    let type = require(declaration.type)
+    expect(type.asPredefinedType != none && type.asName == none)
+    let value = require(declaration.initializer).value
+    let negated = require(value.asPrefixUnaryExpression)
+    assertEqual(negated.kind, .UnaryMinusExpression)
+    assertEqual(negated.operatorToken.text, "-")
+}
+
+@test
+fn aNameIsATypeAndAnExpression() {
+    let root = field()
+    let operand = require(root.node(covering: TextSpan(start: 25, length: 3)))
+    assertEqual(operand.text, "a.b")
+    let expression = require(ExpressionSyntax.cast(operand))
+    let type = require(expression.asType)
+    let name = require(type.asName)
+    let qualified = require(name.asQualifiedName)
+    // 'SimpleName' declares 'identifier'; each simple name has it.
+    assertEqual(qualified.right.identifier.text, "b")
+    assertEqual(require(qualified.left.asSimpleName).identifier.text, "a")
+    expect(name.asSimpleName == none)
+    assertEqual(qualified.asType.node, qualified.node)
+    assertEqual(qualified.asExpression.asName?.node, qualified.node)
+}
+
+@test
+fn aViewOfSeveralKindsIsMadeOfOneOfThem() {
+    let operand = name("a")
+    for kind in [RavenKind.UnaryPlusExpression, RavenKind.LogicalNotExpression, RavenKind.PreDecrementExpression] {
+        let node = SyntaxNode(PrefixUnaryExpressionSyntax.make(kind, operatorToken: token(.OperatorToken, "+"), operand: operand))
+        assertEqual(require(PrefixUnaryExpressionSyntax.cast(node)).kind, kind)
+        expect(ExpressionSyntax.cast(node) != none)
+    }
+    expectPanic("is of kind") {
+        _ = PrefixUnaryExpressionSyntax.make(.BinaryExpression, operatorToken: token(.OperatorToken, "+"), operand: operand)
+    }
+}
+
+struct RavenCounter: RavenVisitor {
+    var names: String[>..] = []
+    var unary = 0
+    var declarations = 0
+
+    mutating fn visit(_ node: IdentifierNameSyntax) -> Bool {
+        names.append(node.identifier.text)
+        return true
+    }
+
+    mutating fn visit(_ node: PrefixUnaryExpressionSyntax) -> Bool {
+        unary += 1
+        return true
+    }
+
+    mutating fn visit(_ node: VariableDeclarationSyntax) -> Bool {
+        declarations += 1
+        return true
+    }
+}
+
+@test
+fn aRavenVisitorSeesEachKindOfAView() {
+    var counter = RavenCounter()
+    counter.walk(field())
+    assertEqual(counter.names, ["a", "b"])
+    assertEqual(counter.unary, 1)
+    assertEqual(counter.declarations, 1)
+}

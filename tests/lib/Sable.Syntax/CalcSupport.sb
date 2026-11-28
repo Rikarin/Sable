@@ -1,0 +1,52 @@
+module CalcSupport
+
+// Texts of Calc, and edits of them, for the property tests: made of pieces
+// that are tokens, trivia and what is neither, so that every cut between
+// pieces is a scalar boundary and edits land where they make a difference.
+
+import CalcSyntax
+import Sable.Syntax
+import Sable.Testing
+
+public struct CalcText {
+    public static let vocabulary: String[>..] = [
+        "x", "y1", "f", "print", "printx", "7", "42", " ", "  ", "\n", "\t", "# note\n", "#",
+        "=", "+", "*", "(", ")", ",", ";", ";", ";", "$", "é",
+    ]
+
+    /// Texts made of 0 to 60 pieces.
+    public static fn pieces() -> Gen<String[>..]> {
+        return Gen.element(of: CalcText.vocabulary).array(count: 0...60)
+    }
+
+    /// Programs of statements that parse cleanly, 1 to 30 of them.
+    public static fn statements() -> Gen<String[>..]> {
+        let statement = Gen.element(of: ["x = 1;", "y1 = x + 2 * f(x, 3);", "print (x + y1);", "# a comment\n", "\n", "f = f(f(1));"])
+        return statement.array(count: 1...30)
+    }
+
+    /// An edit of a text made of the pieces: which pieces it replaces, from
+    /// the first to before the second, and the pieces it puts there.
+    public static fn edits(of count: Int) -> Gen<(Int, Int, String[>..])> {
+        let from = Gen.number(in: 0...count)
+        let length = Gen.number(in: 0...3)
+        let inserted = Gen.element(of: CalcText.vocabulary).array(count: 0...3)
+        return from.zip(length).zip(inserted).map({ (edit: ((Int, Int), String[>..])) -> (Int, Int, String[>..]) in
+            let end = edit.0.0 + edit.0.1
+            return (edit.0.0, end < count ? end : count, edit.1)
+        })
+    }
+
+    /// The change that edit makes, in the text's positions.
+    public static fn change(_ pieces: String[>..], _ edit: (Int, Int, String[>..])) -> TextChange {
+        var start = 0
+        for i in 0..<edit.0 {
+            start += pieces[i].utf8Count
+        }
+        var end = start
+        for i in edit.0..<edit.1 {
+            end += pieces[i].utf8Count
+        }
+        return TextChange(TextSpan(from: start, to: end), edit.2.joined(separator: ""))
+    }
+}

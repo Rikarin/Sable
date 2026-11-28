@@ -1,0 +1,65 @@
+module Sable.Syntax
+
+/// A range of a text, by UTF-8 offset: where it starts and how many bytes it
+/// takes. A syntax tree's positions are all of this kind.
+///
+/// ```sable
+/// let span = TextSpan(start: 4, length: 3)
+/// assert(span.end == 7)
+/// assert(span.contains(6) && !span.contains(7))
+/// assert(span.overlaps(TextSpan(start: 6, length: 2)))
+/// assert(!span.overlaps(TextSpan(start: 7, length: 1)))
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct TextSpan: Sendable {
+    /// The offset of its first byte.
+    public let start: Int
+    /// How many bytes it takes.
+    public let length: Int
+
+    /// The span of that many bytes from there.
+    public init(start: Int, length: Int) {
+        precondition(start >= 0 && length >= 0, "a span starts at 0 or after and has no negative length")
+        self.start = start
+        self.length = length
+    }
+
+    /// The span from one offset up to another, not counting it.
+    public init(from start: Int, to end: Int) {
+        precondition(start >= 0 && end >= start, "a span ends where it starts or after")
+        self.start = start
+        self.length = end - start
+    }
+
+    /// The offset just past it.
+    public var end: Int => start + length
+
+    /// Whether it takes no bytes.
+    public var isEmpty: Bool => length == 0
+
+    /// Whether the offset is in it: at its start or after, and before its end.
+    public fn contains(_ offset: Int) -> Bool {
+        return offset >= start && offset < end
+    }
+
+    /// Whether every byte of the other is in it.
+    public fn contains(_ other: TextSpan) -> Bool {
+        return other.start >= start && other.end <= end
+    }
+
+    /// Whether the two share a byte. An empty span shares none.
+    public fn overlaps(_ other: TextSpan) -> Bool {
+        return !isEmpty && !other.isEmpty && start < other.end && other.start < end
+    }
+
+    /// Whether the two share a byte or one ends where the other starts: what
+    /// an edit must not do to a node that is reused.
+    public fn touches(_ other: TextSpan) -> Bool {
+        return start <= other.end && other.start <= end
+    }
+
+    /// The text of it, from the text it is a span of.
+    public fn of(_ text: String) -> String {
+        return text[String.Index(utf8Offset: start)..<String.Index(utf8Offset: end)].toString()
+    }
+}

@@ -1,0 +1,219 @@
+module Sable.Syntax
+
+/// A token of a syntax tree in its place: a green token with its position and
+/// the node it is in. A value: made as the tree is walked.
+///
+/// ```sable
+/// let comment = GreenNode.trivia(8, "// x")
+/// let token = GreenNode.token(1, "x", leading: [GreenNode.trivia(9, "  ")], trailing: [GreenNode.trivia(9, " "), comment])
+/// let root = SyntaxNode(GreenNode.node(20, [token]))
+/// let x = root.firstToken!
+/// assert(x.text == "x" && x.fullText == "  x // x")
+/// assert(x.span == TextSpan(start: 2, length: 1) && x.fullSpan == TextSpan(start: 0, length: 8))
+/// assert(x.trailingTrivia.map({ $0.kind }) == [9, 8])
+/// assert(x.trailingTrivia[1].span == TextSpan(start: 4, length: 4))
+/// ```
+public struct SyntaxToken: Sendable, Equatable, Hashable, Debug {
+    /// What it is, without its place.
+    public let green: GreenNode
+    /// Where it starts, its leading trivia counted.
+    public let position: Int
+    /// The node it is in.
+    public let parent: SyntaxNode?
+    /// Which of its parent's slots it is in.
+    public let indexInParent: Int
+
+    init(_ green: GreenNode, position: Int, parent: SyntaxNode?, index: Int) {
+        self.green = green
+        self.position = position
+        self.parent = parent
+        self.indexInParent = index
+    }
+
+    public operator == (lhs: SyntaxToken, rhs: SyntaxToken) -> Bool {
+        return lhs.green === rhs.green && lhs.position == rhs.position
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(position)
+        hasher.combine(green.kind)
+    }
+
+    /// Its kind, its text and where that is: `SyntaxToken(1, "x", 2..<3)`.
+    public fn debugDescription() -> String {
+        let at = span
+        return "SyntaxToken(\(green.kind), \"\(green.text)\", \(at.start)..<\(at.end))"
+    }
+
+    /// The language's kind.
+    public var kind: U16 => green.kind
+    /// Its text, without trivia.
+    public var text: String => green.text
+    /// Its text with its trivia.
+    public var fullText: String => green.fullText
+    /// Whether the parser expected it and the text does not have it.
+    public var isMissing: Bool => green.isMissing
+
+    /// Where its text is.
+    public var span: TextSpan => TextSpan(start: position + green.leadingWidth, length: green.text.utf8Count)
+    /// Where it and its trivia are.
+    public var fullSpan: TextSpan => TextSpan(start: position, length: green.width)
+
+    /// Its trivia before its text, in their places.
+    public var leadingTrivia: SyntaxTrivia[>..] => SyntaxToken.place(green.leadingTrivia, from: position)
+
+    /// Its trivia after its text, in their places.
+    public var trailingTrivia: SyntaxTrivia[>..] => SyntaxToken.place(green.trailingTrivia, from: span.end)
+
+    static fn place(_ pieces: GreenNode[>..], from start: Int) -> SyntaxTrivia[>..] {
+        var all: SyntaxTrivia[>..] = []
+        var at = start
+        for piece in pieces {
+            all.append(SyntaxTrivia(green: piece, position: at))
+            at += piece.width
+        }
+        return all
+    }
+
+    /// Its diagnostics, in the text's positions.
+    public var diagnostics: SyntaxDiagnostic[>..] => green.ownDiagnostics.map({ $0.moved(by: position) })
+
+    /// The token after it in the tree, missing ones counted, or none for the
+    /// last.
+    public var next: SyntaxToken? {
+        get {
+            var index = indexInParent
+            var node = parent
+            while let up = node {
+                var i = index + 1
+                while i < up.slotCount {
+                    if let child = up.child(i) {
+                        if let token = child.token {
+                            return token
+                        }
+                        if let token = child.node!.firstToken {
+                            return token
+                        }
+                    }
+                    i += 1
+                }
+                index = up.indexInParent
+                node = up.parent
+            }
+            return none
+        }
+    }
+
+    /// The token before it, or none for the first.
+    public var previous: SyntaxToken? {
+        get {
+            var index = indexInParent
+            var node = parent
+            while let up = node {
+                var i = index - 1
+                while i >= 0 {
+                    if let child = up.child(i) {
+                        if let token = child.token {
+                            return token
+                        }
+                        if let token = child.node!.lastToken {
+                            return token
+                        }
+                    }
+                    i -= 1
+                }
+                index = up.indexInParent
+                node = up.parent
+            }
+            return none
+        }
+    }
+}
+
+/// A piece of trivia in its place.
+///
+/// ```sable
+/// let word = GreenNode.token(1, "x", leading: [GreenNode.trivia(9, "  "), GreenNode.trivia(10, "// c\n")])
+/// let token = SyntaxNode(GreenNode.node(20, [word])).childToken(0)!
+/// let comment = token.leadingTrivia[1]
+/// assert(comment.kind == 10 && comment.text == "// c\n")
+/// assert(comment.span == TextSpan(start: 2, length: 5))
+/// ```
+public struct SyntaxTrivia: Sendable {
+    /// What it is.
+    public let green: GreenNode
+    /// Where it starts.
+    public let position: Int
+
+    /// The language's kind.
+    public var kind: U16 => green.kind
+    /// Its text.
+    public var text: String => green.text
+    /// Where it is.
+    public var span: TextSpan => TextSpan(start: position, length: green.width)
+}
+
+/// What is in a slot of a node, in its place: a node or a token.
+///
+/// ```sable
+/// let root = SyntaxNode(GreenNode.node(20, [GreenNode.token(1, "f"), GreenNode.node(21, [GreenNode.token(2, "(")])]))
+/// assert(root.children.map({ $0.kind }) == [1, 21])
+/// assert(root.children[0].token!.text == "f" && root.children[1].node!.fullSpan.start == 1)
+/// ```
+public union SyntaxElement: Sendable {
+    Node(SyntaxNode)
+    Token(SyntaxToken)
+
+    /// The language's kind.
+    public var kind: U16 => green.kind
+
+    /// What it is, without its place.
+    public var green: GreenNode {
+        get {
+            return match self {
+                case .Node(let node)   => node.green
+                case .Token(let token) => token.green
+            }
+        }
+    }
+
+    /// Where it is, its trivia counted.
+    public var fullSpan: TextSpan {
+        get {
+            return match self {
+                case .Node(let node)   => node.fullSpan
+                case .Token(let token) => token.fullSpan
+            }
+        }
+    }
+
+    /// Where it is, without trivia at its ends.
+    public var span: TextSpan {
+        get {
+            return match self {
+                case .Node(let node)   => node.span
+                case .Token(let token) => token.span
+            }
+        }
+    }
+
+    /// The node, if it is one.
+    public var node: SyntaxNode? {
+        get {
+            return match self {
+                case .Node(let node) => node
+                case .Token(_)       => none
+            }
+        }
+    }
+
+    /// The token, if it is one.
+    public var token: SyntaxToken? {
+        get {
+            return match self {
+                case .Token(let token) => token
+                case .Node(_)          => none
+            }
+        }
+    }
+}

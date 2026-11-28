@@ -1,0 +1,361 @@
+module RavenSyntax
+
+import Sable.Syntax
+
+/// Raven's kinds of tokens, trivia and nodes, from Vixen's `Raven/Vixen.Raven/Syntax/Syntax.xml`.
+@syntax
+public union Raven {
+    IdentifierToken
+    InKeyword
+    ComposeKeyword
+    ConstKeyword
+    OverrideKeyword
+    ReadOnlyKeyword
+    StaticKeyword
+    StreamKeyword
+    GroupSharedKeyword
+    InOutKeyword
+    CaseKeyword
+    QuestionToken
+    BoolKeyword
+    Bool2Keyword
+    Bool3Keyword
+    Bool4Keyword
+    IntKeyword
+    Int2Keyword
+    Int3Keyword
+    Int4Keyword
+    UIntKeyword
+    UInt2Keyword
+    UInt3Keyword
+    UInt4Keyword
+    FloatKeyword
+    Float2Keyword
+    Float3Keyword
+    Float4Keyword
+    DoubleKeyword
+    Double2Keyword
+    Double3Keyword
+    Double4Keyword
+    Mat2Keyword
+    Mat2x3Keyword
+    Mat2x4Keyword
+    Mat3Keyword
+    Mat3x2Keyword
+    Mat3x4Keyword
+    Mat4Keyword
+    Mat4x2Keyword
+    Mat4x3Keyword
+    PackageKeyword
+    ImportKeyword
+    ShaderKeyword
+    StructKeyword
+    ProtocolKeyword
+    EnumKeyword
+    InitKeyword
+    GetKeyword
+    SetKeyword
+    WillSetKeyword
+    DidSetKeyword
+    FuncKeyword
+    VarKeyword
+    ValKeyword
+    TrueKeyword
+    FalseKeyword
+    DefaultKeyword
+    ReturnKeyword
+    IfKeyword
+    ElseKeyword
+    ForKeyword
+    WhileKeyword
+    SwitchKeyword
+    BreakKeyword
+    ContinueKeyword
+    DiscardKeyword
+    WhereKeyword
+    SelfKeyword
+    BaseKeyword
+    RepeatKeyword
+    OperatorKeyword
+    DotToken
+    CommaToken
+    ColonToken
+    EqualsToken
+    ArrowToken
+    DotDotToken
+    OperatorToken
+    StringLiteralToken
+    OpenParenToken
+    CloseParenToken
+    OpenBracketToken
+    CloseBracketToken
+    LessThanToken
+    GreaterThanToken
+    OpenBraceToken
+    CloseBraceToken
+    NumericLiteralToken
+    EndOfFileToken
+    @trivia
+    WhitespaceTrivia
+    @trivia
+    EndOfLineTrivia
+    @trivia
+    SingleLineCommentTrivia
+    @trivia
+    MultiLineCommentTrivia
+    @trivia
+    SkippedTokensTrivia
+    /// Provides the base class from which the classes that represent name syntax nodes are derived.
+    /// This is an abstract class.
+    @base
+    @category("Type")
+    Name
+    /// Provides the base class from which the classes that represent simple name syntax nodes are
+    /// derived. This is an abstract class.
+    @base
+    @category("Name")
+    SimpleName(identifier: SyntaxToken)
+    /// Class which represents the syntax node for identifier name.
+    @category("SimpleName")
+    IdentifierName(identifier: SyntaxToken)
+    /// Class which represents the syntax node for qualified name.
+    @category("Name")
+    QualifiedName(left: NameSyntax, dotToken: SyntaxToken, right: SimpleNameSyntax)
+    /// Class which represents the syntax node for generic name.
+    @category("SimpleName")
+    GenericName(identifier: SyntaxToken, typeArgumentList: TypeArgumentListSyntax)
+    /// Class which represents the syntax node for type argument list.
+    TypeArgumentList(lessThanToken: SyntaxToken, arguments: SeparatedSyntaxList<TypeSyntax>, greaterThanToken: SyntaxToken)
+    /// Provides the base class from which the classes that represent expression syntax nodes are
+    /// derived. This is an abstract class.
+    @base
+    Expression
+    /// Class which represents the syntax node for name colon syntax.
+    NameColon(name: IdentifierNameSyntax, colonToken: SyntaxToken)
+    /// Provides the base class from which the classes that represent instance expression syntax
+    /// nodes are derived. This is an abstract class.
+    @base
+    @category("Expression")
+    InstanceExpression
+    /// Class which represents the syntax node for a "self" expression.
+    @category("InstanceExpression")
+    SelfExpression(token: SyntaxToken)
+    /// Class which represents the syntax node for a base expression.
+    @category("InstanceExpression")
+    BaseExpression(token: SyntaxToken)
+    /// The syntax for the expression body of an expression-bodied member.
+    ArrowExpressionClause(arrowToken: SyntaxToken, expression: ExpressionSyntax)
+    /// Class which represents the syntax node for parenthesized expression.
+    @category("Expression")
+    ParenthesizedExpression(openParenToken: SyntaxToken, expression: ExpressionSyntax, closeParenToken: SyntaxToken)
+    /// Tuple expression: (a, b, ...).
+    @category("Expression")
+    TupleExpression(openParenToken: SyntaxToken, arguments: SeparatedSyntaxList<ArgumentSyntax>, closeParenToken: SyntaxToken)
+    /// Class which represents the syntax node for prefix unary expression.
+    @category("Expression")
+    @kinds("UnaryPlusExpression", "UnaryMinusExpression", "BitwiseNotExpression", "LogicalNotExpression", "PreIncrementExpression", "PreDecrementExpression")
+    PrefixUnaryExpression(operatorToken: SyntaxToken, operand: ExpressionSyntax)
+    /// Class which represents the syntax node for postfix unary expression.
+    @category("Expression")
+    @kinds("PostIncrementExpression", "PostDecrementExpression")
+    PostfixUnaryExpression(operand: ExpressionSyntax, operatorToken: SyntaxToken)
+    /// Class which represents the syntax node for Default expression.
+    @category("Expression")
+    DefaultExpression(keyword: SyntaxToken, openParenToken: SyntaxToken, type: TypeSyntax, closeParenToken: SyntaxToken)
+    /// Class which represents the syntax node for cast expression.
+    @category("Expression")
+    CastExpression(openParenToken: SyntaxToken, type: TypeSyntax, closeParenToken: SyntaxToken, expression: ExpressionSyntax)
+    /// Provides the base class from which the classes that represent type syntax nodes are derived.
+    /// This is an abstract class.
+    @base
+    @category("Expression")
+    Type
+    /// Class which represents the syntax node for predefined types.
+    @category("Type")
+    PredefinedType(keyword: SyntaxToken)
+    /// Class which represents the syntax node for the array type.
+    @category("Type")
+    ArrayType(elementType: TypeSyntax, rankSpecifiers: SyntaxList<ArrayRankSpecifierSyntax>)
+    /// One […] of an array type: [4] a size, [] unsized, [,] rank 2. A size and commas are mutually
+    /// exclusive — a multi-dimensional array cannot be sized — so at most one of and is ever
+    /// present.
+    ArrayRankSpecifier(openBracketToken: SyntaxToken, size: ExpressionSyntax?, commas: SyntaxTokenList, closeBracketToken: SyntaxToken)
+    /// Tuple type element.
+    TupleElement(identifier: SyntaxToken?, colonToken: SyntaxToken?, type: TypeSyntax)
+    /// Class which represents the syntax node for tuple type.
+    @category("Type")
+    TupleType(openParenToken: SyntaxToken, elements: SeparatedSyntaxList<TupleElementSyntax>, closeParenToken: SyntaxToken)
+    CompilationUnit(package: PackageDirectiveSyntax, imports: SyntaxList<ImportDirectiveSyntax>, members: SyntaxList<MemberDeclarationSyntax>, endOfFileToken: SyntaxToken)
+    PackageDirective(packageKeyword: SyntaxToken, packageName: NameSyntax)
+    ImportDirective(importKeyword: SyntaxToken, staticKeyword: SyntaxToken?, name: NameSyntax)
+    /// Member declaration syntax.
+    @base
+    MemberDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList)
+    @base
+    @category("MemberDeclaration")
+    BaseFieldDeclaration(declaration: VariableDeclarationSyntax)
+    @category("BaseFieldDeclaration")
+    FieldDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, declaration: VariableDeclarationSyntax)
+    /// Type parameter list syntax.
+    TypeParameterList(lessThanToken: SyntaxToken, parameters: SeparatedSyntaxList<TypeParameterSyntax>, greaterThanToken: SyntaxToken)
+    /// Class representing one or more attributes applied to a language construct.
+    AttributeList(openBracketToken: SyntaxToken, attributes: SeparatedSyntaxList<AttributeSyntax>, closeBracketToken: SyntaxToken)
+    /// Attribute syntax.
+    Attribute(name: NameSyntax, argumentList: AttributeArgumentListSyntax?)
+    /// Attribute argument list syntax.
+    AttributeArgumentList(openParenToken: SyntaxToken, arguments: SeparatedSyntaxList<AttributeArgumentSyntax>, closeParenToken: SyntaxToken)
+    /// Attribute argument syntax.
+    AttributeArgument(nameColon: NameColonSyntax?, expression: ExpressionSyntax)
+    /// Provides the base class from which the classes that represent base type syntax nodes are
+    /// derived. This is an abstract class.
+    @base
+    BaseType(type: TypeSyntax)
+    @category("BaseType")
+    SimpleBaseType(type: TypeSyntax)
+    EqualsValueClause(equalsToken: SyntaxToken, value: ExpressionSyntax)
+    /// Invocation expression: expr(args).
+    @category("Expression")
+    InvocationExpression(expression: ExpressionSyntax, argumentList: ArgumentListSyntax)
+    /// Element access: expr[args].
+    @category("Expression")
+    ElementAccessExpression(expression: ExpressionSyntax, argumentList: BracketedArgumentListSyntax)
+    /// Ternary conditional: c ? t : f.
+    @category("Expression")
+    ConditionalExpression(condition: ExpressionSyntax, questionToken: SyntaxToken, whenTrue: ExpressionSyntax, colonToken: SyntaxToken, whenFalse: ExpressionSyntax)
+    /// Member access expression: expr.name.
+    @category("Expression")
+    MemberAccessExpression(expression: ExpressionSyntax, operatorToken: SyntaxToken, name: SimpleNameSyntax)
+    /// Binary expression: left op right.
+    @category("Expression")
+    BinaryExpression(left: ExpressionSyntax, operatorToken: SyntaxToken, right: ExpressionSyntax)
+    /// Assignment expression: left op= right.
+    @category("Expression")
+    AssignmentExpression(left: ExpressionSyntax, operatorToken: SyntaxToken, right: ExpressionSyntax)
+    /// Literal expression (numeric, true/false, null, default).
+    @category("Expression")
+    @kinds("NumericLiteralExpression", "StringLiteralExpression", "TrueLiteralExpression", "FalseLiteralExpression", "DefaultLiteralExpression")
+    LiteralExpression(token: SyntaxToken)
+    /// Parameter syntax.
+    Parameter(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, identifier: SyntaxToken, colonToken: SyntaxToken?, type: TypeSyntax?, default: EqualsValueClauseSyntax?)
+    /// Parameter list syntax.
+    ParameterList(openParenToken: SyntaxToken, parameters: SeparatedSyntaxList<ParameterSyntax>, closeParenToken: SyntaxToken)
+    /// Provides the base class from which the classes that represent argument list syntax nodes are
+    /// derived. This is an abstract class.
+    @base
+    BaseArgumentList(arguments: SeparatedSyntaxList<ArgumentSyntax>)
+    /// Class which represents the syntax node for the list of arguments.
+    @category("BaseArgumentList")
+    ArgumentList(openParenToken: SyntaxToken, arguments: SeparatedSyntaxList<ArgumentSyntax>, closeParenToken: SyntaxToken)
+    /// Class which represents the syntax node for bracketed argument list.
+    @category("BaseArgumentList")
+    BracketedArgumentList(openBracketToken: SyntaxToken, arguments: SeparatedSyntaxList<ArgumentSyntax>, closeBracketToken: SyntaxToken)
+    /// Class which represents the syntax node for argument.
+    Argument(nameColon: NameColonSyntax?, expression: ExpressionSyntax)
+    /// Represents the base class for all statements' syntax classes.
+    @base
+    Statement(attributeLists: SyntaxList<AttributeListSyntax>)
+    @category("Statement")
+    Block(attributeLists: SyntaxList<AttributeListSyntax>, openBraceToken: SyntaxToken, statements: SyntaxList<StatementSyntax>, closeBraceToken: SyntaxToken)
+    @category("Statement")
+    BreakStatement(attributeLists: SyntaxList<AttributeListSyntax>, keyword: SyntaxToken)
+    @category("Statement")
+    ContinueStatement(attributeLists: SyntaxList<AttributeListSyntax>, keyword: SyntaxToken)
+    /// Throws the fragment away: nothing is written to any render target or to the depth buffer,
+    /// and the invocation ends where the keyword is.
+    @category("Statement")
+    DiscardStatement(attributeLists: SyntaxList<AttributeListSyntax>, keyword: SyntaxToken)
+    @category("Statement")
+    RepeatStatement(attributeLists: SyntaxList<AttributeListSyntax>, repeatKeyword: SyntaxToken, statement: StatementSyntax, whileKeyword: SyntaxToken, openParenToken: SyntaxToken, condition: ExpressionSyntax, closeParenToken: SyntaxToken)
+    @category("Statement")
+    EmptyStatement(attributeLists: SyntaxList<AttributeListSyntax>)
+    @category("Statement")
+    ExpressionStatement(attributeLists: SyntaxList<AttributeListSyntax>, expression: ExpressionSyntax)
+    @category("Statement")
+    ForStatement(attributeLists: SyntaxList<AttributeListSyntax>, forKeyword: SyntaxToken, openParenToken: SyntaxToken, identifier: SyntaxToken, inKeyword: SyntaxToken, expression: ExpressionSyntax, closeParenToken: SyntaxToken, statement: StatementSyntax)
+    /// Represents an if statement syntax.
+    @category("Statement")
+    IfStatement(attributeLists: SyntaxList<AttributeListSyntax>, ifKeyword: SyntaxToken, openParenToken: SyntaxToken, condition: ExpressionSyntax, closeParenToken: SyntaxToken, statement: StatementSyntax, else: ElseClauseSyntax?)
+    /// Represents an else statement syntax.
+    ElseClause(elseKeyword: SyntaxToken, statement: StatementSyntax)
+    @category("Statement")
+    ReturnStatement(attributeLists: SyntaxList<AttributeListSyntax>, returnKeyword: SyntaxToken, expression: ExpressionSyntax?)
+    @category("Statement")
+    LocalDeclarationStatement(attributeLists: SyntaxList<AttributeListSyntax>, declaration: VariableDeclarationSyntax)
+    @category("Statement")
+    WhileStatement(attributeLists: SyntaxList<AttributeListSyntax>, whileKeyword: SyntaxToken, openParenToken: SyntaxToken, condition: ExpressionSyntax, closeParenToken: SyntaxToken, statement: StatementSyntax)
+    /// Range expression: left..right.
+    @category("Expression")
+    RangeExpression(left: ExpressionSyntax, operatorToken: SyntaxToken, right: ExpressionSyntax)
+    /// Represents a switch statement syntax.
+    @category("Statement")
+    SwitchStatement(attributeLists: SyntaxList<AttributeListSyntax>, switchKeyword: SyntaxToken, openParenToken: SyntaxToken, expression: ExpressionSyntax, closeParenToken: SyntaxToken, openBraceToken: SyntaxToken, sections: SyntaxList<SwitchSectionSyntax>, closeBraceToken: SyntaxToken)
+    /// Represents a switch section syntax of a switch statement.
+    SwitchSection(labels: SyntaxList<SwitchLabelSyntax>, statements: SyntaxList<StatementSyntax>)
+    /// Represents a switch label within a switch statement.
+    @base
+    SwitchLabel
+    /// Represents a case label within a switch statement.
+    @category("SwitchLabel")
+    CaseSwitchLabel(keyword: SyntaxToken, value: ExpressionSyntax, colonToken: SyntaxToken)
+    /// Represents a default label within a switch statement.
+    @category("SwitchLabel")
+    DefaultSwitchLabel(keyword: SyntaxToken, colonToken: SyntaxToken)
+    @kinds("VariableDeclaration", "ConstDeclaration")
+    VariableDeclaration(keyword: SyntaxToken, identifier: SyntaxToken, colonToken: SyntaxToken?, type: TypeSyntax?, initializer: EqualsValueClauseSyntax?)
+    /// Type parameter syntax.
+    TypeParameter(attributeLists: SyntaxList<AttributeListSyntax>, valKeyword: SyntaxToken?, identifier: SyntaxToken, colonToken: SyntaxToken?, type: TypeSyntax?)
+    /// Base list syntax.
+    BaseList(colonToken: SyntaxToken, types: SeparatedSyntaxList<BaseTypeSyntax>)
+    /// Collection expression: [a, b, ..c].
+    @category("Expression")
+    CollectionExpression(openBracketToken: SyntaxToken, elements: SeparatedSyntaxList<CollectionElementSyntax>, closeBracketToken: SyntaxToken)
+    @base
+    CollectionElement
+    @category("CollectionElement")
+    ExpressionElement(expression: ExpressionSyntax)
+    @category("CollectionElement")
+    SpreadElement(dotDotToken: SyntaxToken, expression: ExpressionSyntax)
+    /// Base type for type parameter constraint syntax.
+    @base
+    TypeParameterConstraint
+    /// Type constraint syntax.
+    @category("TypeParameterConstraint")
+    TypeConstraint(type: TypeSyntax)
+    /// Default constraint syntax.
+    @category("TypeParameterConstraint")
+    DefaultConstraint(defaultKeyword: SyntaxToken)
+    /// Shader type declaration.
+    @category("MemberDeclaration")
+    ShaderDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, identifier: SyntaxToken, typeParameterList: TypeParameterListSyntax?, baseList: BaseListSyntax?, constraintClauses: SyntaxList<TypeParameterConstraintClauseSyntax>, openBraceToken: SyntaxToken?, members: SyntaxList<MemberDeclarationSyntax>, closeBraceToken: SyntaxToken?)
+    /// Struct type declaration.
+    @category("MemberDeclaration")
+    StructDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, identifier: SyntaxToken, typeParameterList: TypeParameterListSyntax?, baseList: BaseListSyntax?, constraintClauses: SyntaxList<TypeParameterConstraintClauseSyntax>, openBraceToken: SyntaxToken?, members: SyntaxList<MemberDeclarationSyntax>, closeBraceToken: SyntaxToken?)
+    /// Protocol type declaration.
+    @category("MemberDeclaration")
+    ProtocolDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, identifier: SyntaxToken, typeParameterList: TypeParameterListSyntax?, baseList: BaseListSyntax?, constraintClauses: SyntaxList<TypeParameterConstraintClauseSyntax>, openBraceToken: SyntaxToken?, members: SyntaxList<MemberDeclarationSyntax>, closeBraceToken: SyntaxToken?)
+    /// Enum type declaration.
+    @category("MemberDeclaration")
+    EnumDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, identifier: SyntaxToken, baseList: BaseListSyntax?, openBraceToken: SyntaxToken, members: SeparatedSyntaxList<EnumMemberDeclarationSyntax>, closeBraceToken: SyntaxToken)
+    /// Enum member declaration.
+    @category("MemberDeclaration")
+    EnumMemberDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, identifier: SyntaxToken, value: EqualsValueClauseSyntax?)
+    /// Property declaration.
+    @category("MemberDeclaration")
+    PropertyDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, identifier: SyntaxToken, colonToken: SyntaxToken?, type: TypeSyntax?, accessorList: AccessorListSyntax?, expressionBody: ArrowExpressionClauseSyntax?, initializer: EqualsValueClauseSyntax?)
+    /// Accessor list: { get set }.
+    AccessorList(openBraceToken: SyntaxToken, accessors: SyntaxList<AccessorDeclarationSyntax>, closeBraceToken: SyntaxToken)
+    /// Accessor declaration (get/set/willSet/didSet).
+    @kinds("GetAccessorDeclaration", "SetAccessorDeclaration", "WillSetAccessorDeclaration", "DidSetAccessorDeclaration")
+    AccessorDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, keyword: SyntaxToken, body: BlockSyntax?, expressionBody: ArrowExpressionClauseSyntax?)
+    /// Constructor (init) declaration.
+    @category("MemberDeclaration")
+    ConstructorDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, parameterList: ParameterListSyntax, body: BlockSyntax?, expressionBody: ArrowExpressionClauseSyntax?)
+    /// Operator overload declaration.
+    @category("MemberDeclaration")
+    OperatorDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, type: TypeSyntax, operatorKeyword: SyntaxToken, operatorToken: SyntaxToken, parameterList: ParameterListSyntax, body: BlockSyntax?, expressionBody: ArrowExpressionClauseSyntax?)
+    /// Method declaration.
+    @category("MemberDeclaration")
+    MethodDeclaration(attributeLists: SyntaxList<AttributeListSyntax>, modifiers: SyntaxTokenList, keyword: SyntaxToken, identifier: SyntaxToken, typeParameterList: TypeParameterListSyntax?, parameterList: ParameterListSyntax, constraintClauses: SyntaxList<TypeParameterConstraintClauseSyntax>, colonToken: SyntaxToken?, returnType: TypeSyntax?, body: BlockSyntax?, expressionBody: ArrowExpressionClauseSyntax?)
+    /// Type parameter constraint clause: the name being constrained and its constraints.
+    TypeParameterConstraintClause(whereKeyword: SyntaxToken, name: IdentifierNameSyntax, colonToken: SyntaxToken, constraints: SeparatedSyntaxList<TypeParameterConstraintSyntax>)
+}

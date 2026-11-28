@@ -1,0 +1,756 @@
+module SyntaxGenerators
+
+import Sable.Collections
+import Sable.Generators
+import Sable.Text
+
+// '@syntax' on a union that describes a language's tree:
+//
+// - A case without a payload is a kind of token; '@trivia' on it, of trivia.
+// - A case with one is a kind of node, each labelled value a slot. '@kinds'
+//   on it names several kinds that share its view, '-x' and '!x' a
+//   'PrefixUnary': the kinds are those names, and the case's own is the view's.
+// - '@base' on a case makes it a category, not a kind: its slots are ones
+//   every node of the category has, by the same name and type, and its view
+//   reads them from whichever it is.
+// - '@category("...")' puts a case in categories, a '@base' case too: a
+//   category in a category, whose nodes are the outer one's as well. A
+//   category with no '@base' case is named by '@category' alone.
+//
+// A slot's type is 'SyntaxToken', a view ('<Case>Syntax' of a kind of node
+// or of a category), 'SyntaxList<View>', 'SeparatedSyntaxList<View>' or
+// 'SyntaxTokenList'; '?' after a token or a view makes it optional.
+//
+// For a union 'L' it writes 'LKind', the kinds' enum; a struct for each node
+// case and each category, a SyntaxView with an accessor for each slot, an
+// 'as' for each category it is in, and, for a node case, a 'make' that builds
+// the green node; and 'LVisitor', which walks a tree.
+@generator("syntax", members: ["base", "category", "kinds", "trivia"])
+fn syntax(_ declaration: Declaration, into output: inout Output) {
+    let name = declaration.qualifiedName
+    if declaration.keyword != "union" {
+        output.error("'@syntax' describes a language by a union of its kinds; '\(name)' is a \(declaration.keyword)", at: declaration.location)
+        return
+    }
+    if !declaration.typeParameters.isEmpty || !declaration.container.isEmpty {
+        output.error("'@syntax' is put on a union at the top of a file, with no generic parameters", at: declaration.location)
+        return
+    }
+    if declaration.cases.isEmpty {
+        output.error("'\(name)' has no cases: '@syntax' needs the language's kinds", at: declaration.location)
+        return
+    }
+    var language = Language(name: name, isPublic: declaration.isPublic)
+    var wrong = false
+    for c in declaration.cases {
+        var entry = Entry(name: c.name, isTrivia: c.attribute(named: "trivia") != none, isBase: c.attribute(named: "base") != none)
+        entry.isNode = !c.payload.isEmpty || entry.isBase
+        if let category = c.attribute(named: "category") {
+            if !entry.isNode {
+                output.error("'@category' puts a kind of node in a category; '\(c.name)' is a token", at: c.location)
+                wrong = true
+            }
+            for argument in category.arguments {
+                if let text = argument.string {
+                    entry.categories.append(text)
+                } else {
+                    output.error("'@category' takes the categories' names as strings", at: c.location)
+                    wrong = true
+                }
+            }
+            if entry.categories.isEmpty {
+                output.error("'@category' names a category or more", at: c.location)
+                wrong = true
+            }
+        }
+        if entry.isTrivia && entry.isNode {
+            output.error("'@trivia' is a kind of trivia, which has no slots; '\(c.name)' has them", at: c.location)
+            wrong = true
+        }
+        if let kinds = c.attribute(named: "kinds") {
+            if !entry.isNode || entry.isBase {
+                output.error("'@kinds' names the kinds of a node that share its view; '\(c.name)' is \(entry.isBase ? "a '@base'" : "a token")", at: c.location)
+                wrong = true
+            }
+            for argument in kinds.arguments {
+                if let text = argument.string {
+                    if isName(text) {
+                        entry.kinds.append(text)
+                    } else {
+                        output.error("'@kinds' names kinds: '\(text)' is not a name", at: c.location)
+                        wrong = true
+                    }
+                } else {
+                    output.error("'@kinds' takes the kinds' names as strings", at: c.location)
+                    wrong = true
+                }
+            }
+            if entry.kinds.isEmpty {
+                output.error("'@kinds' names a kind or more", at: c.location)
+                wrong = true
+            }
+        } else if !entry.isBase {
+            entry.kinds = [c.name]
+        }
+        for field in c.payload {
+            if field.name.isEmpty {
+                output.error("each slot of '\(c.name)' has a label: its accessor's name", at: c.location)
+                wrong = true
+            } else {
+                entry.slots.append(Slot(name: field.name, type: field.type.trimmed()))
+            }
+        }
+        language.entries.append(entry)
+    }
+    // The kinds, numbered from 1, each once.
+    var number = 1
+    for (i, entry) in language.entries.enumerated() {
+        for kind in entry.kinds {
+            if language.kinds.contains(where: { $0.name == kind }) {
+                output.error("two kinds of '\(name)' are named '\(kind)'", at: declaration.location)
+                wrong = true
+            }
+            language.kinds.append(KindName(name: kind, number: number, entry: i))
+            number += 1
+        }
+    }
+    if number > 65536 {
+        output.error("'\(name)' has more kinds than a U16 holds", at: declaration.location)
+        return
+    }
+    // The categories: each '@base' case's, then each one only named.
+    for entry in language.entries {
+        if entry.isBase {
+            language.categories.append(Category(name: entry.name, parents: entry.categories, isBase: true))
+        }
+    }
+    for entry in language.entries {
+        for category in entry.categories {
+            if language.category(named: category) == none {
+                language.categories.append(Category(name: category, parents: [], isBase: false))
+            }
+        }
+    }
+    for category in language.categories {
+        if language.supers(of: category.parents).contains(category.name) {
+            output.error("the category '\(category.name)' is in itself", at: declaration.location)
+            wrong = true
+        }
+    }
+    if wrong {
+        return
+    }
+    // Every view a slot names must be one this writes.
+    var views = Set<String>()
+    for entry in language.entries {
+        if entry.isNode && !entry.isBase {
+            views.insert(entry.view)
+        }
+    }
+    for category in language.categories {
+        let view = category.name + "Syntax"
+        if views.contains(view) {
+            output.error("the category '\(category.name)' and a kind of node would both be '\(view)'", at: declaration.location)
+            wrong = true
+        }
+        views.insert(view)
+    }
+    for i in 0..<language.entries.count {
+        for j in 0..<language.entries[i].slots.count {
+            let slot = language.entries[i].slots[j]
+            guard let shape = shapeOf(slot.type) else {
+                output.error("the slot '\(slot.name)' of '\(language.entries[i].name)' is '\(slot.type)': a slot is 'SyntaxToken', a view, 'SyntaxList<View>', 'SeparatedSyntaxList<View>' or 'SyntaxTokenList', a token or a view optional", at: declaration.location)
+                wrong = true
+                continue
+            }
+            if !shape.view.isEmpty && !views.contains(shape.view) {
+                output.error("the slot '\(slot.name)' of '\(language.entries[i].name)' is of '\(shape.view)', which is neither a kind of node of '\(name)' nor one of its categories", at: declaration.location)
+                wrong = true
+            }
+            language.entries[i].slots[j].shape = shape
+        }
+    }
+    if wrong {
+        return
+    }
+    // A node has every slot of each '@base' it is in, as the '@base' has it.
+    for entry in language.entries {
+        if !entry.isNode || entry.isBase {
+            continue
+        }
+        for category in language.supers(of: entry.categories) {
+            for slot in language.slots(of: category, own: true) {
+                if let found = entry.slot(named: slot.name) {
+                    if found.shape.form == slot.shape.form && found.shape.view == slot.shape.view && found.shape.isOptional == slot.shape.isOptional {
+                        continue
+                    }
+                }
+                output.error("'\(entry.name)' is a '\(category)', so it has the slot '\(slot.name): \(slot.type)'", at: declaration.location)
+                wrong = true
+            }
+        }
+    }
+    if wrong {
+        return
+    }
+    var writer = SyntaxWriter(language)
+    writer.writeKinds()
+    for entry in language.entries {
+        if entry.isNode && !entry.isBase {
+            writer.writeNode(entry)
+        }
+    }
+    for category in language.categories {
+        writer.writeCategory(category)
+    }
+    writer.writeVisitor()
+    output.add(file: "\(name).syntax.sb", writer.text.build())
+}
+
+// What a slot holds.
+struct SlotShape {
+    // "token", "tokens", "node", "list" or "separated".
+    var form: String
+    var view: String
+    var isOptional: Bool
+}
+
+fn shapeOf(_ type: String) -> SlotShape? {
+    var text = type
+    var optional = false
+    if text.hasSuffix("?") {
+        optional = true
+        text = cut(text, 0, text.utf8Count - 1).trimmed()
+    }
+    if text == "SyntaxToken" {
+        return SlotShape(form: "token", view: "", isOptional: optional)
+    }
+    if text == "SyntaxTokenList" {
+        return optional ? none : SlotShape(form: "tokens", view: "", isOptional: false)
+    }
+    for (opening, form) in [("SyntaxList<", "list"), ("SeparatedSyntaxList<", "separated")] {
+        if text.hasPrefix(opening) && text.hasSuffix(">") {
+            if optional {
+                return none
+            }
+            let inner = cut(text, opening.utf8Count, text.utf8Count - 1).trimmed()
+            return isName(inner) ? SlotShape(form: form, view: inner, isOptional: false) : none
+        }
+    }
+    return isName(text) ? SlotShape(form: "node", view: text, isOptional: optional) : none
+}
+
+// The text between two UTF-8 offsets.
+fn cut(_ text: String, _ start: Int, _ end: Int) -> String {
+    return text[String.Index(utf8Offset: start)..<String.Index(utf8Offset: end)].toString()
+}
+
+fn isName(_ text: String) -> Bool {
+    if text.isEmpty {
+        return false
+    }
+    for c in text {
+        if !(c.isLetter || c.isDigit || c == '_') {
+            return false
+        }
+    }
+    return true
+}
+
+struct Slot {
+    var name: String
+    var type: String
+    var shape: SlotShape = SlotShape(form: "", view: "", isOptional: false)
+}
+
+// A case of the union: a kind of token or trivia, a node's view and its
+// kinds, or a '@base' category.
+struct Entry {
+    var name: String
+    var isTrivia: Bool
+    var isBase: Bool
+    var isNode: Bool = false
+    var kinds: String[>..] = []
+    var categories: String[>..] = []
+    var slots: Slot[>..] = []
+
+    var view: String => name + "Syntax"
+
+    // Whether its kinds are other than its own name, so 'make' is told which.
+    var hasKinds: Bool => kinds.count != 1 || kinds[0] != name
+
+    fn slot(named name: String) -> Slot? {
+        for slot in slots {
+            if slot.name == name {
+                return slot
+            }
+        }
+        return none
+    }
+
+    fn index(ofSlot name: String) -> Int {
+        for (i, slot) in slots.enumerated() {
+            if slot.name == name {
+                return i
+            }
+        }
+        return -1
+    }
+}
+
+struct KindName {
+    var name: String
+    var number: Int
+    // The entry it is of.
+    var entry: Int
+}
+
+struct Category {
+    var name: String
+    // The categories it is in.
+    var parents: String[>..]
+    // Whether a '@base' case declares it, with the slots it has.
+    var isBase: Bool
+}
+
+struct Language {
+    var name: String
+    var isPublic: Bool
+    var entries: Entry[>..] = []
+    var kinds: KindName[>..] = []
+    var categories: Category[>..] = []
+
+    var kindType: String => name + "Kind"
+    var access: String => isPublic ? "public " : ""
+
+    fn category(named name: String) -> Category? {
+        for category in categories {
+            if category.name == name {
+                return category
+            }
+        }
+        return none
+    }
+
+    fn entry(named name: String) -> Entry? {
+        for entry in entries {
+            if entry.name == name {
+                return entry
+            }
+        }
+        return none
+    }
+
+    // The categories and every category they are in, nearest first.
+    fn supers(of names: String[>..]) -> String[>..] {
+        var all: String[>..] = []
+        var queue = names
+        var i = 0
+        while i < queue.count {
+            let name = queue[i]
+            i += 1
+            if all.contains(name) {
+                continue
+            }
+            all.append(name)
+            if let category = category(named: name) {
+                for parent in category.parents {
+                    queue.append(parent)
+                }
+            }
+        }
+        return all
+    }
+
+    // The slots a category's nodes all have: its '@base' case's, and, unless
+    // only its own are asked for, those of the categories it is in.
+    fn slots(of category: String, own: Bool) -> Slot[>..] {
+        var all: Slot[>..] = []
+        for each in own ? [category] : supers(of: [category]) {
+            if let base = entry(named: each) {
+                if base.isBase {
+                    for slot in base.slots {
+                        if !all.contains(where: { $0.name == slot.name }) {
+                            all.append(slot)
+                        }
+                    }
+                }
+            }
+        }
+        return all
+    }
+
+    // The node cases in the category, by way of the categories in it too.
+    fn members(of category: String) -> Entry[>..] {
+        var all: Entry[>..] = []
+        for entry in entries {
+            if entry.isNode && !entry.isBase && supers(of: entry.categories).contains(category) {
+                all.append(entry)
+            }
+        }
+        return all
+    }
+
+    // The categories in the category, by way of others too.
+    fn inner(of category: String) -> String[>..] {
+        var all: String[>..] = []
+        for each in categories {
+            if each.name != category && supers(of: each.parents).contains(category) {
+                all.append(each.name)
+            }
+        }
+        return all
+    }
+
+    // The kinds of the node cases, by name.
+    fn kindNames(of entries: Entry[>..]) -> String[>..] {
+        var all: String[>..] = []
+        for entry in entries {
+            for kind in entry.kinds {
+                all.append(kind)
+            }
+        }
+        return all
+    }
+}
+
+// Sable's reserved words (the compiler's SyntaxFacts): a slot of that name is
+// written in backquotes.
+let reserved: String[>..] = [
+    "abstract", "actor", "alias", "any", "as", "async", "await", "borrowing", "break", "case",
+    "catch", "class", "const", "consuming", "continue", "default", "defer", "deinit", "do", "else",
+    "enum", "extension", "fallthrough", "false", "final", "fn", "for", "guard", "if", "import",
+    "in", "init", "inout", "internal", "is", "lazy", "let", "match", "module", "move", "mutating",
+    "none", "nonisolated", "nonmutating", "open", "operator", "out", "override", "package",
+    "postfix", "prefix", "private", "protocol", "ref", "public", "region", "repeat", "required",
+    "rethrows", "return", "sealed", "self", "Self", "some", "static", "struct", "subscript",
+    "super", "switch", "throw", "throws", "true", "try", "typealias", "union", "unowned", "unsafe",
+    "using", "var", "weak", "where", "while", "yield",
+]
+
+fn word(_ name: String) -> String {
+    return reserved.contains(name) ? "`\(name)`" : name
+}
+
+// What a slot's green node must be.
+fn check(_ form: String, _ subject: String) -> String {
+    return match form {
+        case "token" => "\(subject).isToken"
+        case "node"  => "\(subject).isNode && !\(subject).isList"
+        default      => "\(subject).isList"
+    }
+}
+
+// The type of a slot's accessor.
+fn typeOf(_ shape: SlotShape) -> String {
+    let optional = shape.isOptional ? "?" : ""
+    return match shape.form {
+        case "token"  => "SyntaxToken\(optional)"
+        case "tokens" => "SyntaxTokenList"
+        case "node"   => "\(shape.view)\(optional)"
+        case "list"   => "SyntaxList<\(shape.view)>"
+        default       => "SeparatedSyntaxList<\(shape.view)>"
+    }
+}
+
+struct SyntaxWriter {
+    let language: Language
+    let text: TextBuilder = TextBuilder()
+
+    init(_ language: Language) {
+        self.language = language
+    }
+
+    fn line(_ s: String) {
+        text.appendLine(s)
+    }
+
+    // 'node.kind == LKind.A.raw || ...' for the kinds.
+    fn test(_ kinds: String[>..]) -> String {
+        let k = language.kindType
+        return kinds.map({ "node.kind == \(k).\($0).raw" }).joined(separator: " || ")
+    }
+
+    fn writeKinds() {
+        let a = language.access
+        let k = language.kindType
+        line("/// The kinds of \(language.name)'s tokens, trivia and nodes, each a GreenNode's")
+        line("/// kind, which '@syntax' wrote from '\(language.name)'.")
+        line("@derive(Equatable, Hashable, Debug)")
+        line("\(a)enum \(k): U16 {")
+        for kind in language.kinds {
+            line("    \(kind.name) = \(kind.number)")
+        }
+        line("}")
+        line("")
+        line("extension \(k) {")
+        line("    /// Its number, a GreenNode's kind.")
+        line("    \(a)var raw: U16 => self as U16")
+        line("")
+        line("    /// The kind of that number, or none for a list's or another language's.")
+        line("    \(a)static fn of(_ raw: U16) -> \(k)? {")
+        line("        return raw >= 1 && raw <= \(language.kinds.count) ? raw as \(k) : none")
+        line("    }")
+        line("")
+        var tokens: String[>..] = []
+        var trivia: String[>..] = []
+        var nodes: String[>..] = []
+        for kind in language.kinds {
+            let entry = language.entries[kind.entry]
+            if entry.isNode {
+                nodes.append(kind.name)
+            } else if entry.isTrivia {
+                trivia.append(kind.name)
+            } else {
+                tokens.append(kind.name)
+            }
+        }
+        writeTest("isToken", "a kind of token", tokens)
+        writeTest("isTrivia", "a kind of trivia", trivia)
+        writeTest("isNode", "a kind of node", nodes)
+        line("}")
+        line("")
+    }
+
+    fn writeTest(_ property: String, _ what: String, _ kinds: String[>..]) {
+        let a = language.access
+        line("    /// Whether it is \(what).")
+        if kinds.isEmpty {
+            line("    \(a)var \(property): Bool => false")
+        } else if kinds.count == language.kinds.count {
+            line("    \(a)var \(property): Bool => true")
+        } else {
+            let cases = kinds.map({ "." + $0 }).joined(separator: ", ")
+            line("    \(a)var \(property): Bool {")
+            line("        get {")
+            line("            return match self {")
+            line("                case \(cases) => true")
+            line("                default => false")
+            line("            }")
+            line("        }")
+            line("    }")
+        }
+        line("")
+    }
+
+    fn writeViewHead(_ view: String, _ doc: String, _ test: String) {
+        let a = language.access
+        line(doc)
+        line("\(a)struct \(view): SyntaxView, Equatable, Hashable, Debug {")
+        line("    /// The node it is a view of.")
+        line("    \(a)let node: SyntaxNode")
+        line("")
+        line("    \(a)static fn cast(_ node: SyntaxNode) -> \(view)? {")
+        line("        return \(test) ? \(view) { node: node } : none")
+        line("    }")
+        line("")
+        line("    \(a)operator == (lhs: \(view), rhs: \(view)) -> Bool {")
+        line("        return lhs.node == rhs.node")
+        line("    }")
+        line("")
+        line("    \(a)fn hash(into hasher: inout Hasher) {")
+        line("        node.hash(into: &hasher)")
+        line("    }")
+        line("")
+        line("    \(a)fn debugDescription() -> String {")
+        line("        return \"\(view)(\\(node.text))\"")
+        line("    }")
+        line("")
+        line("    /// Its kind.")
+        line("    \(a)var kind: \(language.kindType) => node.kind as \(language.kindType)")
+    }
+
+    // The statements that return slot 'index' as the shape says, at an indent.
+    fn writeReturn(_ shape: SlotShape, _ index: Int, _ indent: String) {
+        if shape.form == "token" {
+            line("\(indent)return node.childToken(\(index))\(shape.isOptional ? "" : "!")")
+        } else if shape.form == "tokens" {
+            line("\(indent)return SyntaxTokenList(node.childNode(\(index)))")
+        } else if shape.form == "node" {
+            if shape.isOptional {
+                line("\(indent)guard let child = node.childNode(\(index)) else {")
+                line("\(indent)    return none")
+                line("\(indent)}")
+                line("\(indent)return \(shape.view).cast(child)")
+            } else {
+                line("\(indent)return \(shape.view).cast(node.childNode(\(index))!)!")
+            }
+        } else {
+            line("\(indent)return \(typeOf(shape))(node.childNode(\(index)))")
+        }
+    }
+
+    fn writeAs(_ categories: String[>..]) {
+        let a = language.access
+        for category in categories {
+            line("")
+            line("    /// It, as one of the '\(category)' nodes.")
+            line("    \(a)var as\(category): \(category)Syntax => \(category)Syntax { node: node }")
+        }
+    }
+
+    fn writeNode(_ entry: Entry) {
+        let a = language.access
+        let k = language.kindType
+        let view = entry.view
+        let kinds = entry.kinds.map({ "'\($0)'" }).joined(separator: ", ")
+        let doc = entry.hasKinds ? "/// A node of \(language.name) of kind \(kinds), which '@syntax' wrote." : "/// A '\(entry.name)' node of \(language.name), which '@syntax' wrote."
+        writeViewHead(view, doc, test(entry.kinds))
+        for (i, slot) in entry.slots.enumerated() {
+            line("")
+            line("    /// Its '\(slot.name)', slot \(i).")
+            line("    \(a)var \(word(slot.name)): \(typeOf(slot.shape)) {")
+            line("        get {")
+            writeReturn(slot.shape, i, "            ")
+            line("        }")
+            line("    }")
+        }
+        writeAs(language.supers(of: entry.categories))
+        // The green node, from its slots' green nodes.
+        var parameters: String[>..] = []
+        if entry.hasKinds {
+            parameters.append("_ kind: \(k)")
+        }
+        for slot in entry.slots {
+            let optional = slot.shape.isOptional ? "?" : ""
+            parameters.append("\(word(slot.name)): GreenNode\(optional)")
+        }
+        parameters.append("diagnostics: SyntaxDiagnostic[>..] = []")
+        line("")
+        line("    /// The green node of a '\(entry.name)': a token for each token slot, a")
+        line("    /// GreenNode.list for each list, none for an optional slot left empty.")
+        line("    \(a)static fn make(\(parameters.joined(separator: ", "))) -> GreenNode {")
+        if entry.hasKinds {
+            let allowed = entry.kinds.map({ "kind == .\($0)" }).joined(separator: " || ")
+            line("        precondition(\(allowed), \"a '\(entry.name)' is of kind \(entry.kinds.joined(separator: ", "))\")")
+        }
+        line("        var slots: GreenNode?[>..] = []")
+        line("        slots.reserveCapacity(\(entry.slots.count))")
+        for slot in entry.slots {
+            let name = word(slot.name)
+            let what = match slot.shape.form {
+                case "token" => "a token"
+                case "node"  => "a node"
+                default      => "a list"
+            }
+            if slot.shape.isOptional {
+                line("        if let given = \(name) {")
+                line("            precondition(\(check(slot.shape.form, "given")), \"'\(slot.name)' of a '\(entry.name)' is \(what)\")")
+                line("        }")
+            } else {
+                line("        precondition(\(check(slot.shape.form, name)), \"'\(slot.name)' of a '\(entry.name)' is \(what)\")")
+            }
+            line("        slots.append(\(name))")
+        }
+        let kind = entry.hasKinds ? "kind" : "\(k).\(entry.name)"
+        line("        return GreenNode.node(\(kind).raw, slots, diagnostics: diagnostics)")
+        line("    }")
+        line("}")
+        line("")
+    }
+
+    fn writeCategory(_ category: Category) {
+        let a = language.access
+        let members = language.members(of: category.name)
+        let kinds = language.kindNames(of: members)
+        let test = kinds.isEmpty ? "false" : self.test(kinds)
+        writeViewHead(category.name + "Syntax", "/// One of \(language.name)'s '\(category.name)' nodes, which '@syntax' wrote.", test)
+        // The slots each of its nodes has, from wherever each has it.
+        for slot in language.slots(of: category.name, own: false) {
+            var groups: (Int, String[>..])[>..] = []
+            for member in members {
+                let index = member.index(ofSlot: slot.name)
+                var found = false
+                for g in 0..<groups.count {
+                    if groups[g].0 == index {
+                        for kind in member.kinds {
+                            groups[g].1.append(kind)
+                        }
+                        found = true
+                    }
+                }
+                if !found {
+                    groups.append((index, member.kinds))
+                }
+            }
+            line("")
+            line("    /// Its '\(slot.name)', which each of its nodes has.")
+            line("    \(a)var \(word(slot.name)): \(typeOf(slot.shape)) {")
+            line("        get {")
+            for (g, group) in groups.enumerated() {
+                if g == groups.count - 1 {
+                    writeReturn(slot.shape, group.0, "            ")
+                } else {
+                    line("            if \(self.test(group.1)) {")
+                    writeReturn(slot.shape, group.0, "                ")
+                    line("            }")
+                }
+            }
+            if groups.isEmpty {
+                line("            fatalError(\"a '\(category.name)' has no nodes\")")
+            }
+            line("        }")
+            line("    }")
+        }
+        for member in members {
+            line("")
+            line("    /// It, if it is a '\(member.name)'.")
+            line("    \(a)var as\(member.name): \(member.view)? => \(member.view).cast(node)")
+        }
+        for inner in language.inner(of: category.name) {
+            line("")
+            line("    /// It, if it is one of the '\(inner)' nodes.")
+            line("    \(a)var as\(inner): \(inner)Syntax? => \(inner)Syntax.cast(node)")
+        }
+        writeAs(language.supers(of: category.parents))
+        line("}")
+        line("")
+    }
+
+    fn writeVisitor() {
+        let a = language.access
+        let k = language.kindType
+        let visitor = language.name + "Visitor"
+        var nodes: Entry[>..] = []
+        for entry in language.entries {
+            if entry.isNode && !entry.isBase {
+                nodes.append(entry)
+            }
+        }
+        line("/// Goes through a tree of \(language.name), which '@syntax' wrote: 'walk' calls the")
+        line("/// 'visit' of each node's kind, and goes into the node's children when it")
+        line("/// returns true, as each 'visit' does unless a conformer says otherwise.")
+        line("\(a)protocol \(visitor) {")
+        for node in nodes {
+            line("    mutating fn visit(_ node: \(node.view)) -> Bool")
+        }
+        line("}")
+        line("")
+        line("extension \(visitor) {")
+        for node in nodes {
+            line("    \(a)mutating fn visit(_ node: \(node.view)) -> Bool {")
+            line("        return true")
+            line("    }")
+            line("")
+        }
+        line("    /// Visits the node and, as the visits say, what is in it, in order.")
+        line("    \(a)mutating fn walk(_ node: SyntaxNode) {")
+        line("        var into = true")
+        line("        if let kind = \(k).of(node.kind) {")
+        line("            switch kind {")
+        for node in nodes {
+            let cases = node.kinds.map({ "." + $0 }).joined(separator: ", ")
+            line("                case \(cases): into = visit(\(node.view) { node: node })")
+        }
+        line("                default: break")
+        line("            }")
+        line("        }")
+        line("        if into {")
+        line("            for child in node.childNodes {")
+        line("                walk(child)")
+        line("            }")
+        line("        }")
+        line("    }")
+        line("}")
+    }
+}

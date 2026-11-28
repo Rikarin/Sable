@@ -1,0 +1,44 @@
+module VxmlTests
+
+// VXML's node types, written by '@syntax' from its description (Vxml.sb,
+// translated from Vixen's Core/Vixen.Ui.Markup/Syntax/Syntax.xml).
+
+import Sable.Syntax
+import Sable.Testing
+import VxmlSyntax
+
+fn vxml(_ kind: VxmlKind, _ text: String) -> GreenNode {
+    return GreenNode.token(kind.raw, text)
+}
+
+// '<Label Text="hi">x</Label>'.
+fn element() -> SyntaxNode {
+    let value = QuotedAttributeValueSyntax.make(
+        openQuoteToken: vxml(.QuoteToken, "\""),
+        content: GreenNode.list([TextSyntax.make(textToken: vxml(.TextToken, "hi"))]),
+        closeQuoteToken: vxml(.QuoteToken, "\"")
+    )
+    let attribute = AttributeSyntax.make(name: GreenNode.token(VxmlKind.NameToken.raw, "Text", leading: [GreenNode.trivia(VxmlKind.WhitespaceTrivia.raw, " ")]), equalsToken: vxml(.EqualsToken, "="), value: value)
+    let start = StartTagSyntax.make(lessThanToken: vxml(.LessThanToken, "<"), name: vxml(.NameToken, "Label"), attributes: GreenNode.list([attribute]), greaterThanToken: vxml(.GreaterThanToken, ">"))
+    let end = EndTagSyntax.make(lessThanSlashToken: vxml(.LessThanSlashToken, "</"), name: vxml(.NameToken, "Label"), greaterThanToken: vxml(.GreaterThanToken, ">"))
+    let content = GreenNode.list([TextSyntax.make(textToken: vxml(.TextToken, "x"))])
+    let document = DocumentSyntax.make(directives: GreenNode.list([]), content: GreenNode.list([ElementSyntax.make(startTag: start, content: content, endTag: end)]), endOfFileToken: vxml(.EndOfFileToken, ""))
+    return SyntaxNode(document)
+}
+
+@test
+fn vxmlsTreeIsReadThroughItsViews() {
+    let root = element()
+    assertEqual(root.fullText, "<Label Text=\"hi\">x</Label>")
+    let document = require(DocumentSyntax.cast(root))
+    let markup = document.content[0]
+    let label = require(markup.asElement)
+    assertEqual(label.startTag.name.text, "Label")
+    assertEqual(require(label.endTag).name.text, "Label")
+    let attribute = label.startTag.attributes[0]
+    assertEqual(attribute.name.text, "Text")
+    let quoted = require(require(attribute.value).asQuotedAttributeValue)
+    assertEqual(require(quoted.content[0].asText).textToken.text, "hi")
+    assertEqual(require(label.content[0].asText).textToken.text, "x")
+    expect(VxmlKind.WhitespaceTrivia.isTrivia && VxmlKind.Element.isNode && VxmlKind.NameToken.isToken)
+}

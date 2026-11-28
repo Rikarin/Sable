@@ -1,0 +1,128 @@
+module SyntaxListTests
+
+// SyntaxList and SeparatedSyntaxList over hand-made lists, and every side of
+// TextSpan's tests.
+
+import Sable.Syntax
+import Sable.Testing
+
+let item: U16 = 5
+let word: U16 = 1
+let comma: U16 = 2
+
+struct Item: SyntaxView {
+    let node: SyntaxNode
+
+    static fn cast(_ node: SyntaxNode) -> Item? {
+        return node.kind == item ? Item { node: node } : none
+    }
+}
+
+fn items(_ texts: String[>..]) -> GreenNode[>..] {
+    return texts.map({ GreenNode.node(item, [GreenNode.token(word, $0)]) })
+}
+
+fn texts<S: Sequence>(_ list: S) -> String[>..] where S.Element == Item, S.Failure == Never {
+    var all: String[>..] = []
+    for each in list {
+        all.append(each.node.text)
+    }
+    return all
+}
+
+@test
+fn anEmptySlotIsAnEmptyList() {
+    let list = SyntaxList<Item>(none)
+    expect(list.isEmpty)
+    assertEqual(list.count, 0)
+    assertEqual(texts(list), [])
+    let separated = SeparatedSyntaxList<Item>(none)
+    expect(separated.isEmpty)
+    assertEqual(separated.count, 0)
+    assertEqual(separated.separators.count, 0)
+    assertEqual(texts(separated), [])
+}
+
+@test
+fn aListGoesPastEmptySlotsAndTokens() {
+    // A list node with an empty slot and a token among its items.
+    let green = GreenNode.node(GreenNode.listKind, [GreenNode.node(item, [GreenNode.token(word, "a")]), none, GreenNode.token(comma, ";"), GreenNode.node(item, [GreenNode.token(word, "b")])])
+    let root = SyntaxNode(GreenNode.node(20, [green]))
+    let list = SyntaxList<Item>(root.childNode(0))
+    assertEqual(list.count, 4)
+    assertEqual(texts(list), ["a", "b"])
+    assertEqual(list[3].node.position, 2)
+}
+
+@test
+fn aSeparatedListMayEndWithASeparator() {
+    let named = items(["a", "b"])
+    let children: GreenNode[>..] = [named[0], GreenNode.token(comma, ","), named[1], GreenNode.token(comma, ",")]
+    let root = SyntaxNode(GreenNode.node(20, [GreenNode.list(children)]))
+    let list = SeparatedSyntaxList<Item>(root.childNode(0))
+    assertEqual(list.count, 2)
+    assertEqual(list.separators.map({ $0.text }), [",", ","])
+    assertEqual(texts(list), ["a", "b"])
+    assertEqual(list[0].node.text, "a")
+    expect(!list.isEmpty)
+}
+
+@test
+fn spanTestsAtTheirEdges() {
+    let span = TextSpan(start: 2, length: 3)
+    expect(span.contains(2) && span.contains(4))
+    expect(!span.contains(1) && !span.contains(5))
+    expect(span.contains(span) && span.contains(TextSpan(start: 5, length: 0)))
+    expect(!span.contains(TextSpan(start: 1, length: 2)) && !span.contains(TextSpan(start: 4, length: 2)))
+    expect(span.overlaps(TextSpan(start: 4, length: 5)) && span.overlaps(TextSpan(start: 0, length: 3)))
+    expect(!span.overlaps(TextSpan(start: 5, length: 2)) && !span.overlaps(TextSpan(start: 0, length: 2)))
+    expect(!TextSpan(start: 3, length: 0).overlaps(span))
+    expect(span.touches(TextSpan(start: 5, length: 2)) && span.touches(TextSpan(start: 0, length: 2)))
+    expect(!span.touches(TextSpan(start: 6, length: 2)) && !span.touches(TextSpan(start: 0, length: 1)))
+    assertEqual(span.end, 5)
+}
+
+fn tokenTexts(_ list: SyntaxTokenList) -> String[>..] {
+    var all: String[>..] = []
+    for token in list {
+        all.append(token.text)
+    }
+    return all
+}
+
+@test
+fn anEmptySlotIsAnEmptyTokenList() {
+    let list = SyntaxTokenList(none)
+    expect(list.isEmpty)
+    assertEqual(list.count, 0)
+    assertEqual(tokenTexts(list), [])
+}
+
+@test
+fn aTokenListGoesPastEmptySlotsAndNodes() {
+    let green = GreenNode.node(GreenNode.listKind, [GreenNode.token(word, "pub", trailing: [GreenNode.trivia(9, " ")]), none, GreenNode.node(item, [GreenNode.token(word, "x")]), GreenNode.token(word, "static")])
+    let list = SyntaxTokenList(SyntaxNode(GreenNode.node(20, [green])).childNode(0))
+    assertEqual(list.count, 4)
+    expect(!list.isEmpty)
+    assertEqual(tokenTexts(list), ["pub", "static"])
+    assertEqual(list[3].position, 5)
+    var each = list.makeIterator()
+    assertEqual(each.next()?.position, 0)
+    assertEqual(each.next()?.position, 5)
+    expect(each.next() == none)
+}
+
+@test
+fn aSeparatedListIsReadByIndexAndInOrder() {
+    let named = items(["a", "b", "c"])
+    let children: GreenNode[>..] = [named[0], GreenNode.token(comma, ","), named[1], GreenNode.token(comma, ","), named[2]]
+    let list = SeparatedSyntaxList<Item>(SyntaxNode(GreenNode.node(20, [GreenNode.list(children)])).childNode(0))
+    assertEqual(list.count, 3)
+    assertEqual(list[2].node.text, "c")
+    assertEqual(list[2].node.position, 4)
+    assertEqual(texts(list), ["a", "b", "c"])
+    assertEqual(SeparatedSyntaxList<Item>(none).separators.count, 0)
+    let plain = SyntaxList<Item>(SyntaxNode(GreenNode.node(20, [GreenNode.list(items(["d", "e"]))])).childNode(0))
+    assertEqual(plain[1].node.text, "e")
+    expect(!plain.isEmpty)
+}

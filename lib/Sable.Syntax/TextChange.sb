@@ -1,0 +1,53 @@
+module Sable.Syntax
+
+import Sable.Text
+
+/// An edit of a text: the span of the old text it replaces, and what it puts
+/// there. An insertion replaces an empty span, a deletion puts "".
+///
+/// ```sable
+/// let edit = TextChange(TextSpan(start: 4, length: 1), "10")
+/// assert(TextChange.apply([edit], to: "1 + 2;") == "1 + 10;")
+/// assert(edit.delta == 1)
+/// ```
+@derive(Equatable, Debug)
+public struct TextChange: Sendable {
+    /// What of the old text it replaces.
+    public let span: TextSpan
+    /// The text it puts in its place.
+    public let newText: String
+
+    public init(_ span: TextSpan, _ newText: String) {
+        self.span = span
+        self.newText = newText
+    }
+
+    /// How many bytes longer it makes the text: negative when it shortens it.
+    public var delta: Int => newText.utf8Count - span.length
+
+    /// The text with the changes made. The changes are in the old text's
+    /// positions, in order and apart: none starts before the one before it
+    /// ends. Changes that are not trap.
+    public static fn apply(_ changes: TextChange[:], to text: String) -> String {
+        TextChange.check(changes, within: text.utf8Count)
+        let builder = TextBuilder(capacity: text.utf8Count)
+        var at = 0
+        for change in changes {
+            builder.append(TextSpan(from: at, to: change.span.start).of(text))
+            builder.append(change.newText)
+            at = change.span.end
+        }
+        builder.append(TextSpan(from: at, to: text.utf8Count).of(text))
+        return builder.build()
+    }
+
+    // Traps unless the changes are in order, apart, and within the text.
+    static fn check(_ changes: TextChange[:], within length: Int) {
+        var end = 0
+        for change in changes {
+            precondition(change.span.start >= end, "text changes are in order and apart")
+            end = change.span.end
+        }
+        precondition(end <= length, "a text change is within the text")
+    }
+}

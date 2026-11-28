@@ -40,6 +40,7 @@ let manifest = Package {
         .core("Sable.Diagnostics"),
         .core("Sable.Testing"),
         .core("Sable.Generators"),
+        .core("Sable.Syntax"),
         .core("Sable.Build"),
         .extension("Sable.DependencyInjection"),
         .extension("Sable.Hosting"),

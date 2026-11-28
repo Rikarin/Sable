@@ -108,7 +108,8 @@ The standard library's modules have generators too, in
 `lib/<Module>/generators/`, embedded in the compiler (`LibraryGenerators`).
 They run for every package with a file that imports the module, and their
 attributes are known in the files that do: Sable.DependencyInjection's
-`@injectable` and `@container`, and Sable.Testing's `@mockable`.
+`@injectable` and `@container`, Sable.Syntax's `@syntax`, and Sable.Testing's
+`@mockable`.
 
 So writing `@json` in your package takes one thing: depending on the package
 whose generator answers to `json`. A transitive dependency's generators do not

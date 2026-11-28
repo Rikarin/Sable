@@ -27,7 +27,13 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
     let transport: S
     var client: TlsClientConnection? = none
     var server: TlsServerConnection? = none
+    /// What the transport is read into, made once and grown to a record's
+    /// size if reads fill it.
+    var buffer: U8[>..] = []
+
+    /// Application data opened and not yet read, from 'pendingAt' on.
     var pending: U8[>..] = []
+    var pendingAt = 0
 
     init(_ transport: S) {
         self.transport = transport
@@ -110,6 +116,15 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
         return server!.takeOutgoing()
     }
 
+    /// The room of the bytes sent, kept for the next to be sealed into.
+    fn reuseOutgoing(_ bytes: U8[>..]) {
+        if client != none {
+            client!.records.reuseOutgoing(bytes)
+        } else {
+            server!.records.reuseOutgoing(bytes)
+        }
+    }
+
     fn receive(_ bytes: U8[:]) throws(TlsError) {
         if client != none {
             try client!.receive(bytes)
@@ -123,17 +138,24 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
     /// `InvalidData`.
     public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
         while true {
-            if pending.isEmpty {
+            if pendingAt == pending.count {
                 pending = takeReceived()
+                pendingAt = 0
             }
-            if !pending.isEmpty {
-                if pending.count > count {
-                    let taken = pending[0..<count].toArray()
-                    pending = pending[count..<pending.count].toArray()
+            if pendingAt < pending.count {
+                // All of it handed over when it fits, and a copy of some when not.
+                if pendingAt == 0 && pending.count <= count {
+                    let taken = pending
+                    pending = []
                     return taken
                 }
-                let taken = pending
-                pending = []
+                let end = pending.count - pendingAt > count ? pendingAt + count : pending.count
+                let taken = pending[pendingAt..<end].toArray()
+                pendingAt = end
+                if pendingAt == pending.count {
+                    pending = []
+                    pendingAt = 0
+                }
                 return taken
             }
             if isPeerClosed {
@@ -182,27 +204,46 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
 
     /// Whether more came from the stream; what came is read.
     fn pull() async throws(TlsError) -> Bool {
-        var bytes: U8[>..] = []
+        // The buffer taken out while it is read into, so that it is no
+        // other's to copy.
+        var bytes = buffer
+        buffer = []
+        if bytes.isEmpty {
+            bytes = U8[>..](repeating: 0, count: TlsStream<S>.firstReadByteCount)
+        }
+        var got = 0
         do {
-            bytes = try await transport.read(upTo: 16384 + 5 + 256)
+            got = try await transport.read(into: &bytes)
         } catch {
+            buffer = bytes
             throw TlsError.Io(error)
         }
-        if bytes.isEmpty {
+        if got == 0 {
+            buffer = bytes
             return false
         }
         do {
-            try receive(bytes)
+            try receive(bytes[0..<got])
         } catch {
             let failure = error
+            buffer = bytes
             _ = try? await transport.write(takeOutgoing())
             throw failure
         }
+        if got == bytes.count && bytes.count < TlsStream<S>.readByteCount {
+            bytes = U8[>..](repeating: 0, count: TlsStream<S>.readByteCount)
+        }
+        buffer = bytes
         return true
     }
 
+    /// A read's bytes at first, enough for a handshake's, and once reads
+    /// fill that, a whole record's.
+    static var firstReadByteCount: Int => 4096
+    static var readByteCount: Int => 5 + TlsRecordCipher.maximumContentByteCount + 256
+
     fn flush() async throws(TlsError) {
-        let bytes = takeOutgoing()
+        var bytes = takeOutgoing()
         if bytes.isEmpty {
             return
         }
@@ -211,6 +252,8 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
         } catch {
             throw TlsError.Io(error)
         }
+        bytes.removeAll(keepingCapacity: true)
+        reuseOutgoing(bytes)
     }
 
     static fn ioError(_ error: TlsError) -> IoError {

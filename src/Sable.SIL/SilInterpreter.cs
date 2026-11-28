@@ -2629,6 +2629,25 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Task(builtin.Name, operands, depth);
         }
 
+        if (builtin.Name == "bytes_net_read") {
+            var (_, _, most) = ElementsOf(((IReference)operands[0]!).Peek());
+            if (most == 0) {
+                return 0L;
+            }
+
+            var read = NetRead((long)operands[1]!, most);
+            if (read is not { Length: > 0 } bytes) {
+                return 0L;
+            }
+
+            var (array, first) = Writable(builtin.Operands[0], (IReference)operands[0]!, 0);
+            for (var i = 0; i < bytes.Length; i++) {
+                array.Elements[first + i] = (long)bytes[i];
+            }
+
+            return (long)bytes.Length;
+        }
+
         if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
             return Net(builtin.Name, operands);
         }

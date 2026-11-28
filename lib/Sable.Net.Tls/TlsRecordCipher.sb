@@ -31,12 +31,21 @@ public struct TlsRecordCipher: Sendable {
 
     let aead: RecordAead
 
+    /// The nonce of the record being sealed or opened, the tag and the
+    /// header of the one being sealed, and its content sealed: made once,
+    /// and written over for each.
+    var nonce: U8[>..]
+    var tag: U8[>..] = U8[>..](repeating: 0, count: 16)
+    var header: U8[>..] = [23, 3, 3, 0, 0]
+    var text: U8[>..] = []
+
     /// The cipher of a traffic secret: its key and IV derived as §7.3 says.
     public init(_ suite: TlsCipherSuite, trafficSecret: SymmetricKey) {
         self.suite = suite
         let key = TlsKeySchedule.expandLabel(suite, trafficSecret, "key", context: [], byteCount: suite.keyByteCount)
         let iv = TlsKeySchedule.expandLabel(suite, trafficSecret, "iv", context: [], byteCount: 12)
         self.iv = iv.bytes()
+        self.nonce = self.iv.toArray()
         self.aead = match suite {
             case .ChaCha20Poly1305Sha256 => RecordAead.ChaCha(try! ChaCha20Poly1305(key: key))
             default                      => RecordAead.Gcm(try! AesGcm(key: key))
@@ -46,23 +55,48 @@ public struct TlsRecordCipher: Sendable {
     /// A whole record of the content, header and all, with so many zeros of
     /// padding sealed after it.
     public mutating fn seal(_ content: U8[:], type: TlsContentType, padding: Int = 0) throws(TlsError) -> U8[>..] {
+        var record: U8[>..] = []
+        try seal(content, type: type, padding: padding, appendingTo: &record)
+        return record
+    }
+
+    /// The record sealed at the end of 'records': no array is made for it
+    /// once 'records' has the room.
+    mutating fn seal(_ content: U8[:], type: TlsContentType, padding: Int = 0, appendingTo records: inout U8[>..]) throws(TlsError) {
         if content.count > TlsRecordCipher.maximumContentByteCount || padding < 0 || content.count + 1 + padding > TlsRecordCipher.maximumContentByteCount + 1 {
             throw TlsError.Failed(.internalError, reason: "a record of \(content.count) bytes and \(padding) of padding is too long")
         }
         let length = content.count + 1 + padding + 16
-        let header: U8[>..] = [23, 3, 3, U8(length >> 8), U8(length & 0xFF)]
-        // The content is sealed where it is to go, after the header.
-        var record = header
-        record.reserveCapacity(5 + length)
-        record.append(contentsOf: content)
-        record.append(U8(type.code))
-        for _ in 0..<padding {
-            record.append(0)
+        header[3] = U8(length >> 8)
+        header[4] = U8(length & 0xFF)
+        nextNonce()
+        // Sealed in a buffer of its own, kept from one record to the next,
+        // and the tag in another: each whole, which an inout slice of a
+        // range of an array is not without a copy of the array (#ISSUE).
+        var sealing = text
+        text = []
+        var sealingTag = tag
+        tag = []
+        sealing.removeAll(keepingCapacity: true)
+        sealing.append(contentsOf: content)
+        sealing.append(U8(type.code))
+        sealing.append(repeating: 0, count: padding)
+        do {
+            try aead.seal(inPlace: &sealing, nonce: nonce, associatedData: header, tag: &sealingTag)
+        } catch {
+            text = sealing
+            tag = sealingTag
+            throw error
         }
-        var tag = U8[>..](repeating: 0, count: 16)
-        try aead.seal(inPlace: &record[5..<record.count], nonce: nextNonce(), associatedData: header, tag: &tag)
-        record.append(contentsOf: tag)
-        return record
+        let end = records.count + 5 + length
+        if records.capacity < end {
+            records.reserveCapacity(end > 2 * records.capacity ? end : 2 * records.capacity)
+        }
+        records.append(contentsOf: header)
+        records.append(contentsOf: sealing)
+        records.append(contentsOf: sealingTag)
+        text = sealing
+        tag = sealingTag
     }
 
     /// The type and content of a whole record, header and all; bad_record_mac
@@ -77,15 +111,17 @@ public struct TlsRecordCipher: Sendable {
         if record[0] != 23 {
             throw TlsError.Failed(.unexpectedMessage, reason: "a record of type \(record[0]) where a protected one should be")
         }
-        var text = record[5..<record.count - 16].toArray()
+        nextNonce()
+        // Opened straight into the array that is to be its content's.
+        var content = U8[>..](repeating: 0, count: record.count - 5 - 16)
         do {
-            try aead.open(inPlace: &text, nonce: nextNonce(), tag: record[record.count - 16..<record.count], associatedData: record[0..<5])
+            try aead.open(record[5..<record.count - 16], into: &content, nonce: nonce, tag: record[record.count - 16..<record.count], associatedData: record[0..<5])
         } catch {
-            secureZero(&text)
+            secureZero(&content)
             throw TlsError.Failed(.badRecordMac, reason: "a record that does not open")
         }
-        var end = text.count
-        while end > 0 && text[end - 1] == 0 {
+        var end = content.count
+        while end > 0 && content[end - 1] == 0 {
             end -= 1
         }
         if end == 0 {
@@ -94,24 +130,24 @@ public struct TlsRecordCipher: Sendable {
         if end - 1 > TlsRecordCipher.maximumContentByteCount {
             throw TlsError.Failed(.recordOverflow, reason: "a record of \(end - 1) bytes")
         }
-        guard let type = TlsContentType.of(code: Int(text[end - 1])) else {
-            throw TlsError.Failed(.unexpectedMessage, reason: "a record of content type \(text[end - 1])")
+        guard let type = TlsContentType.of(code: Int(content[end - 1])) else {
+            throw TlsError.Failed(.unexpectedMessage, reason: "a record of content type \(content[end - 1])")
         }
-        text.removeLast(text.count - end + 1)
-        return (type, text)
+        content.removeLast(content.count - end + 1)
+        return (type, content)
     }
 
-    mutating fn nextNonce() -> U8[>..] {
-        var nonce = iv
+    /// The nonce of the next record: the IV, its last eight bytes and the
+    /// sequence number's together.
+    mutating fn nextNonce() {
         var number = sequenceNumber
         var i = 11
         while i >= 4 {
-            nonce[i] = nonce[i] ^ U8(number & 0xFF)
+            nonce[i] = iv[i] ^ U8(number & 0xFF)
             number = number >> 8
             i -= 1
         }
         sequenceNumber += 1
-        return nonce
     }
 }
 
@@ -131,10 +167,10 @@ union RecordAead: Sendable {
         }
     }
 
-    fn open(inPlace text: inout U8[:], nonce: U8[:], tag: U8[:], associatedData: U8[:]) throws(CryptoError) {
+    fn open(_ text: U8[:], into plaintext: inout U8[:], nonce: U8[:], tag: U8[:], associatedData: U8[:]) throws(CryptoError) {
         match self {
-            case .Gcm(let cipher)    => try cipher.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
-            case .ChaCha(let cipher) => try cipher.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
+            case .Gcm(let cipher)    => try cipher.open(text, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
+            case .ChaCha(let cipher) => try cipher.open(text, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
         }
     }
 }

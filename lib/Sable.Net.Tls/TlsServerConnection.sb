@@ -109,10 +109,10 @@ public struct TlsServerConnection: Sendable {
         if records.isFailed {
             throw TlsError.Closed
         }
-        records.incoming.append(contentsOf: bytes)
+        var at = 0
         do {
             while true {
-                guard let message = try records.nextMessage() else {
+                guard let message = try records.nextMessage(bytes, &at) else {
                     break
                 }
                 let keysBefore = state

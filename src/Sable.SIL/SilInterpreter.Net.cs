@@ -157,6 +157,35 @@ public sealed partial class SilInterpreter {
         return 0;
     }
 
+    /// <summary>Up to so many bytes of a socket or a pipe from a child, as net_read reads them, for bytes_net_read.</summary>
+    byte[]? NetRead(long handle, int most) {
+        if (_sources.TryGetValue(handle, out var source)) {
+            _netStatus = 0;
+            if (source is not PipeFrom from) {
+                _netStatus = 2;
+                return null;
+            }
+
+            var bytes = from.Read(Math.Clamp(most, 0, 65536));
+            if (bytes is null) {
+                _netStatus = 1;
+            }
+
+            return bytes;
+        }
+
+        if (Sandbox is not null) {
+            throw new SilTrap("a build script may not use the network");
+        }
+
+        _netStatus = 0;
+        return WithSocket<byte[]?>([handle], null, socket => {
+            var buffer = new byte[Math.Clamp(most, 0, 65536)];
+            var got = buffer.Length == 0 ? 0 : socket.Receive(buffer);
+            return buffer[..got];
+        });
+    }
+
     object? Net(string name, object?[] operands) {
         // A pipe to a child, or what is not a socket at all (SilInterpreter.Processes.cs).
         if (!_handleless.Contains(name) && SourceCall(name, operands, out var answer)) {

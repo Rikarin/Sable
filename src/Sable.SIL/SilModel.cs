@@ -3338,6 +3338,8 @@ public static class SilBuiltins {
         Add("net_connected", SilType.Bool, SilType.Int);
         Add("net_read", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("net_write", SilType.Int, SilType.Int, new SliceType(SilType.U8));
+        // Bytes read from a socket into a slice, made the only reference to its run first.
+        Add("bytes_net_read", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int);
         Add("net_receive", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("net_name", SilType.Bool, SilType.Int, SilType.Bool);
         Add("net_set_option", SilType.Bool, SilType.Int, SilType.Int, SilType.Int);

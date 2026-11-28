@@ -876,6 +876,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_net_connected(i64)
                                 declare ptr @sable_net_read(i64, i64, ptr)
                                 declare i64 @sable_net_write(i64, ptr, i64, i64)
+                                declare i64 @sable_net_read_into(i64, ptr, i64)
                                 declare ptr @sable_net_receive(i64, i64, ptr)
                                 declare zeroext i1 @sable_net_name(i64, i1 zeroext)
                                 declare zeroext i1 @sable_net_set_option(i64, i64, i64)
@@ -5982,6 +5983,32 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_{function}(ptr {first}, i64 {count})");
                     Line($"br label %{after}");
                     Continue(after);
+                    return;
+                }
+
+                // Bytes read from a socket into a slice, made the only
+                // reference to its run first: none read into an empty one.
+                case "bytes_net_read": {
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var slice = Fresh();
+                    var empty = Fresh();
+                    var any = NewLabel("bytes");
+                    var after = NewLabel("after");
+                    var read = Fresh();
+                    var none = NewLabel("none");
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    var count = SlicePart(slice, type, 2);
+                    Line($"{empty} = icmp eq i64 {count}, 0");
+                    Line($"br i1 {empty}, label %{none}, label %{any}");
+                    Continue(any);
+                    var first = SliceMutableElement(operands[0], "0", type);
+                    Line($"{read} = call i64 @sable_net_read_into(i64 {operands[1]}, ptr {first}, i64 {count})");
+                    var from = _currentLabel;
+                    Line($"br label %{after}");
+                    Continue(none);
+                    Line($"br label %{after}");
+                    Continue(after);
+                    Line($"{Result()} = phi i64 [ {read}, %{from} ], [ 0, %{none} ]");
                     return;
                 }
 

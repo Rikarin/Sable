@@ -239,6 +239,34 @@ SableArray *sable_net_read(int64_t handle, int64_t most, const SableMetadata *ty
     return net_bytes(buffer, net_result(got), type);
 }
 
+// Up to 'most' bytes read to 'into', how many: 0 at the end of what the
+// other end sends; or 0, with net_status saying whether it would block or
+// failed. The caller has made the bytes its own to write.
+int64_t sable_net_read_into(int64_t handle, char *into, int64_t most) {
+    uint64_t ticks;
+    PlatformSocket at;
+    IoSource *source = io_begin(handle, &at, 0, &ticks);
+    if (source == NULL) {
+        net_closed();
+        return 0;
+    }
+
+    if (most <= 0) {
+        io_end(source);
+        net_last_status = NET_DONE;
+        return 0;
+    }
+
+    int64_t got = source->kind == SOURCE_PIPE ? pipe_read(at, into, most) : socket_read(at, into, most);
+    if (got == IO_WOULD_BLOCK) {
+        io_would_block(source, 0, ticks);
+    }
+
+    io_end(source);
+    int64_t result = net_result(got);
+    return result > 0 ? result : 0;
+}
+
 // Some of the bytes written, how many; or 0, with net_status saying
 // whether it would block or failed. A slice reaches the runtime as its
 // buffer, where it starts, and its count.

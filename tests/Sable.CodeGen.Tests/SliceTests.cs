@@ -790,12 +790,12 @@ public sealed class SliceTests {
     }
 
     /// <summary>
-    ///     The range's view is the array's buffer: a callee that only reads
-    ///     copies nothing, and one that writes copies the run once, stored
-    ///     back in place.
+    ///     The range's view is the array's buffer, lent (#354): a callee that
+    ///     reads copies nothing, and one that writes changes the array where
+    ///     it is — the one allocation is the array's own.
     /// </summary>
     [Fact]
-    public void ARangePassedInoutCopiesOnlyWhatIsWritten() {
+    public void ARangePassedInoutIsChangedInPlace() {
         var source = Program(
             Inout + """
 
@@ -820,8 +820,85 @@ public sealed class SliceTests {
 
         if (CanBuild) {
             var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
-            // The array's own, and the one copy of the run 'bump' writes.
-            Assert.Contains("allocations 2,", stats, StringComparison.Ordinal);
+            Assert.Contains("allocations 1,", stats, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    ///     What a callee given a lent range may do, and what comes back: a
+    ///     buffer another array shares is copied by the first write, the
+    ///     other's kept; a copy of the view the callee keeps, or returns,
+    ///     keeps what it saw, and one it lets go of before it returns leaves
+    ///     the array whole; another slice put in the view's place is stored
+    ///     over the range; a range of an empty array, and of an array of
+    ///     strings, which are counted.
+    /// </summary>
+    [Fact]
+    public void ARangeLentToACalleeComesBackWhole() =>
+        Prints(
+            "[1, 2, 1, 4] [1, 2, 3, 4]\n[1, 2, 7, 4] [2, 3]\n3\n[1, 2, 9, 4]\n[1, 5, 6, 4]\n[]\n[\"a\", \"z\", \"c\"]\n",
+            """
+            fn touch(_ bytes: inout Int[:]) { bytes[0] = 1 }
+            fn keepAndTouch(_ bytes: inout Int[:]) -> Int[:] {
+                let kept = bytes
+                bytes[1] = 7
+                return kept
+            }
+            fn copyTouchDrop(_ bytes: inout Int[:]) {
+                let kept = bytes
+                bytes[0] = 9
+                print(kept[0])
+            }
+            fn replace(_ bytes: inout Int[:]) {
+                let other: Int[>..] = [5, 6]
+                bytes = other[0...]
+            }
+            fn nothing(_ bytes: inout Int[:]) { bytes = bytes[0..<0] }
+            fn name(_ names: inout String[:]) { names[0] = "z" }
+            """,
+            """
+                var b: Int[>..] = [1, 2, 3, 4]
+                let shared = b
+                touch(&b[2..<4])
+                print("\(b) \(shared)")
+                var c: Int[>..] = [1, 2, 3, 4]
+                let kept = keepAndTouch(&c[1..<3])
+                print("\(c) \(kept)")
+                var d: Int[>..] = [1, 2, 3, 4]
+                copyTouchDrop(&d[2..<4])
+                print("\(d)")
+                var e: Int[>..] = [1, 2, 3, 4]
+                replace(&e[1..<3])
+                print("\(e)")
+                var f: Int[>..] = []
+                nothing(&f[0..<0])
+                print("\(f)")
+                var g: String[>..] = ["a", "b", "c"]
+                name(&g[1...1])
+                print("\(g)")
+            """
+        );
+
+    /// <summary>
+    ///     The issue's own case (#354): a write through a range of a large
+    ///     array allocates nothing.
+    /// </summary>
+    [Fact]
+    public void AWriteThroughARangeOfALargeArrayAllocatesNothing() {
+        var source = Program(
+            "fn touch(_ bytes: inout U8[:]) { bytes[0] = 1 }",
+            """
+                var a = U8[>..](repeating: 0, count: 16384)
+                touch(&a[0..<a.count])
+                touch(&a[100..<200])
+                print(a[0] + a[100])
+            """
+        );
+        Assert.Equal("2\n", AssertAgree(source).Stdout);
+
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("allocations 1,", stats, StringComparison.Ordinal);
         }
     }
 }

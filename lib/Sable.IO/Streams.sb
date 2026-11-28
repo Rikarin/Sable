@@ -5,7 +5,9 @@ module Sable.IO
 // Write and Seek, .NET's Stream split in three. A read gives the bytes it
 // got as an array of their own, rather than filling one the caller holds:
 // the bytes a read fills would otherwise be in an array another copy of it
-// shares.
+// shares. An async reader can fill a slice too, which the caller has made
+// its own (it is inout), for one that reads a stream through a buffer it
+// keeps, as TLS does its records.
 
 /// Bytes read in order, as many as are ready up to a count at a time.
 ///
@@ -49,6 +51,32 @@ public protocol Seekable {
 /// waits (a TCP stream).
 public protocol AsyncReader {
     fn read(upTo count: Int) async throws(IoError) -> U8[>..]
+
+    /// Up to as many bytes as the slice has, read into its start as soon as
+    /// any have come: how many. None once the stream has ended, or when the
+    /// slice is empty.
+    fn read(into bytes: inout U8[:]) async throws(IoError) -> Int
+}
+
+extension AsyncReader {
+    /// The bytes of `read(upTo:)` copied in: a reader that can fill the
+    /// slice itself, as a socket's does, has its own.
+    ///
+    /// ```sable
+    /// fn twice<R: AsyncReader>(_ reader: R) async throws(IoError) -> U8[>..] {
+    ///     var buffer = U8[>..](repeating: 0, count: 8)
+    ///     let got = try await reader.read(into: &buffer[0..<4])
+    ///     return buffer[0..<got].toArray()
+    /// }
+    /// ```
+    public fn read(into bytes: inout U8[:]) async throws(IoError) -> Int {
+        if bytes.isEmpty {
+            return 0
+        }
+        let read = try await self.read(upTo: bytes.count)
+        bytes[0..<read.count] = read
+        return read.count
+    }
 }
 
 /// Bytes written in order by a task that suspends while it waits.

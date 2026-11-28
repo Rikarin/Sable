@@ -1,0 +1,126 @@
+module Sable.Net.Tls
+
+import Sable.Concurrency
+import Sable.Crypto
+import Sable.Time
+
+/// A session a client may resume (RFC 8446 §4.6.1): the ticket a server
+/// sent in a NewSessionTicket, the key resumed with, which is derived from
+/// the handshake the ticket came after, and how long the server keeps it
+/// good. A client offers it with a pre-shared key and a fresh key exchange
+/// (psk_dhe_ke), and the server's certificate is not sent again.
+///
+/// ```sable
+/// let session = TlsSession(ticket: [1, 2, 3], resumptionKey: SymmetricKey(U8[>..](repeating: 7, count: 32)), cipherSuite: .Aes128GcmSha256, received: UtcDateTime.unixEpoch, lifetime: Duration.seconds(60), ageAdd: 5)
+/// assert(session.isValid(at: UtcDateTime.fromUnix(60)))
+/// assert(!session.isValid(at: UtcDateTime.fromUnix(61)))
+/// assert(session.obfuscatedAge(at: UtcDateTime.fromUnix(2)) == 2005)
+/// ```
+public struct TlsSession: Sendable {
+    /// The ticket, as the server sealed it: the identity offered.
+    public let ticket: U8[>..]
+
+    /// The pre-shared key the ticket stands for.
+    let resumptionKey: SymmetricKey
+
+    /// The suite of the handshake it came after: one of the same hash is
+    /// resumed with.
+    public let cipherSuite: TlsCipherSuite
+
+    /// When the client had it.
+    public let received: UtcDateTime
+
+    /// How long after that the server takes it.
+    public let lifetime: Duration
+
+    /// What the ticket's age is offered plus, modulo 2^32, so that the age
+    /// is not seen on the wire.
+    let ageAdd: Int
+
+    public init(ticket: U8[:], resumptionKey: SymmetricKey, cipherSuite: TlsCipherSuite, received: UtcDateTime, lifetime: Duration, ageAdd: Int) {
+        self.ticket = ticket.toArray()
+        self.resumptionKey = resumptionKey
+        self.cipherSuite = cipherSuite
+        self.received = received
+        self.lifetime = lifetime
+        self.ageAdd = ageAdd
+    }
+
+    /// Whether the server still takes it at the time.
+    public fn isValid(at time: UtcDateTime) -> Bool {
+        return !(time < received) && time.durationSince(received).totalNanoseconds <= lifetime.totalNanoseconds
+    }
+
+    /// The ticket's age in milliseconds at the time, plus age_add, modulo
+    /// 2^32: obfuscated_ticket_age.
+    public fn obfuscatedAge(at time: UtcDateTime) -> Int {
+        let age = time < received ? 0 : time.durationSince(received).totalMilliseconds
+        return (age + ageAdd) & 0xFFFF_FFFF
+    }
+}
+
+/// The sessions a client has had of each host, to resume the next
+/// connection to it with: a ticket is offered once, as RFC 8446 §C.4 says,
+/// and the newest are kept, a few for each host. One cache may be shared by
+/// every client, of any task.
+///
+/// ```sable
+/// let cache = TlsSessionCache()
+/// var options = TlsClientOptions()
+/// options.sessionCache = cache
+/// let session = TlsSession(ticket: [1], resumptionKey: SymmetricKey(U8[>..](repeating: 7, count: 32)), cipherSuite: .Aes128GcmSha256, received: UtcDateTime.unixEpoch, lifetime: Duration.seconds(60), ageAdd: 0)
+/// cache.add(session, host: "example.com")
+/// assert(cache.count(host: "example.com") == 1)
+/// assert(cache.take(host: "example.com", at: UtcDateTime.fromUnix(61)) == none)
+/// assert(cache.count(host: "example.com") == 0)
+/// ```
+@immutable
+public final class TlsSessionCache: Sendable {
+    let sessions: Mutex<[String: TlsSession[>..]]>
+
+    /// How many sessions of a host are kept: the oldest is dropped for a
+    /// newer one.
+    public let perHost: Int
+
+    public init(perHost: Int = 4) {
+        self.perHost = perHost
+        self.sessions = Mutex([:])
+    }
+
+    /// The session kept for the host.
+    public fn add(_ session: TlsSession, host: String) {
+        let most = perHost
+        sessions.withLock { all in
+            var kept = all[host] ?? []
+            kept.append(session)
+            if kept.count > most {
+                kept = kept[kept.count - most..<kept.count].toArray()
+            }
+            all[host] = kept
+        }
+    }
+
+    /// The newest session of the host still good at the time, taken from
+    /// the cache with any older ones; none if there is none.
+    public fn take(host: String, at time: UtcDateTime) -> TlsSession? {
+        return sessions.withLock { all in
+            guard var kept = all[host] else {
+                return none
+            }
+            var found: TlsSession? = none
+            while found == none && !kept.isEmpty {
+                let last = kept.removeLast()
+                if last.isValid(at: time) {
+                    found = last
+                }
+            }
+            all[host] = kept
+            return found
+        }
+    }
+
+    /// How many sessions of the host are kept.
+    public fn count(host: String) -> Int {
+        return sessions.withLock { all in all[host]?.count ?? 0 }
+    }
+}

@@ -1480,7 +1480,7 @@ public static class SharedStorage {
             LoadUnownedInst unowned => (unowned.Address, false),
             StoreUnownedInst unowned => (unowned.Address, true),
             // An array changed where it is: its count, its buffer, an element.
-            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_element_addr" or "array_element_addr_unique" } array
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_lend_range" or "array_return_range" or "array_append_utf8" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_element_addr" or "array_element_addr_unique" } array
                 => (array.Operands[0], true),
             BuiltinInst { Name: var name } stored when name.StartsWith("bytes_store_array_", StringComparison.Ordinal) => (stored.Operands[0], true),
             _ => null,
@@ -2292,7 +2292,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "array_shares", "region_alloc", "fixed_repeating", "fixed_lend", "fixed_lend_slice", "fixed_lend_mut", "fixed_lend_mut_copy", "fixed_restore"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_lend_range", "array_return_range", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "array_shares", "region_alloc", "fixed_repeating", "fixed_lend", "fixed_lend_slice", "fixed_lend_mut", "fixed_lend_mut_copy", "fixed_restore"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2704,6 +2704,19 @@ public static class SilBuiltins {
             // back, and 'xs[1..<3] = s' of an array that does not grow.
             case "array_store_slice" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int, SilType.Int, new SliceType(element)], SilType.Unit);
+
+            // 'f(&xs[1..<3])': the array, made the only reference to its
+            // buffer, lent as a view of [from, to) — the range checked —
+            // whose reference to the buffer is the array's own for the call,
+            // so that a write through it changes the array where it is; and
+            // the slice the call gives back, the array's reference again
+            // while it is still the view, else stored over the range, of
+            // its count or a trap, and let go.
+            case "array_lend_range" when Element(0, true, arrayOnly: true) is { } element:
+                return new([operands[0], SilType.Int, SilType.Int], new SliceType(element));
+
+            case "array_return_range" when Element(0, true, arrayOnly: true) is { } element:
+                return new([operands[0], SilType.Int, SilType.Int, new SliceType(element)], SilType.Unit) { Consumed = [3] };
 
             // Elements [from, to) of an array or a slice, as a slice: a view
             // that shares the buffer, the range checked against the count.
@@ -3370,6 +3383,8 @@ public static class SilBuiltins {
         Add("net_connected", SilType.Bool, SilType.Int);
         Add("net_read", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("net_write", SilType.Int, SilType.Int, new SliceType(SilType.U8));
+        // Bytes read from a socket into a slice, made the only reference to its run first.
+        Add("bytes_net_read", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int);
         Add("net_receive", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("net_name", SilType.Bool, SilType.Int, SilType.Bool);
         Add("net_set_option", SilType.Bool, SilType.Int, SilType.Int, SilType.Int);

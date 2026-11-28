@@ -15,8 +15,8 @@ public union TlsError: Error {
     /// This end found the fault, and sent the alert.
     Failed(TlsAlert, reason: String)
 
-    /// The server's certificate is not to be believed; the alert that says
-    /// so was sent.
+    /// The other end's certificate is not to be believed; the alert that
+    /// says so was sent.
     UntrustedCertificate(CertificateError)
 
     /// The other end sent an alert that is an error.
@@ -40,7 +40,7 @@ public union TlsError: Error {
     public fn description() -> String {
         return match self {
             case .Failed(let alert, let reason) => "\(alert): \(reason)"
-            case .UntrustedCertificate(let why) => "the server's certificate is not trusted: \(why.description())"
+            case .UntrustedCertificate(let why) => "the other end's certificate is not trusted: \(why.description())"
             case .PeerAlert(let alert)          => "the other end sent \(alert)"
             case .Io(let error)                 => error.description()
             case .Closed                        => "the connection is closed"

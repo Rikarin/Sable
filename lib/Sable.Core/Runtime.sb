@@ -559,6 +559,13 @@ public struct Runtime {
     @builtin("net_read")
     public static fn readSocket(_ socket: Int, _ most: Int) -> U8[>..]
 
+    /// Up to as many bytes as the slice has read into it, how many; none at
+    /// the end of what the other end sends, or with 'socketStatus' saying
+    /// why not.
+    public static fn readSocket(_ socket: Int, into bytes: inout U8[:]) -> Int {
+        return bytes.readSocket(socket)
+    }
+
     /// Some of the bytes written: how many.
     @builtin("net_write")
     public static fn writeSocket(_ socket: Int, _ bytes: U8[:]) -> Int
@@ -1047,4 +1054,10 @@ extension Region {
     /// what it lent out.
     @builtin("ref_is_unique")
     package mutating fn isUniquelyReferenced() -> Bool
+}
+
+extension U8[:] {
+    /// Bytes of the socket read into these, as 'Runtime.readSocket(_:into:)'.
+    @builtin("bytes_net_read")
+    mutating fn readSocket(_ socket: Int) -> Int
 }

@@ -76,6 +76,16 @@ fn readFrom(_ handle: Int, upTo count: Int) async throws(IoError) -> U8[>..] {
     }
 }
 
+fn readFrom(_ handle: Int, into bytes: inout U8[:]) async throws(IoError) -> Int {
+    while true {
+        let got = Runtime.readSocket(handle, into: &bytes)
+        if Runtime.socketStatus() == 0 {
+            return got
+        }
+        try await waitForSocket(handle, writable: false)
+    }
+}
+
 fn readAllFrom(_ handle: Int) async throws(IoError) -> U8[>..] {
     var all: U8[>..] = []
     while true {

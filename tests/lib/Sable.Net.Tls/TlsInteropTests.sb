@@ -220,3 +220,208 @@ fn opensslsClientTalksToTheServer(_ group: String, _ suite: String, _ kind: Stri
     expect(seen.hasPrefix("localhost http/1.1 "), seen)
     try? directory.remove()
 }
+
+/// `s_server` of the PKI's files, answering so many connections, started in
+/// the directory; and the port it took.
+fn sServer(_ directory: TempDirectory, _ count: Int, _ more: String[>..] = []) async throws -> (Child, ChildLinesIterator, Int)? {
+    var arguments: String[>..] = ["s_server", "-accept", "0", "-naccept", "\(count)", "-cert", "cert.pem", "-key", "key.pem", "-rev", "-tls1_3"]
+    arguments.append(contentsOf: more)
+    // -rev: an echo of each line reversed, and no reading of stdin, whose end would close the connection.
+    let child = try Command("openssl")
+        .arguments(arguments)
+        .workingDirectory(directory.path.string!)
+        .stdin(.Null)
+        .stdout(.Piped)
+        .stderr(.Null)
+        .spawn()
+    var lines = child.stdout!.lines().makeAsyncIterator()
+    guard let port = try await acceptedPort(&lines) else {
+        _ = child.kill()
+        return none
+    }
+    return (child, lines, port)
+}
+
+/// "hello" sent over the stream, and what `-rev` answers read.
+fn reversed<S: AsyncReader & AsyncWriter>(_ tls: TlsStream<S>) async throws -> String {
+    try await tls.write("hello\n".utf8Bytes())
+    var reply: U8[>..] = []
+    while !String.fromUtf8Lossy(reply).contains("olleh") {
+        let bytes = try await tls.read(upTo: 1024)
+        if bytes.isEmpty {
+            break
+        }
+        reply.append(contentsOf: bytes)
+    }
+    return String.fromUtf8Lossy(reply)
+}
+
+@test
+fn theClientResumesASessionOfOpensslsServer() async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let directory = try written(pki)
+    guard let (child, start, port) = try await sServer(directory, 2) else {
+        expect(false, "s_server said no port")
+        return
+    }
+    var lines = start
+    var options = pki.clientOptions()
+    options.sessionCache = TlsSessionCache()
+    var resumed: Bool[>..] = []
+    for _ in 0..<2 {
+        let tcp = try await TcpStream.connect(host: "127.0.0.1", port: port)
+        let tls = try await TlsStream.connect(tcp, host: "localhost", options: options)
+        // The tickets come before the echo.
+        expect((try await reversed(tls)).contains("olleh"))
+        resumed.append(tls.isResumed)
+        try await tls.close()
+        tcp.close()
+    }
+    expect(resumed == [false, true])
+    await drain(&lines)
+    expect(await ended(child) != none)
+    try? directory.remove()
+}
+
+/// `s_client` of the arguments run against the port until the server's
+/// "pong" comes: what it wrote to stdout, and whether it ended well.
+fn sClient(_ directory: TempDirectory, _ port: Int, _ more: String[>..]) async throws -> (String, Bool) {
+    // 1797292800 is 2026-12-15T00:00:00Z, when the certificates are good.
+    var arguments: String[>..] = ["s_client", "-connect", "127.0.0.1:\(port)", "-CAfile", "ca.pem", "-verify_return_error", "-attime", "1797292800", "-servername", "localhost"]
+    arguments.append(contentsOf: more)
+    let child = try Command("openssl")
+        .arguments(arguments)
+        .workingDirectory(directory.path.string!)
+        .stdin(.Piped)
+        .stdout(.Piped)
+        .stderr(.Null)
+        .spawn()
+    try await child.stdin!.write("ping\n")
+    var lines = child.stdout!.lines().makeAsyncIterator()
+    var all = ""
+    while !all.contains("pong") {
+        guard let line = try await lines.next() else {
+            break
+        }
+        all += line + "\n"
+    }
+    child.stdin!.close()
+    while let line = try await lines.next() {
+        all += line + "\n"
+    }
+    let status = await ended(child)
+    return (all, status?.success == true)
+}
+
+/// Accepts connections one after another, answers each one's "ping" with
+/// "pong", and says whether each was resumed, and whose certificate came.
+fn pongEach(_ listener: TcpListener, _ options: TlsServerOptions, _ count: Int) async -> String {
+    var seen = ""
+    for _ in 0..<count {
+        do {
+            let tcp = try await listener.accept()
+            let tls = try await TlsStream.accept(tcp, options: options)
+            var got: U8[>..] = []
+            while !String.fromUtf8Lossy(got).contains("ping") {
+                let bytes = try await tls.read(upTo: 1024)
+                if bytes.isEmpty {
+                    break
+                }
+                got.append(contentsOf: bytes)
+            }
+            try await tls.write("pong\n".utf8Bytes())
+            try await tls.close()
+            _ = try? await tls.read(upTo: 1024)
+            tcp.close()
+            seen += tls.isResumed ? "resumed " : "full "
+            if !tls.peerCertificates.isEmpty {
+                seen += "\(tls.peerCertificates[0].subject) "
+            }
+        } catch {
+            seen += "\(error) "
+        }
+    }
+    return seen
+}
+
+@test
+fn opensslsClientResumesASessionOfTheServer() async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let directory = try written(pki)
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    var options = pki.serverOptions()
+    options.time = pki.clientOptions().time
+    let serving = options
+    let server = Task.spawn { () -> String in await pongEach(listener, serving, 2) }
+    let (first, firstWell) = try await sClient(directory, listener.port, ["-sess_out", "session.pem"])
+    expect(firstWell && first.contains("New, TLSv1.3"), first)
+    let (second, secondWell) = try await sClient(directory, listener.port, ["-sess_in", "session.pem"])
+    expect(secondWell && second.contains("Reused, TLSv1.3"), second)
+    let seen = await server.value
+    expect(seen == "full resumed ", seen)
+    try? directory.remove()
+}
+
+@test
+fn theClientSendsItsCertificateToOpensslsServer() async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let directory = try written(pki)
+    // -Verify 1: a certificate of a client demanded, verified against the CA when the certificates are good.
+    guard let (child, start, port) = try await sServer(directory, 1, ["-Verify", "1", "-CAfile", "ca.pem", "-attime", "1797292800"]) else {
+        expect(false, "s_server said no port")
+        return
+    }
+    var lines = start
+    let key = PrivateKey.Ed25519(Ed25519PrivateKey.generate())
+    var options = pki.clientOptions()
+    options.certificateChain = [pki.clientCertificate("alice", key: key)]
+    options.privateKey = key
+    let tcp = try await TcpStream.connect(host: "127.0.0.1", port: port)
+    let tls = try await TlsStream.connect(tcp, host: "localhost", options: options)
+    expect((try await reversed(tls)).contains("olleh"))
+    try await tls.close()
+    tcp.close()
+    await drain(&lines)
+    expect(await ended(child) != none)
+    try? directory.remove()
+}
+
+@test(arguments: ["p256", "rsa"])
+fn opensslsClientSendsItsCertificateToTheServer(_ kind: String) async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: .Ed25519(Ed25519PrivateKey.generate()))
+    let directory = try written(pki)
+    let key: PrivateKey = kind == "p256" ? EcdsaPrivateKey<P256>.generate().anyKey : .Rsa(RsaPrivateKey.generate(bits: 2048))
+    try File.write(directory.path.appending("client.pem"), pki.clientCertificate("carol", key: key).pem)
+    try File.write(directory.path.appending("client-key.pem"), key.pem())
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let serving = pki.verifyingServerOptions()
+    let server = Task.spawn { () -> String in await pongEach(listener, serving, 1) }
+    let (output, well) = try await sClient(directory, listener.port, ["-cert", "client.pem", "-key", "client-key.pem"])
+    expect(well && output.contains("pong"), output)
+    let seen = await server.value
+    expect(seen == "full CN=carol ", seen)
+    try? directory.remove()
+}
+
+/// `s_client` sends a share of its first group alone; a server that
+/// prefers another, or takes no other, asks it for a share of that.
+@test(arguments: [("P-256:X25519", "X25519", "X25519"), ("X25519:P-256", "P-256", "ECDH, prime256v1")])
+fn theServerAsksOpensslsClientForAnotherShare(_ offered: String, _ taken: String, _ key: String) async throws {
+    try skip(if: !(await hasOpenssl()), "no openssl program to test against")
+    let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
+    let directory = try written(pki)
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    var options = pki.serverOptions()
+    options.groups = taken == "X25519" ? [.X25519, .P256] : [.P256]
+    let serving = options
+    let server = Task.spawn { () -> String in await pongEach(listener, serving, 1) }
+    let (output, well) = try await sClient(directory, listener.port, ["-groups", offered])
+    expect(well && output.contains("pong"), output)
+    expect(output.contains("Peer Temp Key: \(key)"), output)
+    expect(await server.value == "full ")
+    try? directory.remove()
+}

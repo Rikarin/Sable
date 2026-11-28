@@ -9,11 +9,15 @@ import Sable.Time
 /// is to be sent back comes out of `takeOutgoing`. `TlsStream` drives one
 /// over a stream; a test, or another transport, may drive it by hand.
 ///
-/// The handshake is the full one, with an ephemeral key exchange: a share of
-/// X25519 offered, and one of P-256 sent again if the server asks for it
-/// with a HelloRetryRequest; a certificate checked as the options say, and
-/// a signature by its key. Every fault found sends the server its alert and
-/// throws.
+/// The handshake has an ephemeral key exchange: a share of X25519 offered,
+/// and one of P-256 sent again if the server asks for it with a
+/// HelloRetryRequest; a certificate checked as the options say, and a
+/// signature by its key. A session of the host in the options' cache is
+/// offered too (RFC 8446 §4.2.11), and if the server takes it, it sends no
+/// certificate; the tickets the server sends after the handshake go into
+/// the cache. A server that asks for a certificate is sent the options'
+/// chain, and a signature by its key, or an empty Certificate if there is
+/// none. Every fault found sends the server its alert and throws.
 ///
 /// ```sable
 /// var client = TlsClientConnection(host: "example.com")
@@ -39,9 +43,24 @@ public struct TlsClientConnection: Sendable {
     var records = TlsRecords()
     var schedule: TlsKeySchedule? = none
 
+    /// The session offered, if any.
+    var offeredSession: TlsSession?
+
+    /// The secret tickets' keys are derived from, once the handshake is
+    /// over.
+    var resumptionSecret: SymmetricKey? = none
+
+    /// When the tickets that come are had.
+    let time: UtcDateTime
+
+    /// The context and the signature schemes of the server's
+    /// CertificateRequest, once one has come.
+    var requestContext: U8[>..]? = none
+    var requestedSchemes: Int[>..] = []
+
     /// The suite of the HelloRetryRequest, once one has come.
     var retriedSuite: TlsCipherSuite? = none
-    var retriedGroup: Int = 0
+    var retriedGroup: TlsGroup? = none
     var retriedCookie: U8[>..]? = none
 
     /// The suite the server chose; none before its ServerHello.
@@ -50,8 +69,14 @@ public struct TlsClientConnection: Sendable {
     /// The application protocol the server chose; none if it chose none.
     public private(set) var applicationProtocol: String? = none
 
-    /// The server's certificates as it sent them, its own first.
+    /// The server's certificates as it sent them, its own first; none if
+    /// a session was resumed.
     public private(set) var peerCertificates: Certificate[>..] = []
+
+    /// Whether the server took the session offered: the handshake was a
+    /// resumption, and the server's certificate was trusted when the session
+    /// was made.
+    public private(set) var isResumed = false
 
     /// Whether the server has finished writing.
     public var isPeerClosed: Bool => records.isPeerClosed
@@ -60,20 +85,26 @@ public struct TlsClientConnection: Sendable {
     public var isClosedForWriting: Bool => records.isClosedForWriting
 
     /// A client of the host, its ClientHello ready to be taken: a key share
-    /// of X25519, and P-256 named as the other group it takes.
+    /// of the options' first group, the others named as groups it takes,
+    /// and a session of the host from the options' cache, if it has one.
     public init(host: String, options: TlsClientOptions = TlsClientOptions()) {
-        let shares: TlsKeyShare[>..] = [.X25519(X25519PrivateKey.generate())]
-        let hello = TlsClientConnection.clientHello(host: host, options: options, keyShares: shares)
-        self.init(host: host, options: options, clientHello: hello, keyShares: shares)
+        let shares: TlsKeyShare[>..] = [TlsKeyShare.generate(TlsClientConnection.groups(options)[0])]
+        let time = options.time ?? UtcDateTime.now()
+        let session = options.sessionCache?.take(host: host, at: time)
+        let hello = TlsClientConnection.clientHello(host: host, options: options, keyShares: shares, session: session, at: time)
+        self.init(host: host, options: options, clientHello: hello, keyShares: shares, session: session)
     }
 
     /// A client that sends a ClientHello of the caller's own — a handshake
-    /// message, with the ephemeral keys of its key shares — as a recorded
-    /// handshake is replayed. What the server answers is held to the
-    /// options, not to the hello.
-    public init(host: String, options: TlsClientOptions, clientHello: U8[:], keyShares: TlsKeyShare[:]) {
+    /// message, with the ephemeral keys of its key shares, and the session
+    /// its pre_shared_key offers, if it offers one — as a recorded handshake
+    /// is replayed. What the server answers is held to the options, not to
+    /// the hello.
+    public init(host: String, options: TlsClientOptions, clientHello: U8[:], keyShares: TlsKeyShare[:], session: TlsSession? = none) {
         self.host = host
         self.options = options
+        self.offeredSession = session
+        self.time = options.time ?? UtcDateTime.now()
         self.keyShares = keyShares.toArray()
         self.transcript = clientHello.toArray()
         let at = 4 + 2 + 32
@@ -102,10 +133,10 @@ public struct TlsClientConnection: Sendable {
         if records.isFailed {
             throw TlsError.Closed
         }
-        records.incoming.append(contentsOf: bytes)
+        var at = 0
         do {
             while true {
-                guard let message = try records.nextMessage() else {
+                guard let message = try records.nextMessage(bytes, &at) else {
                     break
                 }
                 let keysBefore = state
@@ -156,18 +187,27 @@ public struct TlsClientConnection: Sendable {
                 try expect(type, 8, "EncryptedExtensions")
                 try readEncryptedExtensions(&body)
                 transcript.append(contentsOf: message)
-                state = .WaitCertificate
+                state = isResumed ? .WaitFinished : .WaitCertificate
             }
             case .WaitCertificate => {
+                if type == 13 && requestContext == none {
+                    try readCertificateRequest(&body)
+                    transcript.append(contentsOf: message)
+                    return
+                }
                 try expect(type, 11, "Certificate")
-                try readCertificate(&body)
+                let certificates = try readCertificateMessage(&body)
+                if certificates.isEmpty {
+                    throw TlsError.Failed(.decodeError, reason: "a server with no certificate")
+                }
+                peerCertificates = certificates
                 transcript.append(contentsOf: message)
                 try checkTrust()
                 state = .WaitCertificateVerify
             }
             case .WaitCertificateVerify => {
                 try expect(type, 15, "CertificateVerify")
-                try readCertificateVerify(&body)
+                try readCertificateVerify(&body, of: peerCertificates[0], server: true, transcriptHash: transcriptHash())
                 transcript.append(contentsOf: message)
                 state = .WaitFinished
             }
@@ -178,7 +218,13 @@ public struct TlsClientConnection: Sendable {
                 try finishHandshake()
                 state = .Connected
             }
-            case .Connected => try records.readPostHandshake(type, &body, takesTickets: true)
+            case .Connected => {
+                if type == 4 {
+                    try readNewSessionTicket(&body)
+                } else {
+                    try records.readPostHandshake(type, &body)
+                }
+            }
         }
     }
 
@@ -223,6 +269,7 @@ public struct TlsClientConnection: Sendable {
         var version = 0
         var share: (Int, U8[>..])? = none
         var cookie: U8[>..]? = none
+        var tookSession = false
         while !extensions.isAtEnd {
             let type = try extensions.number(2)
             var data = TlsReader(try extensions.vector(2), "a ServerHello extension")
@@ -240,6 +287,13 @@ public struct TlsClientConnection: Sendable {
                     }
                     cookie = try data.take(data.bytes.count)
                 }
+                case 41 => {
+                    let selected = try data.number(2)
+                    if isRetry || offeredSession == none || selected != 0 {
+                        throw TlsError.Failed(.illegalParameter, reason: "a pre_shared_key that was not offered")
+                    }
+                    tookSession = true
+                }
                 default => throw TlsError.Failed(.unsupportedExtension, reason: "a ServerHello extension \(type) that was not asked for")
             }
             try data.finish()
@@ -251,31 +305,43 @@ public struct TlsClientConnection: Sendable {
             throw TlsError.Failed(.missingExtension, reason: "a ServerHello with no key share")
         }
         if isRetry {
-            if group != 0x001D && group != 0x0017 {
+            guard let asked = TlsGroup.of(code: group), TlsClientConnection.groups(options).contains(asked) else {
                 throw TlsError.Failed(.illegalParameter, reason: "a HelloRetryRequest for group \(group), which was not offered")
             }
             for each in keyShares {
-                if each.group == group {
+                if each.group == asked {
                     throw TlsError.Failed(.illegalParameter, reason: "a HelloRetryRequest for group \(group), of which a share was sent")
                 }
             }
             retriedSuite = suite
-            retriedGroup = group
+            retriedGroup = asked
             retriedCookie = cookie
+            if let session = offeredSession, session.cipherSuite.hashAlgorithm != suite.hashAlgorithm {
+                offeredSession = none
+            }
             return true
         }
         var secret: SymmetricKey? = none
         for each in keyShares {
-            if each.group == group {
+            if each.group.code == group {
                 secret = try each.sharedSecret(with: key)
             }
         }
         guard let shared = secret else {
             throw TlsError.Failed(.illegalParameter, reason: "a key share of group \(group), which was not offered")
         }
+        var preSharedKey: SymmetricKey? = none
+        if tookSession {
+            let session = offeredSession!
+            if session.cipherSuite.hashAlgorithm != suite.hashAlgorithm {
+                throw TlsError.Failed(.illegalParameter, reason: "a session resumed with a suite of another hash")
+            }
+            preSharedKey = session.resumptionKey
+            isResumed = true
+        }
         cipherSuite = suite
         records.suite = suite
-        var keys = TlsKeySchedule(suite)
+        var keys = TlsKeySchedule(suite, preSharedKey: preSharedKey)
         keys.advance(sharedSecret: shared)
         schedule = keys
         return false
@@ -286,7 +352,7 @@ public struct TlsClientConnection: Sendable {
     /// server's cookie, after a transcript whose first ClientHello is its
     /// hash.
     mutating fn retry(_ request: U8[>..]) throws(TlsError) {
-        let share: TlsKeyShare = retriedGroup == 0x001D ? .X25519(X25519PrivateKey.generate()) : .P256(EcdhPrivateKey<Sable.Crypto.P256>.generate())
+        let share = TlsKeyShare.generate(retriedGroup!)
         keyShares = [share]
         let hash = retriedSuite!.hashAlgorithm.digest(of: transcript).bytes
         var first = TlsReader(transcript[4..<transcript.count], "the first ClientHello")
@@ -299,9 +365,12 @@ public struct TlsClientConnection: Sendable {
         while !extensions.isAtEnd {
             let type = try extensions.number(2)
             let data = try extensions.vector(2)
+            if type == 41 || type == 45 {
+                continue
+            }
             if type == 51 {
                 var shares: U8[>..] = []
-                appendNumber(&shares, share.group, 2)
+                appendNumber(&shares, share.group.code, 2)
                 appendVector(&shares, share.publicBytes, 2)
                 var list: U8[>..] = []
                 appendVector(&list, shares, 2)
@@ -313,13 +382,64 @@ public struct TlsClientConnection: Sendable {
         if let cookie = retriedCookie {
             appendExtension(&written, 44, cookie)
         }
+        if let session = offeredSession {
+            appendPreSharedKey(&written, session, at: time)
+        }
         appendVector(&body, written, 2)
-        let hello = handshakeMessage(1, body)
-        transcript = [254, 0, 0, U8(hash.count)]
-        transcript.append(contentsOf: hash)
-        transcript.append(contentsOf: request)
+        var hello = handshakeMessage(1, body)
+        var earlier: U8[>..] = [254, 0, 0, U8(hash.count)]
+        earlier.append(contentsOf: hash)
+        earlier.append(contentsOf: request)
+        if let session = offeredSession {
+            TlsClientConnection.bind(&hello, session, after: earlier)
+        }
+        transcript = earlier
         transcript.append(contentsOf: hello)
         try records.send(hello)
+    }
+
+    /// The binder of the session (RFC 8446 §4.2.11.2) written over the
+    /// placeholder at the end of the hello: the HMAC, under the finished key
+    /// of its binder key, of the transcript's hash up to the binders.
+    static fn bind(_ hello: inout U8[>..], _ session: TlsSession, after earlier: U8[:]) {
+        let length = session.cipherSuite.hashAlgorithm.digestByteCount
+        var partial = earlier.toArray()
+        partial.append(contentsOf: hello[0..<hello.count - 3 - length])
+        let binder = TlsClientConnection.binder(session.cipherSuite, session.resumptionKey, partial)
+        for i in 0..<length {
+            hello[hello.count - length + i] = binder[i]
+        }
+    }
+
+    /// The binder of the pre-shared key for the transcript up to the
+    /// binders.
+    static fn binder(_ suite: TlsCipherSuite, _ preSharedKey: SymmetricKey, _ partial: U8[:]) -> U8[>..] {
+        let early = TlsKeySchedule(suite, preSharedKey: preSharedKey)
+        let key = early.deriveSecret("res binder", transcriptHash: suite.hashAlgorithm.digest(of: []).bytes)
+        return TlsKeySchedule.finishedData(suite, trafficSecret: key, transcriptHash: suite.hashAlgorithm.digest(of: partial).bytes)
+    }
+
+    /// A ticket that came after the handshake: kept in the options' cache
+    /// for the host, with the key derived from its nonce (RFC 8446 §4.6.1).
+    mutating fn readNewSessionTicket(_ body: inout TlsReader) throws(TlsError) {
+        let lifetime = try body.number(4)
+        let ageAdd = try body.number(4)
+        let nonce = try body.vector(1)
+        let ticket = try body.vector(2)
+        _ = try body.vector(2)
+        try body.finish()
+        if lifetime > 604800 {
+            throw TlsError.Failed(.illegalParameter, reason: "a ticket of a lifetime longer than seven days")
+        }
+        if ticket.isEmpty {
+            throw TlsError.Failed(.decodeError, reason: "an empty ticket")
+        }
+        guard let cache = options.sessionCache else {
+            return
+        }
+        let suite = cipherSuite!
+        let key = TlsKeySchedule.expandLabel(suite, resumptionSecret!, "resumption", context: nonce, byteCount: suite.hashAlgorithm.digestByteCount)
+        cache.add(TlsSession(ticket: ticket, resumptionKey: key, cipherSuite: suite, received: time, lifetime: Duration.seconds(lifetime), ageAdd: ageAdd), host: host)
     }
 
     mutating fn startHandshakeKeys() throws(TlsError) {
@@ -353,26 +473,66 @@ public struct TlsClientConnection: Sendable {
         }
     }
 
-    mutating fn readCertificate(_ body: inout TlsReader) throws(TlsError) {
-        if !(try body.vector(1)).isEmpty {
-            throw TlsError.Failed(.illegalParameter, reason: "a Certificate with a request context")
-        }
-        var list = TlsReader(try body.vector(3), "the certificate list")
+    /// A CertificateRequest (RFC 8446 §4.3.2): its context, and the
+    /// signature schemes the server takes; the authorities it names are
+    /// not asked.
+    mutating fn readCertificateRequest(_ body: inout TlsReader) throws(TlsError) {
+        let context = try body.vector(1)
+        var extensions = TlsReader(try body.vector(2), "CertificateRequest's extensions")
         try body.finish()
-        var certificates: Certificate[>..] = []
-        while !list.isAtEnd {
-            let der = try list.vector(3)
-            _ = try list.vector(2)
-            do {
-                certificates.append(try Certificate.parse(der: der))
-            } catch {
-                throw TlsError.Failed(.badCertificate, reason: "a certificate that does not parse: \(error.description())")
+        var schemes: Int[>..]? = none
+        while !extensions.isAtEnd {
+            let type = try extensions.number(2)
+            var data = TlsReader(try extensions.vector(2), "a CertificateRequest extension")
+            if type == 13 {
+                var list = TlsReader(try data.vector(2), "signature_algorithms")
+                var read: Int[>..] = []
+                while !list.isAtEnd {
+                    read.append(try list.number(2))
+                }
+                schemes = read
+            } else {
+                _ = try data.take(data.bytes.count - data.at)
+            }
+            try data.finish()
+        }
+        guard let taken = schemes else {
+            throw TlsError.Failed(.missingExtension, reason: "a CertificateRequest without signature_algorithms")
+        }
+        requestContext = context
+        requestedSchemes = taken
+    }
+
+    /// The client's Certificate and CertificateVerify for the server's
+    /// request: the options' chain if its key makes a signature the server
+    /// takes, and an empty Certificate if not.
+    mutating fn sendCertificate(_ context: U8[:]) throws(TlsError) {
+        var scheme: Int? = none
+        if let key = options.privateKey, !options.certificateChain.isEmpty {
+            scheme = TlsServerConnection.signatureScheme(for: key, offered: requestedSchemes)
+        }
+        var entries: U8[>..] = []
+        if scheme != none {
+            for certificate in options.certificateChain {
+                appendVector(&entries, certificate.der, 3)
+                entries.append(contentsOf: [0, 0])
             }
         }
-        if certificates.isEmpty {
-            throw TlsError.Failed(.decodeError, reason: "a server with no certificate")
+        var body: U8[>..] = []
+        appendVector(&body, context, 1)
+        appendVector(&body, entries, 3)
+        let certificate = handshakeMessage(11, body)
+        try records.send(certificate)
+        transcript.append(contentsOf: certificate)
+        if let chosen = scheme {
+            let content = certificateVerifyContent(server: false, transcriptHash: transcriptHash())
+            var verify: U8[>..] = []
+            appendNumber(&verify, chosen, 2)
+            appendVector(&verify, TlsServerConnection.sign(content, scheme: chosen, key: options.privateKey!), 2)
+            let message = handshakeMessage(15, verify)
+            try records.send(message)
+            transcript.append(contentsOf: message)
         }
-        peerCertificates = certificates
     }
 
     fn checkTrust() throws(TlsError) {
@@ -390,22 +550,6 @@ public struct TlsClientConnection: Sendable {
                     throw TlsError.UntrustedCertificate(.UnknownIssuer(issuer: "\(leaf.issuer)"))
                 }
             }
-        }
-    }
-
-    mutating fn readCertificateVerify(_ body: inout TlsReader) throws(TlsError) {
-        let scheme = try body.number(2)
-        let signature = try body.vector(2)
-        try body.finish()
-        let content = certificateVerifyContent(server: true, transcriptHash: transcriptHash())
-        var key: PublicKey? = none
-        do {
-            key = try peerCertificates[0].publicKey()
-        } catch {
-            throw TlsError.UntrustedCertificate(error)
-        }
-        if !TlsClientConnection.isValid(signature, scheme: scheme, of: content, key: key!) {
-            throw TlsError.Failed(.decryptError, reason: "the server's CertificateVerify is no signature of its certificate's key")
         }
     }
 
@@ -455,10 +599,14 @@ public struct TlsClientConnection: Sendable {
         let hash = transcriptHash()
         var keys = schedule!
         keys.advance()
-        let finished = handshakeMessage(20, TlsKeySchedule.finishedData(cipherSuite!, trafficSecret: records.ownSecret!, transcriptHash: hash))
+        if let context = requestContext {
+            try sendCertificate(context)
+        }
+        let finished = handshakeMessage(20, TlsKeySchedule.finishedData(cipherSuite!, trafficSecret: records.ownSecret!, transcriptHash: transcriptHash()))
         try records.send(finished)
         transcript.append(contentsOf: finished)
         records.useKeys(own: keys.deriveSecret("c ap traffic", transcriptHash: hash), peer: keys.deriveSecret("s ap traffic", transcriptHash: hash))
+        resumptionSecret = keys.deriveSecret("res master", transcriptHash: transcriptHash())
         schedule = keys
         records.isConnected = true
     }
@@ -470,9 +618,12 @@ public struct TlsClientConnection: Sendable {
     ]
 
     /// The ClientHello this client sends: TLS 1.3 alone, the options'
-    /// suites and protocols, the key shares, and the host's name unless it
-    /// is an address.
-    static fn clientHello(host: String, options: TlsClientOptions, keyShares: TlsKeyShare[:]) -> U8[>..] {
+    /// suites and protocols, the key shares, the host's name unless it is
+    /// an address, and the session, if any, with its binder.
+    /// The groups the options offer: X25519 alone where they name none.
+    static fn groups(_ options: TlsClientOptions) -> TlsGroup[>..] => options.groups.isEmpty ? [.X25519] : options.groups
+
+    static fn clientHello(host: String, options: TlsClientOptions, keyShares: TlsKeyShare[:], session: TlsSession?, at time: UtcDateTime) -> U8[>..] {
         var body: U8[>..] = [3, 3]
         body.append(contentsOf: SecureRandom.bytes(32))
         body.append(0)
@@ -490,11 +641,17 @@ public struct TlsClientConnection: Sendable {
             appendVector(&list, name, 2)
             appendExtension(&extensions, 0, list)
         }
-        appendExtension(&extensions, 10, [0, 4, 0, 0x1D, 0, 0x17])
-        appendExtension(&extensions, 13, [0, 12, 4, 3, 5, 3, 8, 4, 8, 5, 8, 6, 8, 7])
+        var groups: U8[>..] = []
+        for group in TlsClientConnection.groups(options) {
+            appendNumber(&groups, group.code, 2)
+        }
+        var groupList: U8[>..] = []
+        appendVector(&groupList, groups, 2)
+        appendExtension(&extensions, 10, groupList)
+        appendExtension(&extensions, 13, signatureAlgorithms())
         var shares: U8[>..] = []
         for share in keyShares {
-            appendNumber(&shares, share.group, 2)
+            appendNumber(&shares, share.group.code, 2)
             appendVector(&shares, share.publicBytes, 2)
         }
         var shareList: U8[>..] = []
@@ -510,8 +667,15 @@ public struct TlsClientConnection: Sendable {
             appendVector(&list, names, 2)
             appendExtension(&extensions, 16, list)
         }
+        if let session {
+            appendPreSharedKey(&extensions, session, at: time)
+        }
         appendVector(&body, extensions, 2)
-        return handshakeMessage(1, body)
+        var hello = handshakeMessage(1, body)
+        if let session {
+            TlsClientConnection.bind(&hello, session, after: [])
+        }
+        return hello
     }
 
     static fn isAddress(_ host: String) -> Bool {
@@ -530,6 +694,21 @@ public struct TlsClientConnection: Sendable {
 fn appendExtension(_ bytes: inout U8[>..], _ type: Int, _ data: U8[:]) {
     appendNumber(&bytes, type, 2)
     appendVector(&bytes, data, 2)
+}
+
+/// psk_key_exchange_modes of psk_dhe_ke, and pre_shared_key — the last
+/// extension — offering the session, its binder zeros to be written over.
+fn appendPreSharedKey(_ extensions: inout U8[>..], _ session: TlsSession, at time: UtcDateTime) {
+    appendExtension(&extensions, 45, [1, 1])
+    var identity: U8[>..] = []
+    appendVector(&identity, session.ticket, 2)
+    appendNumber(&identity, session.obfuscatedAge(at: time), 4)
+    var data: U8[>..] = []
+    appendVector(&data, identity, 2)
+    var binder: U8[>..] = []
+    appendVector(&binder, U8[>..](repeating: 0, count: session.cipherSuite.hashAlgorithm.digestByteCount), 1)
+    appendVector(&data, binder, 2)
+    appendExtension(&extensions, 41, data)
 }
 
 /// A plaintext record of the type, of TLS 1.2's version on the wire, or of

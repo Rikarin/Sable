@@ -1,0 +1,96 @@
+module TlsBench
+
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.IO
+import Sable.Net
+import Sable.Net.Tls
+import Sable.Testing
+
+// TlsStream over loopback TCP, a client and a server of the library's in one
+// process, the server's certificate of P-256 and pinned by the client:
+// "handshakes" makes so many connections one after another, each a full
+// TLS 1.3 handshake (X25519, ECDSA, AES-128-GCM) and a byte each way;
+// "bulk" sends so many bytes over one connection, in writes of 16 KiB;
+// the server reads them all, answers with how many came, and closes. What it comes to is the bytes
+// the server read and the client was answered.
+
+fn serve(_ listener: TcpListener, _ options: TlsServerOptions, _ connections: Int, _ expected: Int) async -> Int {
+    var total = 0
+    for _ in 0..<connections {
+        do {
+            let tcp = try await listener.accept()
+            let tls = try await TlsStream.accept(tcp, options: options)
+            var got = 0
+            while got < expected {
+                let bytes = try await tls.read(upTo: 65536)
+                if bytes.isEmpty {
+                    break
+                }
+                got += bytes.count
+            }
+            try await tls.write("\(got)".utf8Bytes())
+            try await tls.close()
+            tcp.close()
+            total += got
+        } catch {
+            return total
+        }
+    }
+    return total
+}
+
+fn ask(_ port: Int, _ options: TlsClientOptions, _ count: Int) async -> Int {
+    do {
+        let tcp = try await TcpStream.connect(host: "127.0.0.1", port: port)
+        let tls = try await TlsStream.connect(tcp, host: "localhost", options: options)
+        let chunk = U8[>..](repeating: 1, count: 16384)
+        var sent = 0
+        while sent < count {
+            let n = count - sent < chunk.count ? count - sent : chunk.count
+            try await tls.write(chunk[0..<n])
+            sent += n
+        }
+        var answer: U8[>..] = []
+        while true {
+            let bytes = try await tls.read(upTo: 64)
+            if bytes.isEmpty {
+                break
+            }
+            answer.append(contentsOf: bytes)
+        }
+        tcp.close()
+        return (try? Int.parse(String.fromUtf8Lossy(answer))) ?? -1
+    } catch {
+        return -1
+    }
+}
+
+fn run(_ server: TlsServerOptions, _ client: TlsClientOptions, _ connections: Int, _ bytes: Int) async -> String {
+    let listener = try! TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let port = listener.port
+    let serving = Task.spawn { await serve(listener, server, connections, bytes) }
+    var answered = 0
+    for _ in 0..<connections {
+        answered += await ask(port, client, bytes)
+    }
+    let read = await serving.value
+    listener.close()
+    return "\(read + answered)"
+}
+
+@bench(arguments: [("handshakes", 20), ("bulk", 4_194_304)])
+fn measure(_ b: Bencher, _ mode: String, _ count: Int) async {
+    let key = EcdsaPrivateKey<P256>.generate().anyKey
+    let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "localhost"), host: "localhost").selfSigned(with: key)
+    var server = TlsServerOptions(certificateChain: [certificate], privateKey: key)
+    server.cipherSuites = [.Aes128GcmSha256]
+    server.ticketKey = none
+    let client = TlsClientOptions(trust: .Pinned([certificate]))
+    let connections = mode == "handshakes" ? count : 1
+    let bytes = mode == "handshakes" ? 1 : count
+    if mode == "bulk" {
+        b.bytesPerIteration = count
+    }
+    b.check(await b.iterateAsync { await run(server, client, connections, bytes) })
+}

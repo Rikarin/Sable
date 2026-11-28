@@ -60,6 +60,16 @@ public final class UnixStream: AsyncReader, AsyncWriter {
         return try await readFrom(handle, upTo: count)
     }
 
+    /// Up to as many bytes as the slice has, read into its start as soon as
+    /// any have come, with no array made for them: how many. None once the
+    /// other end has finished writing, or when the slice is empty.
+    public fn read(into bytes: inout U8[:]) async throws(IoError) -> Int {
+        if bytes.isEmpty {
+            return 0
+        }
+        return try await readFrom(handle, into: &bytes)
+    }
+
     /// Every byte until the other end finishes writing.
     public fn readAll() async throws(IoError) -> U8[>..] {
         return try await readAllFrom(handle)

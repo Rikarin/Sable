@@ -53,10 +53,14 @@ public struct TlsKeySchedule: Sendable {
     /// assert(TlsKeySchedule.expandLabel(.Aes128GcmSha256, secret, "key", context: [], byteCount: 16).byteCount == 16)
     /// ```
     public static fn expandLabel(_ suite: TlsCipherSuite, _ secret: SymmetricKey, _ label: String, context: U8[:], byteCount: Int) -> SymmetricKey {
-        var info: U8[>..] = [U8(byteCount >> 8 & 0xFF), U8(byteCount & 0xFF)]
-        let full = "tls13 \(label)".utf8Bytes()
-        info.append(U8(full.count))
-        info.append(contentsOf: full)
+        // Made once, at its size.
+        var info: U8[>..] = []
+        info.reserveCapacity(10 + label.utf8Count + context.count)
+        info.append(U8(byteCount >> 8 & 0xFF))
+        info.append(U8(byteCount & 0xFF))
+        info.append(U8(6 + label.utf8Count))
+        info.append(utf8: "tls13 ")
+        info.append(utf8: label)
         info.append(U8(context.count))
         info.append(contentsOf: context)
         return match suite.hashAlgorithm {

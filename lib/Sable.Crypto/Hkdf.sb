@@ -31,7 +31,8 @@ public struct Hkdf<H: HashFunction> {
         var bytes = secret.bytes()
         code.update(bytes)
         bytes.zeroSecurely()
-        var key = code.spend().bytes
+        var key = U8[>..](repeating: 0, count: H.digestByteCount)
+        code.spend(into: &key)
         let extracted = SymmetricKey(key)
         key.zeroSecurely()
         return extracted
@@ -43,26 +44,42 @@ public struct Hkdf<H: HashFunction> {
         if byteCount < 0 || byteCount > 255 * H.digestByteCount {
             throw CryptoError.InvalidParameter(reason: "HKDF derives at most \(255 * H.digestByteCount) bytes with this hash, not \(byteCount)")
         }
-        let keyed = Hmac<H>(key: key)
+        var keyed = Hmac<H>(key: key)
         let derived = SecretMemory(count: byteCount)
-        var block: U8[>..] = []
+        let digest = H.digestByteCount
+        // Each block made in the one before's room, its counter after it,
+        // and the last in the keyed code itself, which is not needed after.
+        var block = U8[>..](repeating: 0, count: digest + 1)
         var at = 0
         var counter = 1
         while at < byteCount {
-            var code = keyed
-            code.update(block)
-            code.update(info)
-            code.update([counter unchecked as U8])
-            block.zeroSecurely()
-            block = code.finalize().bytes
-            let taken = block.count < byteCount - at ? block.count : byteCount - at
+            let used = at == 0 ? 0 : digest
+            if byteCount - at <= digest {
+                Hkdf<H>.round(&keyed, &block, used: used, info: info, counter: counter)
+            } else {
+                var code = keyed
+                Hkdf<H>.round(&code, &block, used: used, info: info, counter: counter)
+            }
+            let taken = digest < byteCount - at ? digest : byteCount - at
             unsafe {
-                store(block[..<taken], at: derived.address + at)
+                store(block[0..<taken], at: derived.address + at)
             }
             at += taken
             counter += 1
         }
         block.zeroSecurely()
         return SymmetricKey(memory: derived)
+    }
+
+    /// A block of HKDF-Expand: the code of the block before, the first
+    /// 'used' bytes of 'block', then the info and the counter, put in the
+    /// block's last byte, written over it.
+    static fn round(_ code: inout Hmac<H>, _ block: inout U8[:], used: Int, info: U8[:], counter: Int) {
+        let last = block.count - 1
+        code.update(block[0..<used])
+        code.update(info)
+        block[last] = counter unchecked as U8
+        code.update(block[last..<last + 1])
+        code.spend(into: &block)
     }
 }

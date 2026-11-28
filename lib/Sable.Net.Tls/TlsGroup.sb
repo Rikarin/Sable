@@ -1,0 +1,36 @@
+module Sable.Net.Tls
+
+/// A group of the key exchange (RFC 8446 §4.2.7), whose ephemeral keys a
+/// TlsKeyShare holds.
+///
+/// ```sable
+/// assert(TlsGroup.X25519.code == 0x001D && TlsGroup.P256.code == 0x0017)
+/// assert(TlsGroup.all == [.X25519, .P256])
+/// assert(TlsGroup.of(code: 0x0017) == .P256 && TlsGroup.of(code: 0x0018) == none)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum TlsGroup: Sendable {
+    /// x25519.
+    X25519
+    /// secp256r1.
+    P256
+
+    /// Its number on the wire.
+    public var code: Int => match self {
+        case .X25519 => 0x001D
+        case .P256   => 0x0017
+    }
+
+    /// The group of a number on the wire; none for one not taken.
+    public static fn of(code: Int) -> TlsGroup? {
+        for group in TlsGroup.all {
+            if group.code == code {
+                return group
+            }
+        }
+        return none
+    }
+
+    /// Every group, in the order a server prefers them by default.
+    public static var all: TlsGroup[>..] => [.X25519, .P256]
+}

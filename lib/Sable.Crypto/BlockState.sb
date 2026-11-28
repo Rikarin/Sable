@@ -243,6 +243,30 @@ fn bigEndianDigest32(_ state: SecretMemory, count: Int) -> Digest {
     return Digest(taking: bytes)
 }
 
+/// The first bytes of a state of big-endian 32-bit words, written into
+/// the first 'count' bytes of 'digest'.
+fn storeBigEndian32(_ state: SecretMemory, count: Int, into digest: inout U8[:]) {
+    var i = 0
+    while i < count {
+        unsafe {
+            digest.writeU32(load32(state.address &+ i), at: i, endian: .Big)
+        }
+        i += 4
+    }
+}
+
+/// The first bytes of a state of big-endian 64-bit words, written into
+/// the first 'count' bytes of 'digest'.
+fn storeBigEndian64(_ state: SecretMemory, count: Int, into digest: inout U8[:]) {
+    var i = 0
+    while i < count {
+        unsafe {
+            digest.writeU64(load64(state.address &+ i), at: i, endian: .Big)
+        }
+        i += 8
+    }
+}
+
 /// The first bytes of a state of big-endian 64-bit words.
 fn bigEndianDigest64(_ state: SecretMemory, count: Int) -> Digest {
     var bytes = U8[>..](repeating: 0, count: count)

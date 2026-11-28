@@ -578,6 +578,7 @@ void sable_retain(void *pointer) {
 }
 
 void sable_release_last(void *pointer);
+static bool array_kept_for_lender(SableObject *object);
 
 // With a profile's arc-checks, compiled code's retain and release call this
 // for an object whose count is already zero: its deinit has run, and the
@@ -683,6 +684,12 @@ __attribute__((noinline)) static void release_rest(SableObject *object) {
 // a weak reference, which reads as none from here on.
 void sable_release_last(void *pointer) {
     SableObject *object = pointer;
+    // An array's buffer lent with a range of it (sable_array_lend_range) is
+    // kept, elements and all, for the array it was lent from to take back.
+    if (__builtin_expect(object_flags(object) >= SABLE_UNOWNED_ONE, 0) && array_kept_for_lender(object)) {
+        return;
+    }
+
     if (object_flags(object) & SABLE_HAS_SIDE) {
         sable_weak_object_died(object);
     }

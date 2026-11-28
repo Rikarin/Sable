@@ -1,6 +1,7 @@
 module Sable.Net.Tls
 
 import Sable.Crypto
+import Sable.Crypto.X509
 
 /// What both ends of a TLS 1.3 connection do alike (RFC 8446 §5): records
 /// read from the bytes that came and opened, the handshake's messages
@@ -8,6 +9,7 @@ import Sable.Crypto
 /// records sealed to send. The handshake of each end, client or server, is
 /// the connection's own.
 struct TlsRecords: Sendable {
+    /// The start of a record the bytes that came ended in the middle of.
     var incoming: U8[>..] = []
     var handshakeBytes: U8[>..] = []
     var outgoing: U8[>..] = []
@@ -32,6 +34,14 @@ struct TlsRecords: Sendable {
         let taken = outgoing
         outgoing = []
         return taken
+    }
+
+    /// Bytes sent, emptied, kept to seal the next records into: their
+    /// room is not made again.
+    mutating fn reuseOutgoing(_ bytes: U8[>..]) {
+        if outgoing.isEmpty && bytes.isEmpty {
+            outgoing = bytes
+        }
     }
 
     mutating fn takeReceived() -> U8[>..] {
@@ -62,35 +72,96 @@ struct TlsRecords: Sendable {
     }
 
     /// The next whole handshake message that has come, reading as many
-    /// records as that takes, and no more: a record after it may need the
-    /// keys the message brings. None while one is still to come.
-    mutating fn nextMessage() throws(TlsError) -> U8[>..]? {
+    /// records of 'bytes' from 'at' on as that takes, and no more: a record
+    /// after it may need the keys the message brings. None once every
+    /// record of them is read; a record they end in the middle of is kept,
+    /// to be finished by the bytes that come next.
+    mutating fn nextMessage(_ bytes: U8[:], _ at: inout Int) throws(TlsError) -> U8[>..]? {
         while true {
             if handshakeBytes.count >= 4 {
                 let length = Int(handshakeBytes[1]) << 16 | Int(handshakeBytes[2]) << 8 | Int(handshakeBytes[3])
                 if handshakeBytes.count >= 4 + length {
                     let message = handshakeBytes[0..<4 + length].toArray()
-                    handshakeBytes = handshakeBytes[4 + length..<handshakeBytes.count].toArray()
+                    if handshakeBytes.count == 4 + length {
+                        handshakeBytes.removeAll(keepingCapacity: true)
+                    } else {
+                        handshakeBytes = handshakeBytes[4 + length..<handshakeBytes.count].toArray()
+                    }
                     return message
                 }
             }
-            if incoming.count < 5 {
+            if !incoming.isEmpty {
+                // A record begun in bytes that came before: finished from
+                // these, as far as they go. Its header first, then as much
+                // as the header says, which may be nothing.
+                if incoming.count < 5 {
+                    let taken = 5 - incoming.count < bytes.count - at ? 5 - incoming.count : bytes.count - at
+                    incoming.append(contentsOf: bytes[at..<at + taken])
+                    at += taken
+                    if incoming.count < 5 {
+                        return none
+                    }
+                }
+                let need = 5 + TlsRecords.recordLength(incoming[0..<5])
+                if need > 5 + TlsRecordCipher.maximumContentByteCount + 256 {
+                    throw TlsError.Failed(.recordOverflow, reason: "a record of \(need - 5) bytes")
+                }
+                let taken = need - incoming.count < bytes.count - at ? need - incoming.count : bytes.count - at
+                if incoming.capacity < need {
+                    incoming.reserveCapacity(need < 5 + 1024 ? 5 + 1024 : need)
+                }
+                incoming.append(contentsOf: bytes[at..<at + taken])
+                at += taken
+                if incoming.count < need {
+                    return none
+                }
+                try readKept()
+                continue
+            }
+            if bytes.count - at < 5 {
+                keep(bytes[at..<bytes.count])
+                at = bytes.count
                 return none
             }
-            let length = Int(incoming[3]) << 8 | Int(incoming[4])
+            let length = TlsRecords.recordLength(bytes[at..<at + 5])
             if length > TlsRecordCipher.maximumContentByteCount + 256 {
                 throw TlsError.Failed(.recordOverflow, reason: "a record of \(length) bytes")
             }
-            if incoming.count < 5 + length {
+            if bytes.count - at < 5 + length {
+                keep(bytes[at..<bytes.count])
+                at = bytes.count
                 return none
             }
-            let record = incoming[0..<5 + length].toArray()
-            incoming = incoming[5 + length..<incoming.count].toArray()
-            try readRecord(record)
+            let record = at
+            at += 5 + length
+            try readRecord(bytes[record..<record + 5 + length])
         }
     }
 
-    mutating fn readRecord(_ record: U8[>..]) throws(TlsError) {
+    static fn recordLength(_ header: U8[:]) -> Int => Int(header[3]) << 8 | Int(header[4])
+
+    /// The start of a record kept till the rest of it comes.
+    mutating fn keep(_ bytes: U8[:]) {
+        if bytes.isEmpty {
+            return
+        }
+        if incoming.capacity < 5 + 1024 {
+            incoming.reserveCapacity(5 + 1024)
+        }
+        incoming.append(contentsOf: bytes)
+    }
+
+    /// The record kept, now whole, read; its bytes let go, but not their
+    /// room, which the next one kept is put in.
+    mutating fn readKept() throws(TlsError) {
+        var record = incoming
+        incoming = []
+        try readRecord(record[0..<record.count])
+        record.removeAll(keepingCapacity: true)
+        incoming = record
+    }
+
+    mutating fn readRecord(_ record: U8[:]) throws(TlsError) {
         let outer = Int(record[0])
         if outer == 20 && !isConnected {
             if record.count != 6 || record[5] != 1 {
@@ -98,13 +169,7 @@ struct TlsRecords: Sendable {
             }
             return
         }
-        var type = TlsContentType.Handshake
-        var content: U8[>..] = []
-        if reader != none {
-            let (opened, bytes) = try reader!.open(record)
-            type = opened
-            content = bytes
-        } else {
+        if reader == none {
             guard let plain = TlsContentType.of(code: outer) else {
                 throw TlsError.Failed(.unexpectedMessage, reason: "a record of type \(outer)")
             }
@@ -114,9 +179,26 @@ struct TlsRecords: Sendable {
             if record.count - 5 > TlsRecordCipher.maximumContentByteCount {
                 throw TlsError.Failed(.recordOverflow, reason: "a plaintext record of \(record.count - 5) bytes")
             }
-            type = plain
-            content = record[5..<record.count].toArray()
+            try readContent(plain, record[5..<record.count])
+            return
         }
+        let (type, content) = try reader!.open(record)
+        if type != .ApplicationData {
+            try readContent(type, content)
+            return
+        }
+        if !isConnected {
+            throw TlsError.Failed(.unexpectedMessage, reason: "application data before the handshake is over")
+        }
+        if received.isEmpty {
+            received = content
+        } else {
+            received.append(contentsOf: content)
+        }
+    }
+
+    /// The content of a record other than application data read.
+    mutating fn readContent(_ type: TlsContentType, _ content: U8[:]) throws(TlsError) {
         match type {
             case .Alert => try readAlert(content)
             case .Handshake => {
@@ -125,12 +207,7 @@ struct TlsRecords: Sendable {
                 }
                 handshakeBytes.append(contentsOf: content)
             }
-            case .ApplicationData => {
-                if !isConnected {
-                    throw TlsError.Failed(.unexpectedMessage, reason: "application data before the handshake is over")
-                }
-                received.append(contentsOf: content)
-            }
+            case .ApplicationData  => throw TlsError.Failed(.unexpectedMessage, reason: "application data before the handshake's keys")
             case .ChangeCipherSpec => throw TlsError.Failed(.unexpectedMessage, reason: "a protected change_cipher_spec")
         }
     }
@@ -147,13 +224,8 @@ struct TlsRecords: Sendable {
         throw TlsError.PeerAlert(alert)
     }
 
-    /// A message after the handshake: a KeyUpdate, or — where the end takes
-    /// them, and keeps none — a NewSessionTicket.
-    mutating fn readPostHandshake(_ type: Int, _ body: inout TlsReader, takesTickets: Bool) throws(TlsError) {
-        if type == 4 && takesTickets {
-            _ = try body.take(body.bytes.count)
-            return
-        }
+    /// A KeyUpdate after the handshake; any other message is unexpected.
+    mutating fn readPostHandshake(_ type: Int, _ body: inout TlsReader) throws(TlsError) {
         if type != 24 {
             throw TlsError.Failed(.unexpectedMessage, reason: "a handshake message of type \(type) after the handshake")
         }
@@ -164,7 +236,7 @@ struct TlsRecords: Sendable {
         }
         usePeerKey(TlsKeySchedule.nextTrafficSecret(suite!, peerSecret!))
         if requested == 1 {
-            outgoing.append(contentsOf: try writer!.seal(handshakeMessage(24, [0]), type: .Handshake))
+            try writer!.seal(handshakeMessage(24, [0]), type: .Handshake, appendingTo: &outgoing)
             useOwnKey(TlsKeySchedule.nextTrafficSecret(suite!, ownSecret!))
         }
     }
@@ -176,7 +248,7 @@ struct TlsRecords: Sendable {
         while at < message.count {
             let end = message.count - at > TlsRecordCipher.maximumContentByteCount ? at + TlsRecordCipher.maximumContentByteCount : message.count
             if writer != none {
-                outgoing.append(contentsOf: try writer!.seal(message[at..<end], type: .Handshake))
+                try writer!.seal(message[at..<end], type: .Handshake, appendingTo: &outgoing)
             } else {
                 appendRecord(&outgoing, 22, message[at..<end])
             }
@@ -192,7 +264,7 @@ struct TlsRecords: Sendable {
         var at = 0
         while at < bytes.count {
             let end = bytes.count - at > TlsRecordCipher.maximumContentByteCount ? at + TlsRecordCipher.maximumContentByteCount : bytes.count
-            outgoing.append(contentsOf: try writer!.seal(bytes[at..<end], type: .ApplicationData))
+            try writer!.seal(bytes[at..<end], type: .ApplicationData, appendingTo: &outgoing)
             at = end
         }
     }
@@ -221,7 +293,7 @@ struct TlsRecords: Sendable {
         let body: U8[>..] = [alert.isClosure ? 1 : 2, U8(alert.code)]
         if writer != none {
             do {
-                outgoing.append(contentsOf: try writer!.seal(body, type: .Alert))
+                try writer!.seal(body, type: .Alert, appendingTo: &outgoing)
             } catch {
                 return
             }
@@ -239,4 +311,50 @@ fn certificateVerifyContent(server: Bool, transcriptHash: U8[:]) -> U8[>..] {
     content.append(0)
     content.append(contentsOf: transcriptHash)
     return content
+}
+
+/// signature_algorithms of the schemes both ends sign and check with
+/// (RFC 8446 §4.2.3): ECDSA of P-256 and P-384, RSA-PSS, Ed25519.
+fn signatureAlgorithms() -> U8[>..] {
+    return [0, 12, 4, 3, 5, 3, 8, 4, 8, 5, 8, 6, 8, 7]
+}
+
+/// The certificates of a Certificate message (RFC 8446 §4.4.2), the
+/// sender's own first; its request context must be empty, as each end's
+/// is.
+fn readCertificateMessage(_ body: inout TlsReader) throws(TlsError) -> Certificate[>..] {
+    if !(try body.vector(1)).isEmpty {
+        throw TlsError.Failed(.illegalParameter, reason: "a Certificate with a request context")
+    }
+    var list = TlsReader(try body.vector(3), "the certificate list")
+    try body.finish()
+    var certificates: Certificate[>..] = []
+    while !list.isAtEnd {
+        let der = try list.vector(3)
+        _ = try list.vector(2)
+        do {
+            certificates.append(try Certificate.parse(der: der))
+        } catch {
+            throw TlsError.Failed(.badCertificate, reason: "a certificate that does not parse: \(error.description())")
+        }
+    }
+    return certificates
+}
+
+/// A CertificateVerify checked: the signature, by the certificate's key,
+/// of the transcript's hash, as the server's or the client's.
+fn readCertificateVerify(_ body: inout TlsReader, of certificate: Certificate, server: Bool, transcriptHash: U8[:]) throws(TlsError) {
+    let scheme = try body.number(2)
+    let signature = try body.vector(2)
+    try body.finish()
+    let content = certificateVerifyContent(server: server, transcriptHash: transcriptHash)
+    var key: PublicKey? = none
+    do {
+        key = try certificate.publicKey()
+    } catch {
+        throw TlsError.UntrustedCertificate(error)
+    }
+    if !TlsClientConnection.isValid(signature, scheme: scheme, of: content, key: key!) {
+        throw TlsError.Failed(.decryptError, reason: "a CertificateVerify that is no signature of its certificate's key")
+    }
 }

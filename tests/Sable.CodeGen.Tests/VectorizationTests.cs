@@ -128,6 +128,55 @@ public sealed class VectorizationTests {
         Assert.Contains("test.sb:6:9", execution.Stderr, StringComparison.Ordinal);
     }
 
+    const string Fields = """
+                          class Pool {
+                              var bytes: U8[>..] = []
+                              var starts: Int[>..] = []
+
+                              fn total() -> Int {
+                                  var sum = 0
+                                  var i = 0
+                                  while i < starts.count {
+                                      sum = sum + starts[i]
+                                      i += 1
+                                  }
+                                  return sum
+                              }
+
+                              fn same(_ from: Int, _ other: U8[>..], _ start: Int, _ count: Int) -> Bool {
+                                  var j = 0
+                                  while j < count {
+                                      if bytes[from + j] != other[start + j] {
+                                          return false
+                                      }
+                                      j += 1
+                                  }
+                                  return true
+                              }
+                          }
+                          """;
+
+    /// <summary>
+    ///     Loops over arrays in an object's fields, checked once before they
+    ///     run, at an offset too ('bytes[from + j]'): the same results, and
+    ///     where an index is out of range, the trap at the access the loop as
+    ///     written stops at, after what it did before.
+    /// </summary>
+    [Theory]
+    [InlineData("print(pool.total())\n    print(pool.same(2, [3, 4, 3], 0, 3))\n    print(pool.same(1, [3, 4], 0, 2))", "21\ntrue\nfalse\n", null)]
+    [InlineData("print(pool.same(2, [3, 4, 3, 4], 0, 4))", "", "test.sb:19:16")]
+    [InlineData("print(pool.same(0, [3, 4, 3], 0, 4))", "", "test.sb:19:35")]
+    [InlineData("print(pool.same(-1, [3], 0, 1))", "", "test.sb:19:16")]
+    [InlineData("print(pool.same(9223372036854775807, [3], 0, 1))", "", "test.sb:19:16")]
+    [InlineData("pool.starts.append(9223372036854775807)\n    print(pool.total())", "", "test.sb:10:19")]
+    public void LoopsOverFieldsTrapWhereTheyAlwaysDid(string body, string output, string? trap) {
+        var execution = Programs.AssertAgree(Programs.Program(Fields, "    let pool = Pool()\n    pool.bytes = [3, 4, 3, 4, 3]\n    pool.starts = [5, 7, 9]\n    " + body));
+        Assert.Equal(output, execution.Stdout);
+        if (trap is not null) {
+            Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>A loop that starts below zero reads index -1 first, and traps there.</summary>
     [Fact]
     public void ANegativeStartStillTraps() {

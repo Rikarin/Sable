@@ -198,46 +198,48 @@ public sealed class BorrowFields : ISilPass {
             return true; // declared, not defined: anything
         }
 
-        var module = function.Module!;
-        foreach (var block in function.Blocks) {
-            foreach (var instruction in block.Instructions) {
-                switch (instruction) {
-                    case StoreInst or DestroyAddrInst when ignoring is not null && instruction.Operands[^1] is AllocStackInst slot && ignoring.Contains(slot):
-                        break;
+        return MayWrite(function.Module!, function.Blocks.SelectMany(static b => b.Instructions), writes, ignoring);
+    }
 
-                    // Moving a value out of a field leaves the field without it.
-                    case LoadInst { Kind: LoadKind.Take } take when !LocalSlot(take.Address):
-                    case StoreInst store when !LocalSlot(store.Address):
-                    case StoreWeakInst or StoreUnownedInst:
+    /// <summary>The same, of some of a function's instructions: a loop's body.</summary>
+    internal static bool MayWrite(SilModule module, IEnumerable<SilInstruction> instructions, Dictionary<string, bool> writes, IReadOnlySet<AllocStackInst>? ignoring) {
+        foreach (var instruction in instructions) {
+            switch (instruction) {
+                case StoreInst or DestroyAddrInst when ignoring is not null && instruction.Operands[^1] is AllocStackInst slot && ignoring.Contains(slot):
+                    break;
+
+                // Moving a value out of a field leaves the field without it.
+                case LoadInst { Kind: LoadKind.Take } take when !LocalSlot(take.Address):
+                case StoreInst store when !LocalSlot(store.Address):
+                case StoreWeakInst or StoreUnownedInst:
+                    return true;
+
+                case DestroyValueInst destroy when module.MayRunDeinit(destroy.Value.Type):
+                case DestroyAddrInst destroyAddr when destroyAddr.Address is not AllocStackInst { Unmanaged: true }
+                    && module.MayRunDeinit(((AddressType)destroyAddr.Address.Type).Pointee):
+                    return true;
+
+                // An assignment into a slot releases what was there.
+                case StoreInst { Kind: StoreKind.Assign } assigned when module.MayRunDeinit(assigned.Value.Type):
+                    return true;
+
+                // An exclusivity marker or check writes nothing.
+                case BuiltinInst builtin when SharedStorage.IsMarker(builtin.Name):
+                    break;
+
+                case BuiltinInst builtin when SilBuiltins.RunsWork(builtin.Name) || builtin.Operands.Any(static o => o.Type is AddressType && !LocalSlot(o)):
+                    return true;
+
+                case BuiltinInst builtin when SilVerifier.Consumed(builtin).Any(i => module.MayRunDeinit(builtin.Operands[i].Type)):
+                    return true;
+
+                case ApplyInst { Callee: var callee }:
+                case TryApplyInst { Callee: var tryCallee } when (callee = tryCallee) is not null:
+                    if (callee is not FunctionRefInst reference || writes.GetValueOrDefault(reference.Function, true)) {
                         return true;
+                    }
 
-                    case DestroyValueInst destroy when module.MayRunDeinit(destroy.Value.Type):
-                    case DestroyAddrInst destroyAddr when destroyAddr.Address is not AllocStackInst { Unmanaged: true }
-                        && module.MayRunDeinit(((AddressType)destroyAddr.Address.Type).Pointee):
-                        return true;
-
-                    // An assignment into a slot releases what was there.
-                    case StoreInst { Kind: StoreKind.Assign } assigned when module.MayRunDeinit(assigned.Value.Type):
-                        return true;
-
-                    // An exclusivity marker or check writes nothing.
-                    case BuiltinInst builtin when SharedStorage.IsMarker(builtin.Name):
-                        break;
-
-                    case BuiltinInst builtin when SilBuiltins.RunsWork(builtin.Name) || builtin.Operands.Any(static o => o.Type is AddressType && !LocalSlot(o)):
-                        return true;
-
-                    case BuiltinInst builtin when SilVerifier.Consumed(builtin).Any(i => module.MayRunDeinit(builtin.Operands[i].Type)):
-                        return true;
-
-                    case ApplyInst { Callee: var callee }:
-                    case TryApplyInst { Callee: var tryCallee } when (callee = tryCallee) is not null:
-                        if (callee is not FunctionRefInst reference || writes.GetValueOrDefault(reference.Function, true)) {
-                            return true;
-                        }
-
-                        break;
-                }
+                    break;
             }
         }
 

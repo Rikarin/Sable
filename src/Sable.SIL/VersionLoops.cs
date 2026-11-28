@@ -17,8 +17,21 @@ namespace Sable.SIL;
 ///         indices an access sees are <c>start</c>, <c>start + 1</c>, …,
 ///         <c>n - 1</c>: all in range exactly when <c>start &gt;= 0</c> and
 ///         <c>n &lt;= a.count</c>. An array the loop indexes must keep its
-///         count the while: a value, or a local or inout parameter the loop
-///         only reads and writes elements of.
+///         count the while: a value, a local or inout parameter the loop
+///         only reads and writes elements of, or a field of an object from
+///         outside the loop where the loop writes no field and calls nothing
+///         that may.
+///     </para>
+///     <para>
+///         An index may also be at an offset the loop does not change,
+///         <c>a[from + j]</c> or <c>a[i - 1]</c>: the check before then takes
+///         in the offset, and in the copy the index is worked out without an
+///         overflow check, as it lies in range. The loop may have other ways
+///         out than its test (a search's <c>return</c>), which only stop it
+///         sooner. Such loops, and any found only once values merely handed
+///         round them are gone, are versioned when that leaves no access in
+///         the copy checked: otherwise the copy saves one comparison a time
+///         round, which a loop of a few turns pays for with the check before.
 ///     </para>
 ///     <para>
 ///         So the loop is copied, and in the copy those accesses are
@@ -47,17 +60,49 @@ public sealed class VersionLoops : ISilPass {
     /// <summary>The most instructions a loop may have to be copied: a copy is all code size, and a big body gains little from vectorising.</summary>
     const int Limit = 200;
 
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<SilModule, Dictionary<string, bool>> _writes = new();
+
     public void Run(SilFunction function) {
         if (function.Blocks.Count == 0) {
             return;
         }
 
+        // Whether a loop's body may write an object's field: the summaries of what each function may write, made once a module.
+        Dictionary<string, bool>? writes = null;
+        bool MayWrite(HashSet<SilBlock> body) =>
+            function.Module is not { } module
+            || BorrowFields.MayWrite(module, body.SelectMany(static b => b.Instructions), writes ??= _writes.GetValue(module, BorrowFields.Summarise), ignoring: null);
+
         // One loop at a time, the analysis made again after each, as each copy changes the function.
         var done = new HashSet<SilBlock>();
-        while (Find(function, done) is { } loop) {
-            Version(function, loop);
+        var versioned = new HashSet<SilBlock>();
+        while (Find(function, done, MayWrite, strict: false) is { } loop) {
+            versioned.Add(loop.Header);
+            versioned.Add(Version(function, loop));
+        }
+
+        // A value an inlined loop only hands round (the caller's, passed in and back unchanged) is that value; with
+        // such values gone, the code after a loop may no longer seem to use what the loop works out. Those loops are
+        // looked at again: those read at an offset or from a field, or with another way out, are versioned when
+        // that leaves no access in them checked.
+        var simplified = false;
+        while (Simplify.SimplifyArguments(function)) {
+            simplified = true;
+        }
+
+        if (simplified) {
+            while (Find(function, versioned, MayWrite, strict: true) is { } loop) {
+                versioned.Add(Version(function, loop));
+            }
         }
     }
+
+    /// <summary>The accesses that check their index unless they are <c>[in_bounds]</c>.</summary>
+    static bool Checked(SilInstruction instruction) =>
+        instruction is BuiltinInst {
+            InBounds: false,
+            Name: "array_get" or "array_get_borrowed" or "array_set" or "array_set_unique" or "array_element_addr" or "array_element_addr_unique",
+        };
 
     /// <summary>A counted loop to version: what was found about it.</summary>
     sealed record Loop(
@@ -68,10 +113,11 @@ public sealed class VersionLoops : ISilPass {
         SilArgument Index,
         SilValue Bound,
         List<BuiltinInst> Accesses,
-        List<SilValue> Arrays,
+        List<(SilValue Array, SilValue? Offset, bool Below)> Arrays,
+        List<BuiltinInst> Offsets,
         List<SilValue> LiveOut);
 
-    static Loop? Find(SilFunction function, HashSet<SilBlock> done) {
+    static Loop? Find(SilFunction function, HashSet<SilBlock> done, Func<HashSet<SilBlock>, bool> mayWrite, bool strict) {
         var dominators = SilVerifier.Dominators(function);
         var predecessors = function.Blocks.ToDictionary(static b => b, static _ => new List<SilBlock>());
         foreach (var block in function.Blocks) {
@@ -108,7 +154,7 @@ public sealed class VersionLoops : ISilPass {
         }
 
         foreach (var (header, body) in loops.OrderBy(static l => l.Value.Count)) {
-            if (done.Add(header) && Counted(header, body, predecessors, dominators) is { } loop) {
+            if (done.Add(header) && Counted(header, body, predecessors, dominators, mayWrite, strict) is { } loop) {
                 return loop;
             }
         }
@@ -116,12 +162,21 @@ public sealed class VersionLoops : ISilPass {
         return null;
     }
 
-    /// <summary>The loop, if it has the shape this pass versions and an access to check once; null otherwise.</summary>
+    /// <summary>
+    ///     The loop, if it has the shape this pass versions and an access to
+    ///     check once; null otherwise. A loop with another way out, an array
+    ///     read from a field or an access at an offset — or any, when
+    ///     <paramref name="strict" /> — is versioned only when that leaves it no
+    ///     access that checks: else its copy saves a comparison a time round,
+    ///     which a short loop pays for with the check before it.
+    /// </summary>
     static Loop? Counted(
         SilBlock header,
         HashSet<SilBlock> body,
         Dictionary<SilBlock, List<SilBlock>> predecessors,
-        Dictionary<SilBlock, HashSet<SilBlock>> dominators
+        Dictionary<SilBlock, HashSet<SilBlock>> dominators,
+        Func<HashSet<SilBlock>, bool> mayWrite,
+        bool strict
     ) {
         if (body.Sum(static b => b.Instructions.Count) > Limit) {
             return null;
@@ -132,15 +187,31 @@ public sealed class VersionLoops : ISilPass {
             return null;
         }
 
-        // The header tests 'i < n' and is the only way out; what it leads
-        // into is reached from it alone, and leads to all the rest.
+        // The header tests 'i < n'; what it leads into is reached from it
+        // alone, and leads to all the rest. Other ways out (a search's
+        // 'return' when it finds) only stop the loop sooner.
         if (header.Terminator is not CondBranchInst { Condition: BuiltinInst { Name: "cmp_lt_Int" } less } test || less.Block != header
             || less.Operands[0] is not SilArgument index || index.Block != header
             || !body.Contains(test.WhenTrue) || body.Contains(test.WhenFalse) || test.TrueArgumentCount != 0
             || predecessors[test.WhenTrue].Count != 1
-            || body.Any(b => b != header && !dominators[b].Contains(test.WhenTrue))
-            || body.Any(b => b.Successors.Any(s => !body.Contains(s) && b != header))) {
+            || body.Any(b => b != header && !dominators[b].Contains(test.WhenTrue))) {
             return null;
+        }
+
+        // Such a way out is taken from either copy into the same block, so nothing
+        // the body owns or borrows may be live across it: every value that is not
+        // trivial ends in the block that makes it, and none is handed out.
+        var exits = body.Where(b => b != header).SelectMany(b => b.Successors.Where(s => !body.Contains(s))).ToList();
+        if (exits.Count > 0) {
+            var crossing = header.Function.Blocks
+                .SelectMany(static b => b.Instructions)
+                .SelectMany(static u => u.Operands.OfType<SilInstruction>().Where(o => o.Block != u.Block))
+                .ToHashSet();
+            if (exits.Any(static e => e.Arguments.Any(static a => !a.Type.IsTrivial))
+                || body.Any(b => b.Arguments.Any(static a => !a.Type.IsTrivial)
+                    || b.Instructions.Any(i => i.HasResult && !i.Type.IsTrivial && i.Type is not AddressType && crossing.Contains(i)))) {
+                return null;
+            }
         }
 
         // What leaves the loop as an argument of the exit is left alone when it is not trivial.
@@ -159,24 +230,45 @@ public sealed class VersionLoops : ISilPass {
             }
         }
 
+        // Whether the body may write a field, asked once, and only of a loop that reads one.
+        bool? writes = null;
+        bool Writes() => writes ??= mayWrite(body);
+
         // The bound: from outside the loop, or the count of an array the loop does not resize.
         var bound = less.Operands[1];
         if (Inside(bound, body)) {
-            if (bound is not BuiltinInst { Name: "array_count" } count || ArrayOf(count.Operands[0], body) is null) {
+            if (bound is not BuiltinInst { Name: "array_count" } count || ArrayOf(count.Operands[0], body, Writes) is null) {
                 return null;
             }
         }
 
+        // The accesses at the index, or at an offset from it the loop does not change ('a[from + j]', 'a[i - 1]').
         var accesses = new List<BuiltinInst>();
-        var arrays = new List<SilValue>();
+        var arrays = new List<(SilValue Array, SilValue? Offset, bool Below)>();
+        var offsets = new List<BuiltinInst>();
+        var extended = exits.Count > 0;
         foreach (var block in body.Where(b => b != header)) {
             foreach (var instruction in block.Instructions) {
-                if (instruction is not BuiltinInst { InBounds: false } access || access.Operands.Count < 2 || !ReferenceEquals(access.Operands[1], index)) {
+                if (instruction is not BuiltinInst { InBounds: false } access || access.Operands.Count < 2) {
+                    continue;
+                }
+
+                SilValue? offset = null;
+                var below = false;
+                if (access.Operands[1] is BuiltinInst { Name: "add_Int" } sum
+                    && (ReferenceEquals(sum.Operands[0], index) || ReferenceEquals(sum.Operands[1], index))
+                    && sum.Operands[ReferenceEquals(sum.Operands[0], index) ? 1 : 0] is var other && !Inside(other, body)) {
+                    offset = other;
+                } else if (access.Operands[1] is BuiltinInst { Name: "sub_Int" } difference
+                    && ReferenceEquals(difference.Operands[0], index) && !Inside(difference.Operands[1], body)) {
+                    offset = difference.Operands[1];
+                    below = true;
+                } else if (!ReferenceEquals(access.Operands[1], index)) {
                     continue;
                 }
 
                 var array = access.Name switch {
-                    "array_get" or "array_get_borrowed" => ArrayOf(access.Operands[0], body),
+                    "array_get" or "array_get_borrowed" => ArrayOf(access.Operands[0], body, Writes),
                     "array_set_unique" => Unresized(access.Operands[0], body) ? access.Operands[0] : null,
                     _ => null,
                 };
@@ -186,13 +278,24 @@ public sealed class VersionLoops : ISilPass {
                 }
 
                 accesses.Add(access);
-                if (!arrays.Contains(array)) {
-                    arrays.Add(array);
+                if (offset is not null && !offsets.Contains((BuiltinInst)access.Operands[1])) {
+                    offsets.Add((BuiltinInst)access.Operands[1]);
+                }
+
+                extended |= offset is not null || array is RefElementAddrInst;
+                if (!arrays.Any(a => Same(a.Array, array) && ReferenceEquals(a.Offset, offset) && a.Below == below)) {
+                    arrays.Add((array, offset, below));
                 }
             }
         }
 
-        if (accesses.Count == 0) {
+        // Found only once handed-round values are gone, a loop of the shape versioned before (none of the
+        // above) or one that calls is left as it is: a short tail after a vector loop would pay more for the
+        // check before than it saves, and a call costs more than a comparison.
+        if (accesses.Count == 0
+            || strict && !extended
+            || (strict || extended) && body.SelectMany(static b => b.Instructions).Any(i => Checked(i) && !accesses.Contains((BuiltinInst)i))
+            || strict && body.SelectMany(static b => b.Instructions).Any(static i => i is ApplyInst or TryApplyInst)) {
             return null;
         }
 
@@ -211,7 +314,12 @@ public sealed class VersionLoops : ISilPass {
             }
         }
 
-        return new(header, body, preheader, test, index, bound, accesses, arrays, liveOut);
+        // What the loop works out leaves it by the header alone.
+        if (liveOut.Count > 0 && exits.Count > 0) {
+            return null;
+        }
+
+        return new(header, body, preheader, test, index, bound, accesses, arrays, offsets, liveOut);
     }
 
     static bool Inside(SilValue value, HashSet<SilBlock> body) =>
@@ -225,12 +333,20 @@ public sealed class VersionLoops : ISilPass {
     ///     What an array value read in the loop is, as something whose count
     ///     can be read before it: the value itself when it is made outside the
     ///     loop; the address it is borrowed from when that is a local or an
-    ///     inout parameter the loop does not resize. Null for anything else.
+    ///     inout parameter the loop does not resize, or a field of an object
+    ///     from outside the loop when the loop writes no field and calls
+    ///     nothing that may (BorrowFields.MayWrite). Null for anything else.
     /// </summary>
-    static SilValue? ArrayOf(SilValue array, HashSet<SilBlock> body) =>
+    static SilValue? ArrayOf(SilValue array, HashSet<SilBlock> body, Func<bool> writes) =>
         !Inside(array, body) ? array
         : array is LoadBorrowInst { Address: var address } && Unresized(address, body) ? address
+        : array is LoadBorrowInst { Address: RefElementAddrInst field } && !Inside(field.Reference, body) && !writes() ? field
         : null;
+
+    /// <summary>Whether two arrays <see cref="ArrayOf" /> found are one: the same value, or the same field of the same object.</summary>
+    static bool Same(SilValue a, SilValue b) =>
+        ReferenceEquals(a, b)
+        || a is RefElementAddrInst left && b is RefElementAddrInst right && left.Field == right.Field && ReferenceEquals(left.Reference, right.Reference);
 
     /// <summary>
     ///     A local slot or inout parameter that, inside the loop, is only
@@ -464,8 +580,9 @@ public sealed class VersionLoops : ISilPass {
         return initial;
     }
 
-    static void Version(SilFunction function, Loop loop) {
-        var (header, body, preheader, test, index, bound, accesses, arrays, liveOut) = loop;
+    /// <returns>The copy's header.</returns>
+    static SilBlock Version(SilFunction function, Loop loop) {
+        var (header, body, preheader, test, index, bound, accesses, arrays, offsets, liveOut) = loop;
 
         // The copy, block by block, in the order of the function.
         var blocks = new Dictionary<SilBlock, SilBlock>();
@@ -486,6 +603,11 @@ public sealed class VersionLoops : ISilPass {
                 copy.InlinedSite = instruction.InlinedSite;
                 if (copy is BuiltinInst builtin && instruction is BuiltinInst access && accesses.Contains(access)) {
                     builtin.InBounds = true;
+                }
+
+                // An index at an offset is in range there, so cannot have overflowed.
+                if (copy is BuiltinInst added && instruction is BuiltinInst offset && offsets.Contains(offset)) {
+                    added.Rename(offset.Name == "add_Int" ? "wrapping_add_Int" : "wrapping_sub_Int");
                 }
 
                 values[instruction] = copy;
@@ -540,9 +662,33 @@ public sealed class VersionLoops : ISilPass {
         var checks = new List<SilInstruction>();
         var zero = Add(new IntegerLiteralInst(SilType.Int, 0));
         SilValue ok = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, start, zero));
-        var limit = Inside(bound, body) ? CountOf(ArrayOf(((BuiltinInst)bound).Operands[0], body)!) : bound;
-        foreach (var array in arrays) {
-            var fits = Add(new BuiltinInst("cmp_le_Int", SilType.Bool, limit, CountOf(array)));
+        var counts = new List<(SilValue Array, SilValue Count)>();
+        var limit = bound;
+        if (Inside(bound, body)) {
+            var counted = ArrayOf(((BuiltinInst)bound).Operands[0], body, static () => false)!;
+            limit = CountOf(counted);
+            counts.Add((counted, limit));
+        }
+
+        foreach (var (array, offset, below) in arrays) {
+            if (counts.FirstOrDefault(c => Same(c.Array, array)).Count is not { } count) {
+                count = CountOf(array);
+                counts.Add((array, count));
+            }
+
+            // At an offset above: 'offset >= 0' and 'n <= count - offset', which with 'start >= 0' puts every
+            // index in range, and leaves no room for 'i + offset' to overflow. Below: 'offset >= 0',
+            // 'start >= offset' and 'n <= count', and 'i - offset' lies between 0 and 'i'.
+            if (offset is not null) {
+                ok = Add(new BuiltinInst("and_Bool", SilType.Bool, ok, Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, offset, zero))));
+                if (below) {
+                    ok = Add(new BuiltinInst("and_Bool", SilType.Bool, ok, Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, start, offset))));
+                } else {
+                    count = Add(new BuiltinInst("wrapping_sub_Int", SilType.Int, count, offset));
+                }
+            }
+
+            var fits = Add(new BuiltinInst("cmp_le_Int", SilType.Bool, limit, count));
             ok = Add(new BuiltinInst("and_Bool", SilType.Bool, ok, fits));
         }
 
@@ -557,9 +703,14 @@ public sealed class VersionLoops : ISilPass {
             header,
             [..entry.Operands]
         ) { Block = preheader, Location = at };
-        return;
+        return blocks[header];
 
         SilValue CountOf(SilValue array) {
+            // A field read in the loop is read again before it, of the same object.
+            if (array is RefElementAddrInst field && Inside(field, body)) {
+                array = Add(new RefElementAddrInst(field.Reference, field.Field));
+            }
+
             if (array.Type is not AddressType) {
                 return Add(new BuiltinInst("array_count", SilType.Int, array));
             }

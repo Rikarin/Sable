@@ -1385,6 +1385,127 @@ public sealed class PassTests {
         Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.run", 9L)).Message);
     }
 
+    const string Pool = """
+                        class Pool {
+                            var bytes: U8[>..] = []
+                            var starts: Int[>..] = []
+                            var seen = 0
+
+                            fn total() -> Int {
+                                var sum = 0
+                                var i = 0
+                                while i < starts.count {
+                                    sum = sum &+ starts[i]
+                                    i += 1
+                                }
+                                return sum
+                            }
+
+                            // Writes a field each time round: what it reads is checked each time.
+                            fn counted() -> Int {
+                                var sum = 0
+                                var i = 0
+                                while i < starts.count {
+                                    sum = sum &+ starts[i]
+                                    seen += 1
+                                    i += 1
+                                }
+                                return sum
+                            }
+
+                            fn rising() -> Bool {
+                                var i = 1
+                                while i < starts.count {
+                                    if starts[i] < starts[i - 1] {
+                                        return false
+                                    }
+                                    i += 1
+                                }
+                                return true
+                            }
+
+                            // Another index, checked each time round: no copy, for a comparison saved of two.
+                            fn mixed(_ k: Int) -> Int {
+                                var sum = 0
+                                var j = 0
+                                while j < 2 {
+                                    sum = sum &+ Int(bytes[j + 1]) &+ starts[k]
+                                    j += 1
+                                }
+                                return sum
+                            }
+
+                            fn same(_ from: Int, _ other: U8[>..], _ start: Int, _ count: Int) -> Bool {
+                                var j = 0
+                                while j < count {
+                                    if bytes[from + j] != other[start + j] {
+                                        return false
+                                    }
+                                    j += 1
+                                }
+                                return true
+                            }
+                        }
+                        fn make() -> Pool {
+                            let pool = Pool()
+                            pool.bytes = [3, 4, 3, 4, 3]
+                            pool.starts = [5, 6, 7]
+                            return pool
+                        }
+                        fn total() -> Int { return make().total() }
+                        fn counted() -> Int { return make().counted() }
+                        fn rising(_ first: Int) -> Bool {
+                            let pool = make()
+                            pool.starts[0] = first
+                            return pool.rising()
+                        }
+                        fn mixed(_ k: Int) -> Int { return make().mixed(k) }
+                        fn same(_ from: Int, _ start: Int, _ count: Int) -> Bool { return make().same(from, [3, 4, 3], start, count) }
+                        """;
+
+    /// <summary>
+    ///     A loop that reads an array kept in a field of an object, and
+    ///     writes no field, checks its indices once before it, as one over a
+    ///     local does; one at an offset ('a[from + j]') checks the offset with
+    ///     them, and adds it without an overflow check where all is in range.
+    ///     A loop that writes a field keeps every check.
+    /// </summary>
+    [Fact]
+    public void ALoopOverAFieldChecksItsIndicesOnceBeforeIt() {
+        var module = Lowered(Pool);
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        BuiltinInst[] Reads(string function) =>
+            [..Instructions(module.Find(function)!).OfType<BuiltinInst>().Where(static b => b.Name == "array_get")];
+
+        Assert.Equal(2, Reads("M.Pool.total").Length);
+        Assert.Single(Reads("M.Pool.total"), static r => r.InBounds);
+        Assert.DoesNotContain(Reads("M.Pool.counted"), static r => r.InBounds);
+        Assert.Equal(4, Reads("M.Pool.same").Length);
+        Assert.Equal(2, Reads("M.Pool.same").Count(static r => r.InBounds));
+        // In the copy that is checked once, the offsets are added without a check; in the other, with one.
+        var adds = Instructions(module.Find("M.Pool.same")!).OfType<BuiltinInst>().Where(static b => b.Name.EndsWith("add_Int", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, adds.Count(static a => a.Name == "wrapping_add_Int"));
+        // Below the index ('starts[i - 1]'), with the start checked against the offset too.
+        Assert.Equal(2, Reads("M.Pool.rising").Count(static r => r.InBounds));
+        Assert.Contains(Instructions(module.Find("M.Pool.rising")!), static i => i is BuiltinInst { Name: "wrapping_sub_Int" });
+        Assert.DoesNotContain(Reads("M.Pool.mixed"), static r => r.InBounds);
+        Assert.Equal(true, new SilInterpreter(module).Run("M.rising", 5L));
+        Assert.Equal(false, new SilInterpreter(module).Run("M.rising", 7L));
+        Assert.Equal(19L, new SilInterpreter(module).Run("M.mixed", 1L));
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.mixed", 3L)).Message);
+
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(18L, interpreter.Run("M.total"));
+        Assert.Equal(18L, interpreter.Run("M.counted"));
+        Assert.Equal(true, interpreter.Run("M.same", 2L, 0L, 3L));
+        Assert.Equal(false, interpreter.Run("M.same", 1L, 0L, 2L));
+        // Out of range, either array, past the end or before the start: the traps of the loop as written.
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.same", 2L, 0L, 4L)).Message);
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.same", 0L, 0L, 4L)).Message);
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.same", -1L, 0L, 2L)).Message);
+    }
+
     /// <summary>A program lowered as a release build lowers it: Sable.Core's '#if RELEASE' side.</summary>
     static SilModule LoweredForRelease(string source) {
         var options = ParseOptions.Default.WithSymbols("RELEASE");

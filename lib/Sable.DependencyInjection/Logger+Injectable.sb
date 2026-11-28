@@ -9,8 +9,6 @@ import Sable.Diagnostics
 /// import an extension one.
 ///
 /// ```sable
-/// import Sable.Diagnostics
-///
 /// struct Checkout {}
 ///
 /// var services = ServiceCollection()

@@ -60,6 +60,9 @@ public sealed class VersionLoops : ISilPass {
     /// <summary>The most instructions a loop may have to be copied: a copy is all code size, and a big body gains little from vectorising.</summary>
     const int Limit = 200;
 
+    /// <summary>The fewest turns for which a loop whose overflow is checked after it runs as the copy rather than as written.</summary>
+    const long ShortLoop = 16;
+
     readonly System.Runtime.CompilerServices.ConditionalWeakTable<SilModule, Dictionary<string, bool>> _writes = new();
 
     public void Run(SilFunction function) {
@@ -391,7 +394,8 @@ public sealed class VersionLoops : ISilPass {
 
     /// <summary>
     ///     In the checked-once copy of a loop of one block after its header,
-    ///     the Int additions, subtractions and multiplications check for
+    ///     the additions, subtractions and multiplications of Ints and of the
+    ///     other signed integers up to 64 bits (<see cref="Deferrable" />) check for
     ///     overflow after the loop rather than in it, so that their traps are
     ///     no way out of it either. Each wraps instead, and what the loop as
     ///     written would have done is worked out on the way out.
@@ -414,7 +418,9 @@ public sealed class VersionLoops : ISilPass {
     ///         and writes nothing, the copy instead notes any term of 2^30 or
     ///         more either way; when there is none, the loop ran fewer than
     ///         2^31 times and the total started below 2^62, no partial sum can
-    ///         have overflowed. Otherwise, or when anything overflowed, the
+    ///         have overflowed. Of a total of n bits the same holds with
+    ///         2^(n/2-2), 2^(n/2-1) and 2^(n-2): 2^14, 2^15 and 2^30 of an I32.
+    ///         Otherwise, or when anything overflowed, the
     ///         loop as written runs again from its start: it has done nothing
     ///         to undo, and finds the overflow, if there is one, as it always did.
     ///     </para>
@@ -442,7 +448,7 @@ public sealed class VersionLoops : ISilPass {
                 // The induction step: one more than an index below the bound, which cannot overflow.
                 case BuiltinInst { Name: "add_Int" } step when ReferenceEquals(step.Operands[0], index) && step.Operands[1] is IntegerLiteralInst:
                     break;
-                case BuiltinInst { Name: "add_Int" or "sub_Int" or "mul_Int" } site when instruction.Block == block:
+                case BuiltinInst site when instruction.Block == block && Deferrable(site.Name) is not null:
                     sites.Add(site);
                     break;
                 // An exclusivity check is left out too: it can trap, and must not after an overflow.
@@ -466,8 +472,8 @@ public sealed class VersionLoops : ISilPass {
         // value; the header may hand it on out of the loop.
         var totals = new Dictionary<BuiltinInst, SilArgument>();
         if (!writes && header.Arguments.All(static a => a.Type.IsTrivial)) {
-            foreach (var site in sites.Where(static s => s.Name is "add_Int" or "sub_Int")) {
-                foreach (var side in site.Name == "add_Int" ? [0, 1] : new[] { 0 }) {
+            foreach (var site in sites.Where(static s => Deferrable(s.Name)!.Value.Op is "add" or "sub")) {
+                foreach (var side in Deferrable(site.Name)!.Value.Op == "add" ? [0, 1] : new[] { 0 }) {
                     if (site.Operands[side] is SilArgument total && total.Block == header && !ReferenceEquals(total, index)
                         && ReferenceEquals(latch.Operands[header.Arguments.IndexOf(total)], site)
                         && header.Instructions.SkipLast(1).Concat(block.Instructions).Count(i => i.Operands.Any(o => ReferenceEquals(o, total))) == 1) {
@@ -491,7 +497,7 @@ public sealed class VersionLoops : ISilPass {
             var first = header.AddArgument(SilType.Int);
             firsts.Add((site, first));
             initial.Add(before(new IntegerLiteralInst(SilType.Int, long.MaxValue)));
-            var overflow = new BuiltinInst($"overflow_at_{site.Name[..3]}_Int", SilType.Int, site.Operands[0], site.Operands[1], index, first) {
+            var overflow = new BuiltinInst($"overflow_at_{site.Name}", SilType.Int, site.Operands[0], site.Operands[1], index, first) {
                 Block = block, Location = site.Location, InlinedSite = site.InlinedSite,
             };
             block.Instructions.Insert(block.Instructions.IndexOf(site), overflow);
@@ -504,17 +510,22 @@ public sealed class VersionLoops : ISilPass {
             large = header.AddArgument(SilType.Bool);
             initial.Add(before(new IntegerLiteralInst(SilType.Bool, 0)));
             SilValue any = large;
-            var bound = block.Append(new IntegerLiteralInst(SilType.Int, 1L << 30));
-            var negative = block.Append(new IntegerLiteralInst(SilType.Int, -(1L << 30)));
-            block.Instructions.Remove(bound);
-            block.Instructions.Remove(negative);
-            block.Instructions.Insert(0, bound);
-            block.Instructions.Insert(1, negative);
+            // A term's bound, either way, for each type of total: 2^30 of an Int, 2^14 of an I32.
+            var bounds = new Dictionary<SilType, (IntegerLiteralInst Above, IntegerLiteralInst Below)>();
+            foreach (var type in totals.Values.Select(static t => t.Type).Distinct()) {
+                var term = 1L << (Bits(type) / 2 - 2);
+                var bound = new IntegerLiteralInst(type, term) { Block = block };
+                var negative = new IntegerLiteralInst(type, -term) { Block = block };
+                block.Instructions.InsertRange(0, [bound, negative]);
+                bounds[type] = (bound, negative);
+            }
+
             foreach (var (site, total) in totals) {
                 var term = ReferenceEquals(site.Operands[0], total) ? site.Operands[1] : site.Operands[0];
                 var at = block.Instructions.IndexOf(site);
-                var above = new BuiltinInst("cmp_ge_Int", SilType.Bool, term, bound) { Block = block, Location = site.Location };
-                var below = new BuiltinInst("cmp_le_Int", SilType.Bool, term, negative) { Block = block, Location = site.Location };
+                var (bound, negative) = bounds[total.Type];
+                var above = new BuiltinInst($"cmp_ge_{total.Type}", SilType.Bool, term, bound) { Block = block, Location = site.Location };
+                var below = new BuiltinInst($"cmp_le_{total.Type}", SilType.Bool, term, negative) { Block = block, Location = site.Location };
                 var either = new BuiltinInst("or_Bool", SilType.Bool, above, below) { Block = block, Location = site.Location };
                 var anyNext = new BuiltinInst("or_Bool", SilType.Bool, any, either) { Block = block, Location = site.Location };
                 // After the addition, not before: the vectorised body then adds
@@ -528,7 +539,7 @@ public sealed class VersionLoops : ISilPass {
         }
 
         foreach (var site in sites) {
-            site.Rename($"wrapping_{site.Name[..3]}_Int");
+            site.Rename(SilBuiltins.WrappingPrefix + site.Name);
         }
 
         block.Instructions[^1] = new BranchInst(header, [..latch.Operands, ..next]) { Block = block, Location = latch.Location };
@@ -564,15 +575,18 @@ public sealed class VersionLoops : ISilPass {
                 again = Add(new BuiltinInst("or_Bool", SilType.Bool, again, Add(new BuiltinInst("cmp_ne_Int", SilType.Bool, first, none))));
             }
 
+            // Fewer turns than 2^31 for an Int total, 2^15 for an I32, and a start within 2^62 or 2^30 either way.
             var trips = Add(new BuiltinInst("wrapping_sub_Int", SilType.Int, limit, start));
-            var many = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, trips, Add(new IntegerLiteralInst(SilType.Int, 1L << 31))));
+            var turns = 1L << (totals.Values.Min(static t => Bits(t.Type)) / 2 - 1);
+            var many = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, trips, Add(new IntegerLiteralInst(SilType.Int, turns))));
             again = Add(new BuiltinInst("or_Bool", SilType.Bool, again, many));
-            var high = Add(new IntegerLiteralInst(SilType.Int, 1L << 62));
-            var low = Add(new IntegerLiteralInst(SilType.Int, -(1L << 62)));
             foreach (var total in totals.Values) {
                 var from = entry[header.Arguments.IndexOf(total)];
-                var above = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, from, high));
-                var below = Add(new BuiltinInst("cmp_le_Int", SilType.Bool, from, low));
+                var reach = 1L << (Bits(total.Type) - 2);
+                var high = Add(new IntegerLiteralInst(total.Type, reach));
+                var low = Add(new IntegerLiteralInst(total.Type, -reach));
+                var above = Add(new BuiltinInst($"cmp_ge_{total.Type}", SilType.Bool, from, high));
+                var below = Add(new BuiltinInst($"cmp_le_{total.Type}", SilType.Bool, from, low));
                 again = Add(new BuiltinInst("or_Bool", SilType.Bool, again, Add(new BuiltinInst("or_Bool", SilType.Bool, above, below))));
             }
 
@@ -582,6 +596,22 @@ public sealed class VersionLoops : ISilPass {
         header.Instructions[^1] = new CondBranchInst(test.Condition, test.WhenTrue, [..test.TrueArguments], check, []) { Block = header, Location = test.Location };
         return initial;
     }
+
+    /// <summary>
+    ///     The checked additions, subtractions and multiplications whose
+    ///     overflow can be checked after the loop: of a signed integer of up
+    ///     to 64 bits, Int's or I32's.
+    /// </summary>
+    internal static (string Op, SilType Type)? Deferrable(string name) {
+        if (name.Length < 5 || name[3] != '_' || name[..3] is not ("add" or "sub" or "mul")) {
+            return null;
+        }
+
+        var type = SilType.Integers.FirstOrDefault(t => t.ToString() == name[4..]);
+        return type is not null && SilType.IntegerInfo(type) is (<= 64, true) ? (name[..3], type) : null;
+    }
+
+    static int Bits(SilType type) => SilType.IntegerInfo(type)!.Value.Bits;
 
     /// <returns>The copy's header.</returns>
     static SilBlock Version(SilFunction function, Loop loop) {
@@ -698,6 +728,17 @@ public sealed class VersionLoops : ISilPass {
         List<SilValue> deferred = body.Count == 2
             ? DeferOverflow(function, blocks[header], blocks[test.WhenTrue], (SilArgument)values[index], header, entry.Operands, start, limit, i => Add(i))
             : [];
+
+        // A loop of a few turns runs as written: the copy whose overflow is
+        // checked after it pays for that check on the way out however few
+        // turns it makes, and a short one has nothing to vectorise (narrowSum's
+        // tail, of fewer than 16 I32s and often none, 200,000 times a run).
+        if (deferred.Count > 0) {
+            var trips = Add(new BuiltinInst("wrapping_sub_Int", SilType.Int, limit, start));
+            var many = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, trips, Add(new IntegerLiteralInst(SilType.Int, ShortLoop))));
+            ok = Add(new BuiltinInst("and_Bool", SilType.Bool, ok, many));
+        }
+
         preheader.Instructions.InsertRange(preheader.Instructions.Count - 1, checks);
         preheader.Instructions[^1] = new CondBranchInst(
             ok,

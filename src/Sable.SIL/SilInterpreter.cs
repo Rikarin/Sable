@@ -2925,6 +2925,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Wrapping(name, operands);
         }
 
+        // The first iteration an operation overflowed in (VersionLoops.DeferOverflow).
+        if (name.StartsWith("overflow_at_", StringComparison.Ordinal) && Find(name[16..]) is { } overflowing) {
+            var (width, _) = SilType.IntegerInfo(overflowing)!.Value;
+            var (left, right) = (Big(operands[0]), Big(operands[1]));
+            var exact = name[12..15] switch { "add" => left + right, "sub" => left - right, _ => left * right };
+            var (at, first) = ((long)operands[2]!, (long)operands[3]!);
+            return InRange(exact, width, true) ? first : Math.Min(first, at);
+        }
+
         var separator = name.LastIndexOf('_');
         if (separator < 0 || Find(name[(separator + 1)..]) is not { } type || type == SilType.Int || type == SilType.F64) {
             return null;
@@ -3409,9 +3418,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 ("wrapping_add_Int", [long a, long b]) => unchecked(a + b),
                 ("wrapping_sub_Int", [long a, long b]) => unchecked(a - b),
                 ("wrapping_mul_Int", [long a, long b]) => unchecked(a * b),
-                ("overflow_at_add_Int", [long a, long b, long i, long m]) => Overflows(() => a + b) ? Math.Min(m, i) : m,
-                ("overflow_at_sub_Int", [long a, long b, long i, long m]) => Overflows(() => a - b) ? Math.Min(m, i) : m,
-                ("overflow_at_mul_Int", [long a, long b, long i, long m]) => Overflows(() => a * b) ? Math.Min(m, i) : m,
                 ("sub_Int", [long a, long b]) => Wrap(() => a - b),
                 ("mul_Int", [long a, long b]) => Wrap(() => a * b),
                 ("div_Int", [long a, long b]) => b == 0 ? throw new SilTrap("division by zero") : Wrap(() => a / b),
@@ -3602,15 +3608,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         return text.ToString();
-    }
-
-    static bool Overflows(Func<long> operation) {
-        try {
-            _ = checked(operation());
-            return false;
-        } catch (OverflowException) {
-            return true;
-        }
     }
 
     static object Wrap(Func<long> operation) {

@@ -5698,26 +5698,28 @@ public sealed partial class LlvmEmitter {
                 // with.overflow intrinsic: a sum overflowed when it has the
                 // sign of neither operand, a difference when the operands'
                 // signs differ and it has the second's; a product is made in
-                // 128 bits and must fit back in 64.
-                case "overflow_at_add_Int" or "overflow_at_sub_Int" or "overflow_at_mul_Int": {
+                // 128 bits and must fit back in 64; an I32's in 64 bits, back in 32.
+                case var overflowAt when overflowAt.StartsWith("overflow_at_", StringComparison.Ordinal): {
                     var overflowed = Fresh();
                     var at = Fresh();
+                    var t = Type(builtin.Operands[0].Type);
                     if (builtin.Name[12..15] == "mul") {
+                        var w = $"i{SilType.IntegerInfo(builtin.Operands[0].Type)!.Value.Bits * 2}";
                         var (left, right, wide, narrow, back) = (Fresh(), Fresh(), Fresh(), Fresh(), Fresh());
-                        Line($"{left} = sext i64 {operands[0]} to i128");
-                        Line($"{right} = sext i64 {operands[1]} to i128");
-                        Line($"{wide} = mul i128 {left}, {right}");
-                        Line($"{narrow} = trunc i128 {wide} to i64");
-                        Line($"{back} = sext i64 {narrow} to i128");
-                        Line($"{overflowed} = icmp ne i128 {back}, {wide}");
+                        Line($"{left} = sext {t} {operands[0]} to {w}");
+                        Line($"{right} = sext {t} {operands[1]} to {w}");
+                        Line($"{wide} = mul {w} {left}, {right}");
+                        Line($"{narrow} = trunc {w} {wide} to {t}");
+                        Line($"{back} = sext {t} {narrow} to {w}");
+                        Line($"{overflowed} = icmp ne {w} {back}, {wide}");
                     } else {
                         var add = builtin.Name[12..15] == "add";
                         var (result, first, second, both) = (Fresh(), Fresh(), Fresh(), Fresh());
-                        Line($"{result} = {(add ? "add" : "sub")} i64 {operands[0]}, {operands[1]}");
-                        Line($"{first} = xor i64 {operands[0]}, {result}");
-                        Line($"{second} = xor i64 {(add ? operands[1] : operands[0])}, {(add ? result : operands[1])}");
-                        Line($"{both} = and i64 {first}, {second}");
-                        Line($"{overflowed} = icmp slt i64 {both}, 0");
+                        Line($"{result} = {(add ? "add" : "sub")} {t} {operands[0]}, {operands[1]}");
+                        Line($"{first} = xor {t} {operands[0]}, {result}");
+                        Line($"{second} = xor {t} {(add ? operands[1] : operands[0])}, {(add ? result : operands[1])}");
+                        Line($"{both} = and {t} {first}, {second}");
+                        Line($"{overflowed} = icmp slt {t} {both}, 0");
                     }
 
                     Line($"{at} = select i1 {overflowed}, i64 {operands[2]}, i64 9223372036854775807");

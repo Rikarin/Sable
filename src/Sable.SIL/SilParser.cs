@@ -250,6 +250,23 @@ public sealed class SilParser {
             : throw new SilParseException($"expected {what} but found '{token.Text}'", token.Line);
     }
 
+    /// <summary><c>[lent 1, 2]</c> after <c>apply</c>: the closure arguments the callee does not keep.</summary>
+    ImmutableArray<int> Lent() {
+        if (!At("[")) {
+            return [];
+        }
+
+        Expect("[");
+        Expect("lent");
+        var lent = ImmutableArray.CreateBuilder<int>();
+        do {
+            lent.Add(Count("an argument's index"));
+        } while (Accept(","));
+
+        Expect("]");
+        return lent.ToImmutable();
+    }
+
     // ---- Module and function ------------------------------------------------
 
     SilModule _module = null!;
@@ -1201,6 +1218,7 @@ public sealed class SilParser {
             }
 
             case "try_apply": {
+                var tryLent = Lent();
                 var callee = Operand(0);
                 var arguments = OperandList(1);
                 Expect(":");
@@ -1211,7 +1229,7 @@ public sealed class SilParser {
                 Expect(",");
                 Expect("error");
                 var error = BlockNamed(Expect(TokenKind.Word, "a block label").Text);
-                instruction = new TryApplyInst(callee, resultType, [..arguments], normal, error);
+                instruction = new TryApplyInst(callee, resultType, [..arguments], normal, error) { Lent = tryLent };
                 break;
             }
 
@@ -1390,10 +1408,11 @@ public sealed class SilParser {
             }
 
             case "apply": {
+                var lent = Lent();
                 var callee = Operand(0);
                 var arguments = OperandList(1);
                 Expect(":");
-                instruction = new ApplyInst(callee, ParseType(), [..arguments]);
+                instruction = new ApplyInst(callee, ParseType(), [..arguments]) { Lent = lent };
                 break;
             }
 

@@ -31,7 +31,7 @@ public sealed class AttributeTests {
     [InlineData("fn f(@frozen _ x: Int) { }", "'@frozen' applies to a union, not to a parameter")]
     [InlineData("@frozen\nstruct S { }", "'@frozen' applies to a union, not to a struct")]
     [InlineData("@main\nstruct S { }", "'@main' applies to a function, not to a struct")]
-    [InlineData("fn f(@escaping _ x: Int) { }", "'@escaping' applies to a closure parameter, and 'x' is of type 'Int'")]
+    [InlineData("fn f(_ x: @escaping Int) { }", "'@escaping' applies to a closure parameter, and 'x' is of type 'Int'")]
     [InlineData("fn f(_ x: @escaping Int?) { }", "'@escaping' applies to a closure parameter, and 'x' is of type 'Int?'")]
     [InlineData("fn f(_ x: @discardable Int) { }", "'@discardable' applies to a function, not to a parameter")]
     [InlineData("struct S { @immortal var count: Int = 0 }", "'@immortal' applies to a 'static let', not to a property")]
@@ -197,7 +197,7 @@ public sealed class AttributeTests {
                     @discardable fn f() -> Int { return 1 }
                     @immutable class G { let n: Int = 0 }
                     struct H { @immortal static let shared: Int = 1 }
-                    fn i(@escaping _ k: () -> Int) -> Int { return k() }
+                    fn i(_ k: @escaping () -> Int) -> Int { return k() }
                     fn l(_ k: @escaping (() -> Int)?) -> Int { return 0 }
                     @derive(Equatable, Copy) struct J { var n: Int }
                     @derive(Equatable) @derive(Hashable) struct N { var n: Int }

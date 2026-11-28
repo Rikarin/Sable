@@ -117,6 +117,10 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     <c>(_ body: () throws(IoError) -> T) rethrows</c> throws
     ///     <c>IoError</c> and nothing wider.
     /// </remarks>
+    /// <summary>A type written <c>@escaping () -&gt; Int</c>, as a function type's or a closure's parameter.</summary>
+    internal static bool IsEscaping(TypeSyntax? syntax) =>
+        syntax is AttributedTypeSyntax attributed && attributed.Attributes.Any(static a => a.Name.ToString().Trim() == "escaping");
+
     internal static TypeSymbol? RethrownType(IEnumerable<TypeSymbol> parameterTypes, TypeSymbol? also = null) {
         TypeSymbol? thrown = also;
 
@@ -1351,6 +1355,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 ) {
                     IsRethrows = rethrows,
                     InOutParameters = FunctionTypeSymbol.InOutOf(function.Parameters.Elements.Select(static e => !e.ModifierToken.IsNone)),
+                    EscapingParameters = FunctionTypeSymbol.EscapingOf(function.Parameters.Elements.Select((e, i) => (IsEscaping(e.Type), parameterTypes[i]))),
                 };
             }
 
@@ -1398,9 +1403,22 @@ internal sealed class TypeBinder(Compilation compilation) {
                     : ErrorTypeSymbol.Instance;
             }
 
-            // '@escaping': the parameter's, read where it is declared.
-            case AttributedTypeSyntax attributed:
-                return BindType(attributed.Type, context, scope);
+            // '@escaping': the parameter's, read where it is declared, or the
+            // function type's whose parameter it is. Of anything but a
+            // closure it says nothing.
+            case AttributedTypeSyntax attributed: {
+                var bound = BindType(attributed.Type, context, scope);
+                if (attributed.Parent is TupleTypeElementSyntax or ClosureParameterSyntax && IsEscaping(attributed)
+                    && !bound.IsError && bound is not FunctionTypeSymbol) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_AttributeDoesNotApply,
+                        attributed.Attributes[0].Span,
+                        $"'@escaping' applies to a closure parameter, and this one is of type '{bound.ToDisplayString()}'"
+                    );
+                }
+
+                return bound;
+            }
 
             // Anywhere but a generic parameter's constraint, which takes it apart first.
             case SuppressedTypeSyntax suppressed:

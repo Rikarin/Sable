@@ -10,7 +10,7 @@ public struct Lock { private let handle: Int }
 public enum Permissions: U32 { None = 0, Read = 1 }
 
 public struct Escaping {
-    public fn hold(@escaping _ callback: () -> Int) -> Int {
+    public fn hold(_ callback: @escaping () -> Int) -> Int {
         return callback()
     }
 }

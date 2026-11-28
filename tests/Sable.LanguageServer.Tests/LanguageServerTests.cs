@@ -544,6 +544,21 @@ public sealed class LanguageServerTests : IDisposable {
         Assert.Contains("ok: @autoclosure () -> Bool", hover.Get("contents")!.Value.GetString("value"), StringComparison.Ordinal);
     }
 
+    /// <summary>'@escaping' is part of the parameter's type, and is said where the type is, as it is written (S1014).</summary>
+    [Fact]
+    public async Task SignatureHelpAndHoverSayEscapingOnTheType() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/escaping.sb";
+        const string text = "module App\n\nfn keep(_ f: @escaping () -> Int) -> () -> Int {\n    return f\n}\n\nfn main() {\n    let g = keep({ 1 })\n}\n";
+        await client.OpenAsync(uri, text);
+        var help = await client.AtAsync("textDocument/signatureHelp", uri, text, At(text, "keep({", 5));
+        Assert.Equal("keep(_ f: @escaping () -> Int) -> () -> Int", help.Get("signatures")!.Value[0].GetString("label"));
+
+        var hover = await client.AtAsync("textDocument/hover", uri, text, At(text, "f\n}", 0));
+        Assert.Contains("f: @escaping () -> Int", hover.Get("contents")!.Value.GetString("value"), StringComparison.Ordinal);
+    }
+
     /// <summary>A call given '#expression' is bound inside what captures it, and is the call all the same (#73).</summary>
     [Fact]
     public async Task ACallThatCapturesItsExpressionIsTheCall() {

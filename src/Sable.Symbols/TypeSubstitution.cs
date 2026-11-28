@@ -136,6 +136,7 @@ public sealed class TypeSubstitution {
                         ? new FunctionTypeSymbol(parameters, returnType, function.IsAsync, thrown) {
                             IsRethrows = function.IsRethrows,
                             InOutParameters = function.InOutParameters,
+                            EscapingParameters = function.EscapingParameters,
                         }
                         : function;
             }

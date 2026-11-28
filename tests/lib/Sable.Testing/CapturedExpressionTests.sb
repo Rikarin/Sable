@@ -50,3 +50,20 @@ fn aValueThatReadsTheSameIsToldOnce() {
     let nan = F64.nan
     assertEqualText(told(captured(nan == nan)), "")
 }
+
+struct Pinned {
+    var point: Point&
+    var count: Int
+}
+
+// A value holding a reference into a region is not kept beside the
+// expression, whose capture may outlive the region: what it reaches is.
+@test
+fn aValueHoldingAReferenceIsNotNoted() {
+    region a {
+        let p = a.alloc(Point(x: 3, y: 4))
+        let pinned = Pinned(point: p, count: 2)
+        assertEqualText(told(captured(pinned.count == 2 && pinned.point.x == 3)),
+            "pinned.count = 2; pinned.count == 2 = true; pinned.point.x = 3; pinned.point.x == 3 = true")
+    }
+}

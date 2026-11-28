@@ -66,9 +66,9 @@ public sealed class DiagnosticsTests : IDisposable {
     /// </summary>
     [Fact]
     public async Task ALateCheckReportsInItsOwnFile() {
-        const string Wrong = "module App\n\nfn hold(@escaping _ n: Int) -> Int {\n    return n\n}\n";
+        const string Wrong = "module App\n\nfn hold(_ n: @escaping Int) -> Int {\n    return n\n}\n";
         var offset = Wrong.IndexOf("@escaping", StringComparison.Ordinal);
-        const string Right = "module App\n\nfn sums(nnnnnnnnnnnn: Int) -> Int {\n    return nnnnnnnnnnnn\n}\n";
+        const string Right = "module App\n\nfn sumsabcde(nnnnnnnnnnnn: Int) -> Int {\n    return nnnnnnnnnnnn\n}\n";
         Assert.Equal(offset, Right.IndexOf("nnnn", StringComparison.Ordinal));
         var wrongUri = Write("wrong.sb", Wrong);
         var rightUri = Write("right.sb", Right);

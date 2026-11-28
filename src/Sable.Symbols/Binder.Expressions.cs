@@ -227,7 +227,26 @@ public sealed partial class Binder {
         static bool Notable(TypeSymbol type) =>
             !type.IsError && !Copyability.IsNoncopyable(type)
             && type is not (FunctionTypeSymbol or MetatypeTypeSymbol or ReferenceTypeSymbol or OpaqueTypeSymbol or ArrayTypeSymbol { ArrayKind: ArrayKind.Slice })
-            && type is not NamedTypeSymbol { Name: "Void" or "Never", ContainingSymbol.Name: "Sable.Core" };
+            && type is not NamedTypeSymbol { Name: "Void" or "Never", ContainingSymbol.Name: "Sable.Core" }
+            && !IsLent(type);
+
+        /// <summary>
+        ///     A region, or a value holding a reference or one — in an
+        ///     optional, a tuple, an array or a struct's field: kept beside the
+        ///     expression in its capture, an object that may outlive the region
+        ///     (docs/04 §3.3), it would be rejected.
+        /// </summary>
+        static bool IsLent(TypeSymbol type, HashSet<TypeSymbol>? seen = null) =>
+            type switch {
+                ReferenceTypeSymbol => true,
+                NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Region" } => true,
+                OptionalTypeSymbol optional => IsLent(optional.UnderlyingType, seen),
+                TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => IsLent(e, seen)),
+                ArrayTypeSymbol array => IsLent(array.ElementType, seen),
+                NamedTypeSymbol { TypeKind: TypeKind.Struct } named when (seen ??= []).Add(named) =>
+                    DerivedConformance.StoredFields(named.OriginalDefinition).Any(f => IsLent(TypeSubstitution.For(named).Apply(f.Type), seen)),
+                _ => false,
+            };
 
         /// <summary>What it is written as, on one line.</summary>
         static string Text(SyntaxNode syntax) =>

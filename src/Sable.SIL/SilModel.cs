@@ -753,6 +753,16 @@ public sealed class EnumType(string name) : NominalType(name) {
 public sealed class ClassType(string name) : NominalType(name) {
     public List<(string Name, SilType Type)> Fields { get; } = [];
 
+    /// <summary>What a box's name starts with: <c>Box$of$Int</c>, the one a captured <c>Int</c> lives in.</summary>
+    public const string BoxPrefix = "Box$of$";
+
+    /// <summary>
+    ///     What a box holds — the one-field class a local captured by
+    ///     reference lives in, shared by the frame and every closure — or
+    ///     null for any other class.
+    /// </summary>
+    public SilType? Boxed => Fields is [("value", var held)] && Name.StartsWith(BoxPrefix, StringComparison.Ordinal) ? held : null;
+
     public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
 
     public ClassType? Superclass { get; set; }
@@ -1558,6 +1568,15 @@ public sealed class ApplyInst(SilValue callee, SilType resultType, params SilVal
     public override SilType Type { get; } = resultType;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "apply";
+
+    /// <summary>
+    ///     <c>apply [lent 1]</c>: the closure arguments the callee's type says
+    ///     it does not keep, its parameters not <c>@escaping</c>; empty when
+    ///     the callee's type says nothing of them. What the root checker reads
+    ///     for a callee whose body it does not see (a closure, a method an
+    ///     override may replace, a requirement).
+    /// </summary>
+    public ImmutableArray<int> Lent { get; set; } = [];
 }
 
 /// <summary><c>br bb2(%0)</c>: jumps, passing values to the target's arguments.</summary>
@@ -1640,6 +1659,9 @@ public sealed class TryApplyInst(SilValue callee, SilType resultType, SilValue[]
     public override bool HasResult => false;
     public override bool IsTerminator => true;
     public override string Opcode => "try_apply";
+
+    /// <summary>The closure arguments the callee does not keep (<see cref="ApplyInst.Lent" />).</summary>
+    public ImmutableArray<int> Lent { get; set; } = [];
 }
 
 /// <summary><c>unreachable</c>: control cannot get here.</summary>

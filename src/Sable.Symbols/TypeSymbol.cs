@@ -793,9 +793,29 @@ public sealed class FunctionTypeSymbol(
         return all.Contains(true) ? all : [];
     }
 
+    /// <summary>
+    ///     Which parameters are <c>@escaping</c>: <c>(@escaping () -&gt; Int) -&gt; ()</c>
+    ///     may keep the closure it is given past the call. A parameter of
+    ///     function type that is not may only call it, or pass it on to one
+    ///     that is not either (SYNTAX.md §17). Empty when none is.
+    /// </summary>
+    /// <remarks>
+    ///     Part of the type, as Swift has it: a function that keeps less fits
+    ///     where one that keeps more is wanted (<see cref="Conversions" />),
+    ///     not the other way round.
+    /// </remarks>
+    public ImmutableArray<bool> EscapingParameters { get; init; } = [];
+
+    /// <summary>Whether parameter <paramref name="index" /> is <c>@escaping</c>.</summary>
+    public bool IsEscaping(int index) => index < EscapingParameters.Length && EscapingParameters[index];
+
+    /// <summary>Which parameters are <c>@escaping</c>, of the ones of function type; empty when none is.</summary>
+    public static ImmutableArray<bool> EscapingOf(IEnumerable<(bool Escaping, TypeSymbol Type)> parameters) =>
+        InOutOf(parameters.Select(static p => p.Escaping && p.Type is FunctionTypeSymbol));
+
     public override string ToDisplayString() {
         var prefix = IsAsync ? "async " : string.Empty;
-        var parameters = string.Join(", ", ParameterTypes.Select((t, i) => (IsInOut(i) ? "inout " : string.Empty) + t.ToDisplayString()));
+        var parameters = string.Join(", ", ParameterTypes.Select((t, i) => (IsInOut(i) ? "inout " : string.Empty) + (IsEscaping(i) ? "@escaping " : string.Empty) + t.ToDisplayString()));
         var throws = IsRethrows
             ? " rethrows"
             : ThrownType is null
@@ -834,7 +854,7 @@ public sealed class FunctionTypeSymbol(
         }
 
         for (var i = 0; i < ParameterTypes.Length; i++) {
-            if (!ParameterTypes[i].Equals(function.ParameterTypes[i]) || IsInOut(i) != function.IsInOut(i)) {
+            if (!ParameterTypes[i].Equals(function.ParameterTypes[i]) || IsInOut(i) != function.IsInOut(i) || IsEscaping(i) != function.IsEscaping(i)) {
                 return false;
             }
         }

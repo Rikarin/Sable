@@ -139,7 +139,7 @@ internal static class SymbolDisplay {
     ///     the value, which hover and signature help have to say.
     /// </summary>
     static string Attributes(ParameterSymbol parameter) =>
-        (parameter.IsAutoclosure ? "@autoclosure " : "") + (parameter.IsEscaping ? "@escaping " : "");
+        (parameter.IsAutoclosure ? "@autoclosure " : "") + (parameter.IsEscaping ? "@escaping " : "") + (parameter.IsSendable ? "@Sendable " : "");
 
     static string Modifier(ParameterModifier modifier) =>
         modifier switch {

@@ -1938,7 +1938,16 @@ internal sealed class Parser {
                     simple = false;
                 }
 
-                var type = ParseType();
+                // '(@escaping () -> Int) -> ()': a function type's parameter
+                // it may keep. A tuple's element cannot be, which the binder says.
+                GreenNode type;
+                if (At(SyntaxKind.AtToken)) {
+                    type = new AttributedTypeGreen(ParseAttributes(onType: true), ParseType());
+                    simple = false;
+                } else {
+                    type = ParseType();
+                }
+
                 inner ??= type;
                 items.Add(new TupleTypeElementGreen(name, colon, modifier, type));
 
@@ -2399,7 +2408,7 @@ internal sealed class Parser {
         var identifier = At(SyntaxKind.UnderscoreToken) ? EatToken() : EatIdentifier();
         var colon = TryEatToken(SyntaxKind.ColonToken);
         var modifier = colon is null ? null : TryEatToken(SyntaxKind.InoutKeyword);
-        var type = colon is null ? null : ParseType();
+        var type = colon is null ? null : At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
         return new ClosureParameterGreen(identifier, colon, modifier, type);
     }
 
@@ -2456,6 +2465,8 @@ internal sealed class Parser {
                 case SyntaxKind.CapitalSelfKeyword:
                 case SyntaxKind.ThrowsKeyword:
                 case SyntaxKind.RethrowsKeyword:
+                // '(f: @escaping () -> Int) in'.
+                case SyntaxKind.AtToken:
                 // An array's length, 'U8[16]', or a value argument, 'Buf<Int, 4>'.
                 case SyntaxKind.IntegerLiteralToken when Peek(offset - 1).Kind is SyntaxKind.OpenBracketToken or SyntaxKind.DotDotToken or SyntaxKind.CommaToken:
                     continue;
@@ -3457,16 +3468,27 @@ internal sealed class Parser {
 
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         while (At(SyntaxKind.AtToken)) {
-            var at = EatToken();
-            var name = ParseTypeName();
-            var arguments = At(SyntaxKind.OpenParenToken) && !onType
-                ? ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken)
-                : null;
-            items.Add(new AttributeGreen(at, name, arguments));
+            items.Add(ParseAttribute(onType, out _));
         }
 
         return GreenList.Create(items.ToImmutable());
     }
+
+    GreenNode ParseAttribute(bool onType, out string name) {
+        var at = EatToken();
+        var typeName = ParseTypeName();
+        name = typeName.ToFullString().Trim();
+        var arguments = At(SyntaxKind.OpenParenToken) && !onType
+            ? ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken)
+            : null;
+        return new AttributeGreen(at, typeName, arguments);
+    }
+
+    /// <summary>
+    ///     The attributes that say what a parameter's closure is, and so are
+    ///     written on its type, as Swift has them: <c>f: @escaping () -&gt; Int</c>.
+    /// </summary>
+    static bool IsTypeAttribute(string name) => name is "escaping" or "autoclosure" or "Sendable";
 
     GreenList ParseModifiers() {
         if (!IsModifier(Current.Kind) && !IsConstFunctionModifier() && !IsUnsafeFunctionModifier()) {
@@ -3864,7 +3886,20 @@ internal sealed class Parser {
         );
 
     GreenNode ParseParameter() {
-        var attributes = ParseAttributes();
+        // '@escaping f: () -> Int' is not Sable: what a closure parameter may
+        // do with its closure is part of its type, 'f: @escaping () -> Int'.
+        // It is read as written, with the error and the fix that moves it.
+        var attributeItems = ImmutableArray.CreateBuilder<GreenNode>();
+        var misplaced = new List<(string Name, TextSpan Span)>();
+        while (At(SyntaxKind.AtToken)) {
+            var start = CurrentSpan.Start;
+            attributeItems.Add(ParseAttribute(onType: false, out var name));
+            if (IsTypeAttribute(name)) {
+                misplaced.Add((name, TextSpan.FromBounds(start, _tokenPosition)));
+            }
+        }
+
+        var attributes = GreenList.Create(attributeItems.ToImmutable());
 
         // 'fn build(in r: region)' is labelled 'in', as the spec calls it —
         // 'build(in: arena)' — not an unlabelled parameter with the 'in'
@@ -3916,8 +3951,27 @@ internal sealed class Parser {
 
         var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
 
-        // 'f: @escaping () -> Int' says of the type what '@escaping f: …' does.
+        var typeStart = CurrentSpan.Start;
         var type = At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
+        if (misplaced.Count > 0) {
+            var written = string.Concat(misplaced.Select(static m => "@" + m.Name + " "));
+            var typeText = type.ToFullString().Substring(type.LeadingTriviaWidth, type.Width);
+            _diagnostics.Add(
+                Diagnostic.Error(
+                    ErrorCode.ERR_AttributeOnParameterType,
+                    new TextSpan(misplaced[0].Span.Start, misplaced[0].Name.Length + 1),
+                    $"'@{misplaced[0].Name}' is part of the parameter's type, and written on it: '{identifier.Text}: {written}{typeText}'"
+                ) with {
+                    Fixes = [
+                        new(
+                            $"Write '{identifier.Text}: {written}{typeText}'",
+                            [..misplaced.Select(static m => new TextChange(m.Span, "")), new TextChange(new TextSpan(typeStart, 0), written)]
+                        ),
+                    ],
+                }
+            );
+        }
+
         if (removed.Count > 0) {
             var keyword = removed[0];
             type = ReadAsReference(

@@ -603,8 +603,35 @@ closure called with a region gives back what may be rooted there, so
 `fn withRegion<R>(_ body: (Region) -> R) -> R` instantiated with `R = Node&`
 is rejected in its body naming the instance; compiled once, its body is
 summarised as giving back a value rooted in its region, and each call with
-a reference among its types is rejected instead. An array of references
-holds what is appended, set or lent to it. Non-escape now deletes allocations rather than
+a reference among its types is rejected instead; a generic caller compiled
+once that passes its own metadata on is summarised the same, so the call
+is checked where the metadata becomes concrete — through a generic
+struct's field (`Box<T>`) and a call that may throw too. An array of
+references holds what is appended, set or lent to it, in a variable or a
+part of one; one in an object's or a region's memory holds what is put in
+it there, held to rule 4 as a store is, and a variable's address lent to a
+call that keeps what it is given is kept. A closure given to a callee not
+known — a closure value, a protocol requirement, a method an override may
+change, a function without a body — is kept unless the callee's type says
+its parameter is not `@escaping`: `@escaping` is part of the function type
+(SYNTAX.md §17), SilGen records the closures a call only lends on the
+`apply` (`apply [lent 1]`) — a requirement called on a type parameter in
+code compiled once and a call that opens an existential included, from the
+requirement's declared parameters — and a conformance or an override may
+not add it (S3210). An optional closure, `(() -> Int)?`, is always kept.
+In a closure's body what it captured — through its context, a variable it
+shares in a box among it — is rooted in its captures, not the heap: a body
+that keeps any of it in an object, or gives it to a callee that keeps it,
+keeps its captures, and where the closure is made it may capture nothing
+that dies before the heap does. An
+expectation's `#expression` notes no value that holds a reference, in a
+struct's field or an array either. A closure made of an `inout` parameter holds what the caller's
+variable held, and one that took a reference before its region's
+`reset()` may not be called after it. A `var` closures share is a box that
+holds what is put in it, inside the region or out: the closures that
+capture it hold that. A closure variable given another closure on every
+path after a region ended no longer holds the first (flow-sensitively, per
+variable). Non-escape now deletes allocations rather than
 ARC traffic (§3.7), from summaries of the same shape. Deferred: references
 in arrays, summaries serialised into a `.sbi` (the `.sbi` itself is
 Phase 5's), secondary diagnostic labels, and rule 5's specialisation by

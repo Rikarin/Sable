@@ -99,4 +99,4 @@ public struct CFunction<F: CSignature>: Equatable, Debug {
 /// }
 /// ```
 @intrinsic
-public fn cFunction<F: CSignature>(@Sendable _ function: F) -> CFunction<F>
+public fn cFunction<F: CSignature>(_ function: @Sendable F) -> CFunction<F>

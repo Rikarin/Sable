@@ -86,7 +86,7 @@ public sealed class PackageTests : IDisposable {
         // Only the copy on disk has this member.
         Write("root/lib/Sable.Text/EditorOnly.sb", "module Sable.Text\n\npublic fn onlyInTheEditor() -> Int {\n    return 1\n}\n");
         const string source = "module App\n\nimport Sable.Text\n\nfn f() -> Int {\n    return onlyInTheEditor()\n}\n";
-        const string wrong = "module Wrong\n\nfn hold(@escaping _ n: Int) -> Int {\n    return n\n}\n";
+        const string wrong = "module Wrong\n\nfn hold(_ n: @escaping Int) -> Int {\n    return n\n}\n";
         var main = Sable.LanguageServer.Workspace.UriOf(Write("root/main.sb", source));
         var bad = Sable.LanguageServer.Workspace.UriOf(Write("root/wrong.sb", wrong));
         await using var client = Client();

@@ -33,7 +33,7 @@ namespace Sable.Symbols;
 /// </remarks>
 public static class SymbolInterface {
     /// <summary>The section's own version: bump when what is written, or what it means, changes.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     enum Entry : byte {
         Module = 1,
@@ -575,6 +575,11 @@ public static class SymbolInterface {
                     output.Write(function.InOutParameters.Length);
                     foreach (var inOut in function.InOutParameters) {
                         output.Write(inOut);
+                    }
+
+                    output.Write(function.EscapingParameters.Length);
+                    foreach (var escaping in function.EscapingParameters) {
+                        output.Write(escaping);
                     }
 
                     break;
@@ -1151,7 +1156,15 @@ public static class SymbolInterface {
                         inOuts.Add(_input.ReadBoolean());
                     }
 
-                    return new FunctionTypeSymbol(parameters, result, isAsync, thrown) { IsRethrows = rethrows, InOutParameters = inOuts.MoveToImmutable() };
+                    var escapingCount = Count();
+                    var escaping = ImmutableArray.CreateBuilder<bool>(escapingCount);
+                    for (var i = 0; i < escapingCount; i++) {
+                        escaping.Add(_input.ReadBoolean());
+                    }
+
+                    return new FunctionTypeSymbol(parameters, result, isAsync, thrown) {
+                        IsRethrows = rethrows, InOutParameters = inOuts.MoveToImmutable(), EscapingParameters = escaping.MoveToImmutable(),
+                    };
                 }
                 case Tag.StructuralUnion:
                     return new StructuralUnionTypeSymbol(ReadTypes());

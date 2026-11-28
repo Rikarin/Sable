@@ -357,6 +357,82 @@ public sealed class SliceLoweringTests {
     }
 
     /// <summary>
+    ///     A range of an array passed inout (#354) is lent: the array made
+    ///     the only reference to its buffer and viewed over the range
+    ///     (<c>array_lend_range</c>), the view's reference the array's own
+    ///     for the call, and given back after (<c>array_return_range</c>).
+    ///     A write through it changes the array where it is: nothing is
+    ///     copied, for a callee that writes, keeps a copy and lets it go, or
+    ///     puts another slice in the view's place; a buffer another array
+    ///     shares is copied once, the other's kept.
+    /// </summary>
+    [Fact]
+    public void ARangePassedInoutIsLentAndGivenBack() {
+        var module = Lower(
+            """
+            fn touch(_ bytes: inout Int[:]) { bytes[0] = 1 }
+
+            fn copyTouchDrop(_ bytes: inout Int[:]) -> Int {
+                let kept = bytes
+                bytes[0] = 9
+                return kept[0]
+            }
+
+            fn replace(_ bytes: inout Int[:]) {
+                let other: Int[>..] = [5, 6]
+                bytes = other[0...]
+            }
+
+            fn inPlace() -> Int {
+                var xs: Int[>..] = [0, 0, 0, 0]
+                var k = 0
+                while k < 5 {
+                    touch(&xs[1..<3])
+                    k = k + 1
+                }
+                return xs[0] * 10 + xs[1]
+            }
+
+            fn kept() -> Int {
+                var xs: Int[>..] = [1, 2, 3, 4]
+                let old = copyTouchDrop(&xs[2..<4])
+                replace(&xs[0..<2])
+                return old * 10000 + xs[0] * 1000 + xs[1] * 100 + xs[2] * 10 + xs[3]
+            }
+
+            fn shared() -> Int {
+                var xs: Int[>..] = [1, 2, 3, 4]
+                let other = xs
+                touch(&xs[2..<4])
+                return xs[2] * 10 + other[2]
+            }
+            """
+        );
+
+        var text = SilPrinter.Print(module.Functions.Single(static f => f.Name == "M.inPlace"));
+        Assert.Contains("builtin \"array_lend_range\"", text, StringComparison.Ordinal);
+        Assert.Contains("builtin \"array_return_range\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("builtin \"array_slice\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("builtin \"array_store_slice\"", text, StringComparison.Ordinal);
+
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(1L, interpreter.Run("M.inPlace"));
+        Assert.Equal(1, interpreter.Allocations);
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        // The copy 'copyTouchDrop' makes of its run, and 'replace''s array.
+        interpreter = new SilInterpreter(module);
+        Assert.Equal(35694L, interpreter.Run("M.kept"));
+        Assert.Equal(3, interpreter.Allocations);
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        interpreter = new SilInterpreter(module);
+        Assert.Equal(13L, interpreter.Run("M.shared"));
+        Assert.Equal(2, interpreter.Allocations);
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>
     ///     The member inlined, a write through the view of an array made
     ///     unique and moved into it stores in place, with no check of its own
     ///     (<c>bytes_store_unique_</c>, <c>array_set_unique</c>); a view that

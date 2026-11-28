@@ -31,13 +31,11 @@ public struct TlsRecordCipher: Sendable {
 
     let aead: RecordAead
 
-    /// The nonce of the record being sealed or opened, the tag and the
-    /// header of the one being sealed, and its content sealed: made once,
-    /// and written over for each.
+    /// The nonce of the record being sealed or opened, and the tag and the
+    /// header of the one being sealed: made once, and written over for each.
     var nonce: U8[>..]
     var tag: U8[>..] = U8[>..](repeating: 0, count: 16)
     var header: U8[>..] = [23, 3, 3, 0, 0]
-    var text: U8[>..] = []
 
     /// The cipher of a traffic secret: its key and IV derived as §7.3 says.
     public init(_ suite: TlsCipherSuite, trafficSecret: SymmetricKey) {
@@ -70,33 +68,24 @@ public struct TlsRecordCipher: Sendable {
         header[3] = U8(length >> 8)
         header[4] = U8(length & 0xFF)
         nextNonce()
-        // Sealed in a buffer of its own, kept from one record to the next,
-        // and the tag in another: each whole, which an inout slice of a
-        // range of an array is not without a copy of the array (#354).
-        var sealing = text
-        text = []
-        var sealingTag = tag
-        tag = []
-        sealing.removeAll(keepingCapacity: true)
-        sealing.append(contentsOf: content)
-        sealing.append(U8(type.code))
-        sealing.append(repeating: 0, count: padding)
-        do {
-            try aead.seal(inPlace: &sealing, nonce: nonce, associatedData: header, tag: &sealingTag)
-        } catch {
-            text = sealing
-            tag = sealingTag
-            throw error
-        }
-        let end = records.count + 5 + length
+        // Sealed where it goes in 'records', and the tag in a buffer kept
+        // from one record to the next: 'records' is lent once in a call.
+        let start = records.count
+        let end = start + 5 + length
         if records.capacity < end {
             records.reserveCapacity(end > 2 * records.capacity ? end : 2 * records.capacity)
         }
         records.append(contentsOf: header)
-        records.append(contentsOf: sealing)
-        records.append(contentsOf: sealingTag)
-        text = sealing
-        tag = sealingTag
+        records.append(contentsOf: content)
+        records.append(U8(type.code))
+        records.append(repeating: 0, count: padding)
+        do {
+            try aead.seal(inPlace: &records[start + 5..<end - 16], nonce: nonce, associatedData: header, tag: &tag)
+        } catch {
+            records.removeLast(records.count - start)
+            throw error
+        }
+        records.append(contentsOf: tag)
     }
 
     /// The type and content of a whole record, header and all; bad_record_mac

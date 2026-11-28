@@ -401,6 +401,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     sealed class HeapArray(ArrayType type, List<object?> elements) : Counted {
         public ArrayType Type { get; } = type;
         public List<object?> Elements { get; } = elements;
+
+        /// <summary>Lent with a range of it for a call ('array_lend_range'): its last release keeps it for the array.</summary>
+        public bool Lent;
+
+        /// <summary>Let go of by everything while lent: kept, its elements and all, for the array to take back.</summary>
+        public bool Orphaned;
     }
 
     /// <summary>
@@ -579,6 +585,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 }
 
                 if (--counted.Strong > 0) {
+                    return;
+                }
+
+                if (counted is HeapArray { Lent: true } kept) {
+                    kept.Orphaned = true;
                     return;
                 }
 
@@ -2450,41 +2461,53 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // A slice's elements stored over [from, to) of an array or a
             // slice: nothing when it is still the view of that range.
-            case "array_store_slice": {
+            case "array_store_slice":
+                StoreSlice(builtin.Operands[0], (IReference)operands[0]!, (long)operands[1]!, (long)operands[2]!, operands[3], depth);
+                return null;
+
+            // 'f(&xs[1..<3])': the array made unique and lent as the range's
+            // view, whose reference to the buffer is the array's own for the
+            // call. Should the callee let it go, the buffer is kept, not
+            // freed, for the array to take back (runtime/arrays.c).
+            case "array_lend_range": {
                 var address = (IReference)operands[0]!;
                 var (from, to) = ((long)operands[1]!, (long)operands[2]!);
-                var (destination, destinationStart, destinationCount) = ElementsOf(address.Peek());
-                if (from < 0 || to > destinationCount || from > to) {
+                var (_, _, count) = ElementsOf(address.Peek());
+                if (from < 0 || to > count || from > to) {
                     throw new SilTrap("array slice out of range");
                 }
 
-                var (source, sourceStart, sourceCount) = ElementsOf(operands[3]);
-                if (sourceCount != to - from) {
-                    throw new SilTrap($"a slice of count {sourceCount} stored over a range of count {to - from}");
+                if (address.Peek() is not HeapArray) {
+                    return SliceValue.Empty;
                 }
 
-                if (sourceCount == 0 || ReferenceEquals(source, destination) && sourceStart == destinationStart + from) {
-                    return null;
+                var lent = Unique(builtin.Operands[0], address);
+                lent.Lent = true;
+                return new SliceValue(lent, (int)from, (int)(to - from));
+            }
+
+            // The slice the call gave back: the array's reference again while
+            // it is still the view, else stored over the range and let go.
+            case "array_return_range": {
+                var address = (IReference)operands[0]!;
+                var (from, to) = ((long)operands[1]!, (long)operands[2]!);
+                var back = (SliceValue)operands[3]!;
+                if (address.Peek() is HeapArray lent) {
+                    lent.Lent = false;
+                    if (ReferenceEquals(back.Buffer, lent) && back.Start == from && back.Count == to - from) {
+                        return null;
+                    }
+
+                    if (lent.Orphaned) {
+                        lent.Orphaned = false;
+                        lent.Strong = 1;
+                    } else {
+                        lent.Strong++;
+                    }
                 }
 
-                var values = source!.Elements.GetRange(sourceStart, sourceCount);
-                HeapArray buffer;
-                var start = 0;
-                if (address.Peek() is SliceValue) {
-                    var unique = UniqueSlice(builtin.Operands[0], address);
-                    (buffer, start) = (unique.Buffer!, unique.Start);
-                } else {
-                    buffer = Unique(builtin.Operands[0], address);
-                }
-
-                for (var i = 0; i < values.Count; i++) {
-                    var at = start + (int)from + i;
-                    var old = buffer.Elements[at];
-                    Retain(buffer.Type.Element, values[i]);
-                    buffer.Elements[at] = values[i];
-                    Release(buffer.Type.Element, old, depth);
-                }
-
+                StoreSlice(builtin.Operands[0], address, from, to, back, depth);
+                Release(builtin.Operands[3].Type, back, depth);
                 return null;
             }
 
@@ -3192,6 +3215,46 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         return RealOf(real, to);
+    }
+
+    /// <summary>
+    ///     A slice's elements stored over [from, to) of the array or slice at
+    ///     an address: nothing when it is still the view of that range.
+    /// </summary>
+    void StoreSlice(SilValue place, IReference address, long from, long to, object? slice, int depth) {
+        var (destination, destinationStart, destinationCount) = ElementsOf(address.Peek());
+        if (from < 0 || to > destinationCount || from > to) {
+            throw new SilTrap("array slice out of range");
+        }
+
+        var (source, sourceStart, sourceCount) = ElementsOf(slice);
+        if (sourceCount != to - from) {
+            throw new SilTrap($"a slice of count {sourceCount} stored over a range of count {to - from}");
+        }
+
+        if (sourceCount == 0 || ReferenceEquals(source, destination) && sourceStart == destinationStart + from) {
+            return;
+        }
+
+        var values = source!.Elements.GetRange(sourceStart, sourceCount);
+        HeapArray buffer;
+        var start = 0;
+        if (address.Peek() is SliceValue) {
+            var unique = UniqueSlice(place, address);
+            (buffer, start) = (unique.Buffer!, unique.Start);
+        } else {
+            buffer = Unique(place, address);
+        }
+
+        for (var i = 0; i < values.Count; i++) {
+            var at = start + (int)from + i;
+            var old = buffer.Elements[at];
+            Retain(buffer.Type.Element, values[i]);
+            buffer.Elements[at] = values[i];
+            Release(buffer.Type.Element, old, depth);
+        }
+
+        return;
     }
 
     /// <summary>The array at an address, made unique — copied if it is shared — so that it can be changed.</summary>

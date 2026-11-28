@@ -162,13 +162,21 @@ public sealed partial class SilGen {
                 return WholeArrayInout(view, borrows);
             }
 
-            if (Address(argument, borrows) is not { } address) {
+            // A range of an array, lent once every argument is evaluated, as
+            // the access begins then: 'f(&xs[0..<2], xs.count)'.
+            _lendAsCallBegins = argument is BoundIndexAccess sliced && SlicingRange(sliced) is not null;
+            var address = Address(argument, borrows);
+            _lendAsCallBegins = false;
+            if (address is null) {
                 return null;
             }
 
             BeginAccess(address, modify: true, borrows);
             return address;
         }
+
+        /// <summary>Whether the range of an array an inout argument is, is lent as the call begins rather than where it is reached.</summary>
+        bool _lendAsCallBegins;
 
         /// <summary>
         ///     The whole of an array passed as an inout slice, <c>sortAll(&amp;xs)</c>
@@ -308,20 +316,27 @@ public sealed partial class SilGen {
         /// <summary>
         ///     A range of an array's elements as a place — <c>f(&amp;xs[1..&lt;3])</c>,
         ///     <c>xs[2...].sort()</c>, <c>xs[..&lt;2][0] = v</c> (SYNTAX.md §5, "A range of an array as a place"):
-        ///     there is no slice in the array to change where it is, so the
-        ///     range is read out as one, a view sharing the array's buffer,
-        ///     into a slot of its own, which is changed instead; once the
-        ///     caller ends <paramref name="borrows" />, the slice is stored
-        ///     back over the range (<c>array_store_slice</c>). A write through
-        ///     the view copies its run first, as the array still holds the
-        ///     buffer, and storing it back writes the array's own buffer in
-        ///     place; a slice nothing wrote is still the view, and is not
-        ///     stored. The slice must come back with the range's count, or
-        ///     the store traps: the callee was given a slice, which never
-        ///     changes its count, and only replacing it whole can. The array
-        ///     is accessed for the call, as it is for an element passed inout.
+        ///     a slice in a slot of its own, which is changed instead, and
+        ///     given back once the caller ends <paramref name="borrows" />.
+        ///     A heap array is made the only reference to its buffer, once,
+        ///     and lent (<c>array_lend_range</c>): the view's reference to the
+        ///     buffer is the array's own for the call, so that a write through
+        ///     it changes the array where it is, with no copy; given back
+        ///     (<c>array_return_range</c>), the view is the array's reference
+        ///     again, and anything the callee put in its place is stored over
+        ///     the range. Of an inline array or a slice, the range is read out
+        ///     as a view sharing the storage, which a write copies, and stored
+        ///     back over the range (<c>array_store_slice</c>); a slice nothing
+        ///     wrote is still the view, and is not stored. The slice must come
+        ///     back with the range's count, or the call traps: the callee was
+        ///     given a slice, which never changes its count, and only
+        ///     replacing it whole can. The array is accessed for the call, as
+        ///     it is for an element passed inout.
         /// </summary>
         SilValue? SliceForWriteBack(BoundIndexAccess sliced, BoundExpression rangeIndex, List<SilValue> borrows) {
+            // The argument's own range alone: one it is a range of is reached, and lent, first.
+            var asCallBegins = _lendAsCallBegins;
+            _lendAsCallBegins = false;
             if (Address(sliced.Receiver, borrows) is not { Type: AddressType { Pointee: var pointee } } place) {
                 return null;
             }
@@ -330,7 +345,7 @@ public sealed partial class SilGen {
                 return Missing(sliced, $"'{Describe(sliced.Syntax)}' as a place");
             }
 
-            return PlaceBounds(place, rangeIndex) is var (from, to) ? SliceForWriteBack(place, element, from, to, borrows) : null;
+            return PlaceBounds(place, rangeIndex) is var (from, to) ? SliceForWriteBack(place, element, from, to, borrows, asCallBegins) : null;
         }
 
         /// <summary>
@@ -353,7 +368,22 @@ public sealed partial class SilGen {
         }
 
         /// <summary>The elements from one position to another, read out as a slice and stored back when <paramref name="borrows" /> end.</summary>
-        SilValue SliceForWriteBack(SilValue place, SilType element, SilValue from, SilValue to, List<SilValue> borrows) {
+        SilValue SliceForWriteBack(SilValue place, SilType element, SilValue from, SilValue to, List<SilValue> borrows, bool asCallBegins = false) {
+            if (place.Type is AddressType { Pointee: ArrayType }) {
+                var sliceType = new SliceType(element);
+                var lent = NewSlot(sliceType, "$slice");
+                void Lend() => Emit(new StoreInst(Builtin("array_lend_range", sliceType, place, from, to), lent, StoreKind.Init));
+                if (asCallBegins) {
+                    borrows.Add(new DeferredStep(Lend));
+                } else {
+                    Lend();
+                }
+
+                borrows.Add(new WriteBack(() => Builtin("array_return_range", SilType.Unit, place, from, to, Emit(new LoadInst(lent, LoadKind.Take)))));
+                BeginAccess(place, modify: true, borrows);
+                return lent;
+            }
+
             var array = Emit(new LoadInst(place));
             var view = Emit(new BuiltinInst("array_slice", new SliceType(element), array, from, to));
             Destroy(array);

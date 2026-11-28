@@ -948,6 +948,81 @@ void sable_slice_store_slice(SableSlice *slice, const SableMetadata *type, int64
     share_stored(slice->buffer, type, stored, count);
 }
 
+// ---- A range of an array lent for a call ---------------------------------
+
+// 'f(&xs[a..<b])': the array, made the only reference to its buffer, lent
+// to the call as a view of the range — the place keeps the buffer, but its
+// one reference is the view's for the call — so that a write through the
+// view changes the array where it is, with nothing copied. The buffer is
+// marked lent by an unowned count, which no array has otherwise: should
+// the callee let the view's reference go (another slice put in its place,
+// or a write that copied a run the callee had shared), the last release
+// keeps the buffer, elements and all, for sable_array_return_range.
+void sable_array_lend_range(SableArray **slot, const SableMetadata *type, int64_t from, int64_t to) {
+    if (from < 0 || to > sable_array_count(*slot) || from > to) {
+        trap_here("array slice out of range");
+    }
+
+    if (*slot == NULL) {
+        return;
+    }
+
+    SableArray *array = unique(slot, type, 0);
+    __atomic_fetch_add(&array->header.flags, SABLE_UNOWNED_ONE, __ATOMIC_RELAXED);
+}
+
+// What the last release of a lent buffer does instead of destroying it:
+// hands the mark back, for the lender to take the buffer up again.
+static bool array_kept_for_lender(SableObject *object) {
+    void (*destroy)(void *) = object->type->destroy;
+    if (destroy != sable_array_destroy && destroy != foreign_array_destroy) {
+        return false;
+    }
+
+    __atomic_fetch_sub(&object->flags, SABLE_UNOWNED_ONE, __ATOMIC_RELEASE);
+    return true;
+}
+
+// The lent buffer the array's again: a reference to it taken while
+// anything still holds it, else the one its last release kept for it.
+static void take_back_lent(SableArray *array) {
+    SableObject *object = &array->header;
+    uint32_t strong = strong_count(object);
+    while (strong != 0) {
+        if (__atomic_compare_exchange_n(&object->strong, &strong, strong + 1, true, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
+            __atomic_fetch_sub(&object->flags, SABLE_UNOWNED_ONE, __ATOMIC_RELAXED);
+            return;
+        }
+    }
+
+    // Let go of by everything: the last release, which may be another
+    // thread's, hands the mark back before it is done with the buffer.
+    while (object_flags(object) >= SABLE_UNOWNED_ONE) {
+    }
+
+    object->strong = 1;
+}
+
+// After the call: the slice that came back, 'buffer'/'start'/'count', given
+// back to the array at '*slot' whose range [from, to) was lent. Still the
+// view, its reference is the array's again; anything else — of another
+// buffer, or this one's elsewhere — is stored over the range, of the
+// range's count or a trap, as a slice written back is, and let go.
+void sable_array_return_range(SableArray **slot, const SableMetadata *type, int64_t from, int64_t to, SableArray *buffer, int64_t start, int64_t count) {
+    SableArray *array = *slot;
+    if (array != NULL && buffer == array && start == from && count == to - from) {
+        __atomic_fetch_sub(&array->header.flags, SABLE_UNOWNED_ONE, __ATOMIC_RELAXED);
+        return;
+    }
+
+    if (array != NULL) {
+        take_back_lent(array);
+    }
+
+    sable_array_store_slice(slot, type, from, to, buffer, start, count);
+    sable_release(buffer);
+}
+
 // ---- Inline arrays (#304) -------------------------------------------------
 
 // 'T[k]' and 'T[..k]' hold their elements where they are — in a frame, a

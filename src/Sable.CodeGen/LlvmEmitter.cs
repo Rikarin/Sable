@@ -741,6 +741,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_inline_store_slice(ptr nocapture, i64, ptr, i64, i64, ptr, i64, i64)
                                 declare void @sable_inline_restore(ptr nocapture, i64, ptr, ptr, i64, i64)
                                 declare void @sable_array_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
+                                declare void @sable_array_lend_range(ptr nocapture, ptr, i64, i64)
+                                declare void @sable_array_return_range(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
                                 declare void @sable_slice_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
                                 declare void @sable_slice_make_unique(ptr nocapture, ptr)
@@ -7090,6 +7092,30 @@ public sealed partial class LlvmEmitter {
                     var (buffer, start, count) = (SlicePart(operands[3], source, 0), SlicePart(operands[3], source, 1), SlicePart(operands[3], source, 2));
                     SiteForRuntime();
                     Line($"call void @{function}(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
+                // 'f(&xs[1..<3])': the array made unique and lent as the
+                // range's view, the buffer's one reference the view's for
+                // the call (sable_array_lend_range); and given back after.
+                case "array_lend_range": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    SiteForRuntime();
+                    Line($"call void @sable_array_lend_range(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]}, i64 {operands[2]})");
+                    var lent = Fresh();
+                    var length = Fresh();
+                    Line($"{lent} = load ptr, ptr {operands[0]}");
+                    Line($"{length} = sub i64 {operands[2]}, {operands[1]}");
+                    _names[builtin] = MakeSlice((SliceType)builtin.Type, lent, operands[1], length);
+                    return;
+                }
+
+                case "array_return_range": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var source = (SliceType)builtin.Operands[3].Type;
+                    var (buffer, start, count) = (SlicePart(operands[3], source, 0), SlicePart(operands[3], source, 1), SlicePart(operands[3], source, 2));
+                    SiteForRuntime();
+                    Line($"call void @sable_array_return_range(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]}, i64 {operands[2]}, ptr {buffer}, i64 {start}, i64 {count})");
                     return;
                 }
 

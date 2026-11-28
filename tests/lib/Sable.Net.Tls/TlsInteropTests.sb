@@ -421,7 +421,9 @@ fn theServerAsksOpensslsClientForAnotherShare(_ offered: String, _ taken: String
     let server = Task.spawn { () -> String in await pongEach(listener, serving, 1) }
     let (output, well) = try await sClient(directory, listener.port, ["-groups", offered])
     expect(well && output.contains("pong"), output)
-    expect(output.contains("Peer Temp Key: \(key)"), output)
+    // OpenSSL 3.2 and later say "Peer Temp Key", 3.0 (as CI's runners have)
+    // "Server Temp Key".
+    expect(output.contains("Peer Temp Key: \(key)") || output.contains("Server Temp Key: \(key)"), output)
     expect(await server.value == "full ")
     try? directory.remove()
 }

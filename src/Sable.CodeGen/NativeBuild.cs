@@ -906,7 +906,11 @@ public static class NativeBuild {
         // frame is named: they are kept by name (both objcopys take this).
         foreach (var tool in (string[])[Path.Combine(Path.GetDirectoryName(CompilerPath) ?? "", "llvm-objcopy"), "llvm-objcopy", "objcopy"]) {
             try {
-                if (Run(tool, ["--localize-hidden", "--discard-all", "-w", "--keep-section=.debug*", executable]).ExitCode == 0) {
+                // Two runs: in one, --discard-all judges a symbol by its binding
+                // as read, before --localize-hidden has made it local (CI's
+                // objcopy left the closure LOCAL HIDDEN that way).
+                if (Run(tool, ["--localize-hidden", executable]).ExitCode == 0
+                    && Run(tool, ["--discard-all", "-w", "--keep-section=.debug*", executable]).ExitCode == 0) {
                     return;
                 }
             } catch (System.ComponentModel.Win32Exception) {

@@ -339,7 +339,7 @@ public static class Library {
 ///     (<see cref="Compilation.ReachesIntoLibrary" />), so with any other
 ///     such program too. Once it is known, a build checks
 ///     only the program's own bodies, and lowers only the library functions
-///     it reaches (<see cref="SilGen.LowerByFile" />'s <c>onDemand</c>): a
+///     it reaches (<see cref="SilGen.LowerByFile(Compilation, bool, Func{SyntaxTree, bool}?)" />'s <c>onDemand</c>): a
 ///     small program binds a few of the library's files, not every one.
 /// </summary>
 /// <remarks>

@@ -20,7 +20,10 @@ public sealed class LibraryTierTests {
         var modules = Library.ModuleNames.Append(Library.Core).ToHashSet(StringComparer.Ordinal);
         Assert.True(modules.Except(listed).ToList() is [], $"lib/package.sb gives no tier to {string.Join(", ", modules.Except(listed))}");
         Assert.True(listed.Except(modules).ToList() is [], $"lib/package.sb lists {string.Join(", ", listed.Except(modules))}, which lib/ does not have");
-        var directories = Directory.GetDirectories(Path.Combine(DocExampleTests.RepositoryRoot, "lib")).Select(Path.GetFileName).ToHashSet(StringComparer.Ordinal);
+        // A module is a directory of .sb files; build output (lib/target, git-ignored) is none.
+        var directories = Directory.GetDirectories(Path.Combine(DocExampleTests.RepositoryRoot, "lib"))
+            .Where(static d => Directory.EnumerateFiles(d, "*.sb").Any())
+            .Select(Path.GetFileName).ToHashSet(StringComparer.Ordinal);
         Assert.True(directories.SetEquals(listed), $"lib/ has {string.Join(", ", directories.Order())}; lib/package.sb lists {string.Join(", ", listed.Order())}");
     }
 

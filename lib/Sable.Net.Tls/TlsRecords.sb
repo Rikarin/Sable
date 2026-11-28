@@ -92,8 +92,17 @@ struct TlsRecords: Sendable {
             }
             if !incoming.isEmpty {
                 // A record begun in bytes that came before: finished from
-                // these, as far as they go.
-                let need = incoming.count < 5 ? 5 : 5 + TlsRecords.recordLength(incoming[0..<5])
+                // these, as far as they go. Its header first, then as much
+                // as the header says, which may be nothing.
+                if incoming.count < 5 {
+                    let taken = 5 - incoming.count < bytes.count - at ? 5 - incoming.count : bytes.count - at
+                    incoming.append(contentsOf: bytes[at..<at + taken])
+                    at += taken
+                    if incoming.count < 5 {
+                        return none
+                    }
+                }
+                let need = 5 + TlsRecords.recordLength(incoming[0..<5])
                 if need > 5 + TlsRecordCipher.maximumContentByteCount + 256 {
                     throw TlsError.Failed(.recordOverflow, reason: "a record of \(need - 5) bytes")
                 }
@@ -106,9 +115,7 @@ struct TlsRecords: Sendable {
                 if incoming.count < need {
                     return none
                 }
-                if need > 5 {
-                    try readKept()
-                }
+                try readKept()
                 continue
             }
             if bytes.count - at < 5 {

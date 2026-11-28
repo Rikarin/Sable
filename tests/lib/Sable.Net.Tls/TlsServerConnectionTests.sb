@@ -309,6 +309,24 @@ fn aClientHelloOutOfLineIsRefused(_ record: U8[>..], _ code: Int) {
     assertEqual(server.takeOutgoing(), [21, 3, 3, 0, 2, 2, U8(code)])
 }
 
+/// A record of no bytes whose header comes in two parts is read as one
+/// that came whole: refused, not waited on for ever. The first is the
+/// input FuzzNet.tlsServer hung on, cut where its first byte says.
+@test(arguments: [
+    ([3, 0x16, 0], [0, 0, 8, 0x65, 0x12], 10),
+    ([22, 3], [1, 0, 0], 10),
+    ([22], [3, 1, 0, 0], 10),
+    ([22, 3, 1, 0], [0], 10),
+    ([21, 3, 1], [0, 0], 50),
+    ([20, 3], [1, 0, 0], 10),
+])
+fn anEmptyRecordInTwoPartsIsRefused(_ first: U8[>..], _ second: U8[>..], _ code: Int) throws {
+    var server = traceServer()
+    try server.receive(first)
+    let error = expectThrows(TlsError.self) { try server.receive(second) }
+    expect(error?.alert == TlsAlert(code: code))
+}
+
 @test
 fn aHelloWithASessionIdIsEchoedAndAChangeCipherSpecFollows() throws {
     let sessionId = joined([32], U8[>..](repeating: 7, count: 32))

@@ -408,7 +408,17 @@ public struct TlsServerConnection: Sendable {
         let helloHash = transcriptHash()
         records.useKeys(own: schedule.deriveSecret("s hs traffic", transcriptHash: helloHash), peer: schedule.deriveSecret("c hs traffic", transcriptHash: helloHash))
 
+        // Room for the flight, and for it in the transcript, made at once:
+        // its certificates and a few hundred bytes more.
+        var room = 512
+        if !isResumed {
+            for certificate in options.certificateChain {
+                room += certificate.der.count + 5
+            }
+        }
+        transcript.reserveCapacity(transcript.count + room)
         var flight: U8[>..] = []
+        flight.reserveCapacity(room)
         var encrypted: U8[>..] = []
         if hello.serverName != none {
             appendExtension(&encrypted, 0, [])

@@ -85,10 +85,35 @@ public struct Hmac<H: HashFunction>: Sendable {
         return code.spend()
     }
 
+    /// As `authenticationCode(for:using:)`, the code written into the first
+    /// `H.digestByteCount` bytes of 'code' instead: for the library's hash
+    /// functions, nothing is allocated for it.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey([0x4A, 0x65, 0x66, 0x65])
+    /// var code = U8[>..](repeating: 0, count: 32)
+    /// Hmac<Sha256>.authenticationCode(for: [0x61], using: key, into: &code[0..<32])
+    /// assert(code == Hmac<Sha256>.authenticationCode(for: [0x61], using: key).bytes)
+    /// ```
+    public static fn authenticationCode(for bytes: U8[:], using key: SymmetricKey, into code: inout U8[:]) {
+        var hmac = Hmac<H>(key: key)
+        hmac.update(bytes)
+        hmac.spend(into: &code)
+    }
+
     /// 'finalize', in the code's own memory, which it is then no more in.
     mutating fn spend() -> Digest {
-        outer.update(inner.finalizeAndReset().bytes)
-        return outer.finalizeAndReset()
+        var code = U8[>..](repeating: 0, count: H.digestByteCount)
+        spend(into: &code)
+        return Digest(taking: code)
+    }
+
+    /// 'spend', written into the first `H.digestByteCount` bytes of 'code',
+    /// where the inner digest is put first.
+    mutating fn spend(into code: inout U8[:]) {
+        inner.finalizeAndReset(into: &code)
+        outer.update(code[0..<H.digestByteCount])
+        outer.finalizeAndReset(into: &code)
     }
 
     /// Whether the code is that of every byte given so far, compared in

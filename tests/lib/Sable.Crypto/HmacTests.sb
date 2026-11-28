@@ -107,3 +107,23 @@ fn keysOfEveryLengthAroundABlockMakeTheCodeTheirPaddingDoes(_ count: Int) {
     outer.update(inner.finalize().bytes)
     expect(Hmac<Sha256>.authenticationCode(for: message(20), using: SymmetricKey(message(count))) == outer.finalize())
 }
+
+/// A code written into bytes given is the code, for a hash of the library's
+/// and for one of a key longer than a block.
+fn codesInto<H: HashFunction>(_ function: H.Type) {
+    for count in [0, 20, 200] {
+        let key = SymmetricKey(message(count))
+        var into = U8[>..](repeating: 0xAA, count: H.digestByteCount + 2)
+        Hmac<H>.authenticationCode(for: message(70), using: key, into: &into[1..<into.count])
+        assertEqual(into[1..<1 + H.digestByteCount].toArray(), Hmac<H>.authenticationCode(for: message(70), using: key).bytes)
+        expect(into[0] == 0xAA && into[into.count - 1] == 0xAA)
+    }
+}
+
+@test
+fn aCodeIsWrittenIntoTheBytesGiven() {
+    codesInto(Sha256.self)
+    codesInto(Sha384.self)
+    codesInto(Sha3_256.self)
+    codesInto(Blake2b.self)
+}

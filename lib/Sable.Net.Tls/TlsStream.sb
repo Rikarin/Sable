@@ -237,9 +237,9 @@ public final class TlsStream<S: AsyncReader & AsyncWriter>: AsyncReader, AsyncWr
         return true
     }
 
-    /// A read's bytes at first, enough for a handshake's, and once reads
-    /// fill that, a whole record's.
-    static var firstReadByteCount: Int => 4096
+    /// A read's bytes at first, enough for a ClientHello and a flight of a
+    /// certificate or two, and once a read fills that, a whole record's.
+    static var firstReadByteCount: Int => 1024
     static var readByteCount: Int => 5 + TlsRecordCipher.maximumContentByteCount + 256
 
     fn flush() async throws(TlsError) {

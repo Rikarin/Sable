@@ -49,6 +49,19 @@ public protocol HashFunction: Sendable {
     /// ```
     mutating fn finalizeAndReset() -> Digest
 
+    /// As `finalizeAndReset()`, the digest written into the first
+    /// `digestByteCount` bytes of 'digest' instead: the library's functions
+    /// allocate nothing for it.
+    ///
+    /// ```sable
+    /// var hash = Sha256()
+    /// hash.update(utf8: "abc")
+    /// var digest = U8[>..](repeating: 0, count: 40)
+    /// hash.finalizeAndReset(into: &digest[4..<40])
+    /// assert(digest[4..<36].toArray() == Sha256.hash(utf8: "abc").bytes && digest[0] == 0)
+    /// ```
+    mutating fn finalizeAndReset(into digest: inout U8[:])
+
     /// PBKDF2's inner loop: HMAC of the first block, HMAC of that, and so
     /// on to as many blocks as there are iterations, all combined by
     /// exclusive or. The functions given have HMAC's two padded keys hashed.
@@ -62,6 +75,17 @@ extension HashFunction {
         let digest = self.finalize()
         self = Self()
         return digest
+    }
+
+    public mutating fn finalizeAndReset(into digest: inout U8[:]) {
+        var made = self.finalizeAndReset().bytes
+        precondition(digest.count >= made.count, "a digest of \(made.count) bytes does not fit in \(digest.count)")
+        var i = 0
+        while i < made.count {
+            digest[i] = made[i]
+            i += 1
+        }
+        made.zeroSecurely()
     }
 
     public static fn iterateHmac(inner: Self, outer: Self, first: U8[:], iterations: Int) -> U8[>..] {

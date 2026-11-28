@@ -41,6 +41,13 @@ fn resets<H: HashFunction>(_ type: H.Type) {
         // A copy made before is not reset.
         assertEqual(copy.finalize(), digest)
         assertEqual(H.hash(bytes), digest)
+        // Into bytes given, from the start of them, as finalizeAndReset makes it.
+        var again = copy
+        var into = U8[>..](repeating: 0xAA, count: H.digestByteCount + 3)
+        again.finalizeAndReset(into: &into[1..<into.count])
+        assertEqual(into[1..<1 + H.digestByteCount].toArray(), digest.bytes)
+        expect(into[0] == 0xAA && into[into.count - 1] == 0xAA)
+        assertEqual(again.finalize(), empty)
     }
 }
 

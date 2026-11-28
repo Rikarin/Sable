@@ -40,6 +40,11 @@ public struct Sha512: HashFunction {
         return digest
     }
 
+    public mutating fn finalizeAndReset(into digest: inout U8[:]) {
+        storeBigEndian64(state.finishInPlace(), count: 64, into: &digest)
+        state.restart(Sha512.initialState)
+    }
+
     public static fn iterateHmac(inner: Sha512, outer: Sha512, first: U8[:], iterations: Int) -> U8[>..] {
         return BlockState<Sha512Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
     }

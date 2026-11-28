@@ -34,6 +34,11 @@ extension Insecure {
             return digest
         }
 
+        public mutating fn finalizeAndReset(into digest: inout U8[:]) {
+            storeBigEndian32(state.finishInPlace(), count: 20, into: &digest)
+            state.restart(Insecure.Sha1.initialState)
+        }
+
         public static fn iterateHmac(inner: Insecure.Sha1, outer: Insecure.Sha1, first: U8[:], iterations: Int) -> U8[>..] {
             return BlockState<Sha1Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
         }

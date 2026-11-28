@@ -273,7 +273,7 @@ public struct TlsServerConnection: Sendable {
 
     /// A HelloRetryRequest for a share of the group (RFC 8446 §4.1.4), and
     /// the transcript begun again with the hash of the first ClientHello.
-    mutating fn askAgain(_ hello: ClientHello, _ message: U8[:], suite: TlsCipherSuite, group: Int) throws(TlsError) {
+    mutating fn askAgain(_ hello: ClientHello, _ message: U8[:], suite: TlsCipherSuite, group: TlsGroup) throws(TlsError) {
         var body: U8[>..] = [3, 3]
         body.append(contentsOf: TlsClientConnection.retryRandom)
         appendVector(&body, hello.sessionId, 1)
@@ -282,7 +282,7 @@ public struct TlsServerConnection: Sendable {
         var extensions: U8[>..] = []
         appendExtension(&extensions, 43, [3, 4])
         var share: U8[>..] = []
-        appendNumber(&share, group, 2)
+        appendNumber(&share, group.code, 2)
         appendExtension(&extensions, 51, share)
         appendVector(&body, extensions, 2)
         let request = handshakeMessage(2, body)
@@ -295,7 +295,7 @@ public struct TlsServerConnection: Sendable {
         transcript.append(contentsOf: hash)
         transcript.append(contentsOf: request)
         retriedSuite = suite
-        retriedGroup = group
+        retriedGroup = group.code
     }
 
     /// The server's flight, ServerHello to Finished, for the hello: the
@@ -329,10 +329,10 @@ public struct TlsServerConnection: Sendable {
                 takes.append(offered)
             }
         }
-        var chosenGroup: Int? = none
+        var chosenGroup: TlsGroup? = none
         for each in options.groups {
             if chosenGroup == none && takes.contains(each.code) {
-                chosenGroup = each.code
+                chosenGroup = each
             }
         }
         guard let group = chosenGroup else {
@@ -340,7 +340,7 @@ public struct TlsServerConnection: Sendable {
         }
         var clientShare: U8[>..]? = none
         for (offered, key) in hello.keyShares {
-            if clientShare == none && offered == group {
+            if clientShare == none && offered == group.code {
                 clientShare = key
             }
         }
@@ -368,7 +368,7 @@ public struct TlsServerConnection: Sendable {
                 share = each
             }
         }
-        let own = share ?? (group == 0x001D ? TlsKeyShare.X25519(X25519PrivateKey.generate()) : TlsKeyShare.P256(EcdhPrivateKey<Sable.Crypto.P256>.generate()))
+        let own = share ?? TlsKeyShare.generate(group)
         let shared = try own.sharedSecret(with: clientKey)
         let resumed = try resumption(hello, message, earlier, suite: suite)
         isResumed = resumed != none
@@ -382,7 +382,7 @@ public struct TlsServerConnection: Sendable {
         body.append(0)
         var extensions: U8[>..] = []
         var keyShare: U8[>..] = []
-        appendNumber(&keyShare, group, 2)
+        appendNumber(&keyShare, group.code, 2)
         appendVector(&keyShare, own.publicBytes, 2)
         appendExtension(&extensions, 51, keyShare)
         appendExtension(&extensions, 43, [3, 4])

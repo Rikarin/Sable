@@ -60,7 +60,7 @@ public struct TlsClientConnection: Sendable {
 
     /// The suite of the HelloRetryRequest, once one has come.
     var retriedSuite: TlsCipherSuite? = none
-    var retriedGroup: Int = 0
+    var retriedGroup: TlsGroup? = none
     var retriedCookie: U8[>..]? = none
 
     /// The suite the server chose; none before its ServerHello.
@@ -85,10 +85,10 @@ public struct TlsClientConnection: Sendable {
     public var isClosedForWriting: Bool => records.isClosedForWriting
 
     /// A client of the host, its ClientHello ready to be taken: a key share
-    /// of X25519, P-256 named as the other group it takes, and a session of
-    /// the host from the options' cache, if it has one.
+    /// of the options' first group, the others named as groups it takes,
+    /// and a session of the host from the options' cache, if it has one.
     public init(host: String, options: TlsClientOptions = TlsClientOptions()) {
-        let shares: TlsKeyShare[>..] = [.X25519(X25519PrivateKey.generate())]
+        let shares: TlsKeyShare[>..] = [TlsKeyShare.generate(TlsClientConnection.groups(options)[0])]
         let time = options.time ?? UtcDateTime.now()
         let session = options.sessionCache?.take(host: host, at: time)
         let hello = TlsClientConnection.clientHello(host: host, options: options, keyShares: shares, session: session, at: time)
@@ -305,16 +305,16 @@ public struct TlsClientConnection: Sendable {
             throw TlsError.Failed(.missingExtension, reason: "a ServerHello with no key share")
         }
         if isRetry {
-            if group != 0x001D && group != 0x0017 {
+            guard let asked = TlsGroup.of(code: group), TlsClientConnection.groups(options).contains(asked) else {
                 throw TlsError.Failed(.illegalParameter, reason: "a HelloRetryRequest for group \(group), which was not offered")
             }
             for each in keyShares {
-                if each.group == group {
+                if each.group == asked {
                     throw TlsError.Failed(.illegalParameter, reason: "a HelloRetryRequest for group \(group), of which a share was sent")
                 }
             }
             retriedSuite = suite
-            retriedGroup = group
+            retriedGroup = asked
             retriedCookie = cookie
             if let session = offeredSession, session.cipherSuite.hashAlgorithm != suite.hashAlgorithm {
                 offeredSession = none
@@ -323,7 +323,7 @@ public struct TlsClientConnection: Sendable {
         }
         var secret: SymmetricKey? = none
         for each in keyShares {
-            if each.group == group {
+            if each.group.code == group {
                 secret = try each.sharedSecret(with: key)
             }
         }
@@ -352,7 +352,7 @@ public struct TlsClientConnection: Sendable {
     /// server's cookie, after a transcript whose first ClientHello is its
     /// hash.
     mutating fn retry(_ request: U8[>..]) throws(TlsError) {
-        let share: TlsKeyShare = retriedGroup == 0x001D ? .X25519(X25519PrivateKey.generate()) : .P256(EcdhPrivateKey<Sable.Crypto.P256>.generate())
+        let share = TlsKeyShare.generate(retriedGroup!)
         keyShares = [share]
         let hash = retriedSuite!.hashAlgorithm.digest(of: transcript).bytes
         var first = TlsReader(transcript[4..<transcript.count], "the first ClientHello")
@@ -370,7 +370,7 @@ public struct TlsClientConnection: Sendable {
             }
             if type == 51 {
                 var shares: U8[>..] = []
-                appendNumber(&shares, share.group, 2)
+                appendNumber(&shares, share.group.code, 2)
                 appendVector(&shares, share.publicBytes, 2)
                 var list: U8[>..] = []
                 appendVector(&list, shares, 2)
@@ -620,6 +620,9 @@ public struct TlsClientConnection: Sendable {
     /// The ClientHello this client sends: TLS 1.3 alone, the options'
     /// suites and protocols, the key shares, the host's name unless it is
     /// an address, and the session, if any, with its binder.
+    /// The groups the options offer: X25519 alone where they name none.
+    static fn groups(_ options: TlsClientOptions) -> TlsGroup[>..] => options.groups.isEmpty ? [.X25519] : options.groups
+
     static fn clientHello(host: String, options: TlsClientOptions, keyShares: TlsKeyShare[:], session: TlsSession?, at time: UtcDateTime) -> U8[>..] {
         var body: U8[>..] = [3, 3]
         body.append(contentsOf: SecureRandom.bytes(32))
@@ -638,11 +641,17 @@ public struct TlsClientConnection: Sendable {
             appendVector(&list, name, 2)
             appendExtension(&extensions, 0, list)
         }
-        appendExtension(&extensions, 10, [0, 4, 0, 0x1D, 0, 0x17])
+        var groups: U8[>..] = []
+        for group in TlsClientConnection.groups(options) {
+            appendNumber(&groups, group.code, 2)
+        }
+        var groupList: U8[>..] = []
+        appendVector(&groupList, groups, 2)
+        appendExtension(&extensions, 10, groupList)
         appendExtension(&extensions, 13, signatureAlgorithms())
         var shares: U8[>..] = []
         for share in keyShares {
-            appendNumber(&shares, share.group, 2)
+            appendNumber(&shares, share.group.code, 2)
             appendVector(&shares, share.publicBytes, 2)
         }
         var shareList: U8[>..] = []

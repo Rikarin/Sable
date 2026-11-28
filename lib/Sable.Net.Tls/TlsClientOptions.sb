@@ -24,6 +24,11 @@ public struct TlsClientOptions: Sendable {
     /// The suites offered, the one preferred first.
     public var cipherSuites: TlsCipherSuite[>..] = TlsCipherSuite.all
 
+    /// The groups of the key exchange offered, the one a key share is sent
+    /// for first; a HelloRetryRequest may ask for any other of them. With
+    /// none, X25519 alone.
+    public var groups: TlsGroup[>..] = TlsGroup.all
+
     /// The time certificates are checked at, and sessions' tickets had and
     /// aged at; none is the system's now.
     public var time: UtcDateTime? = none

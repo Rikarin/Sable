@@ -48,7 +48,7 @@ fn errorsSayWhatWentWrong() {
 fn p256SharesAgree() throws {
     let server = EcdhPrivateKey<P256>.generate()
     let share = TlsKeyShare.P256(EcdhPrivateKey<P256>.generate())
-    expect(share.group == 0x17)
+    expect(share.group == .P256 && share.group.code == 0x17)
     let secret = try share.sharedSecret(with: server.publicKey.bytes)
     guard case .P256(let own) = share else {
         expect(false)

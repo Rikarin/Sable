@@ -136,6 +136,37 @@ fn theTracesApplicationDataAndClosureAreTheTraces() throws {
     expect(client.isPeerClosed)
 }
 
+/// The trace's NewSessionTicket, its lifetime set to 'lifetime' seconds and
+/// sealed again under the server's application traffic secret (RFC 8448 §3).
+fn ticketRecord(lifetime: Int) -> U8[>..] {
+    let secret = SymmetricKey(hex("a11af9f05531f856ad47116b45a950328204b4f44bfb6b3a4b4f1f3fcb631643"))
+    var opener = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: secret)
+    let (type, content) = try! opener.open(Rfc8448.newSessionTicketRecord)
+    var changed = content
+    changed.writeU32(U32(lifetime), at: 4, endian: .Big)
+    var sealer = TlsRecordCipher(.Aes128GcmSha256, trafficSecret: secret)
+    return try! sealer.seal(changed, type: type)
+}
+
+@test
+fn aTicketOfALifetimeOverSevenDaysIsRefused() throws {
+    var options = pinned()
+    options.sessionCache = TlsSessionCache()
+    var client = traceClient(options)
+    _ = client.takeOutgoing()
+    try client.receive(joined(Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord))
+    _ = client.takeOutgoing()
+    let error = expectThrows(TlsError.self) { try client.receive(ticketRecord(lifetime: 604801)) }
+    expect(error?.alert == .illegalParameter)
+
+    // Seven days to the second is taken.
+    var taking = traceClient(options)
+    _ = taking.takeOutgoing()
+    try taking.receive(joined(Rfc8448.serverHelloRecord, Rfc8448.serverFlightRecord))
+    _ = taking.takeOutgoing()
+    try taking.receive(ticketRecord(lifetime: 604800))
+}
+
 @test
 fn recordsSplitAnywhereAreTheSame() throws {
     var client = traceClient(pinned())
@@ -375,6 +406,24 @@ fn aHelloRetryRequestForAGroupSharedOrNotOfferedIsRefused(_ group: Int) {
     var client = TlsClientConnection(host: "localhost", options: TlsClientOptions(trust: .Pinned([])))
     _ = client.takeOutgoing()
     let error = expectThrows(TlsError.self) { try client.receive(retryRequest(group: U8(group))) }
+    expect(error?.alert == .illegalParameter)
+}
+
+@test
+fn theClientOffersTheGroupsOfItsOptions() {
+    var options = TlsClientOptions(trust: .Pinned([]))
+    options.groups = [.P256]
+    var client = TlsClientConnection(host: "localhost", options: options)
+    let hello = client.takeOutgoing()
+    // supported_groups of P-256 alone, and a key share of it.
+    expect(holds(hello, [0, 10, 0, 4, 0, 2, 0, 0x17]))
+    expect(holds(hello, [0, 51, 0, 71, 0, 69, 0, 0x17, 0, 65]) && !holds(hello, [0, 0x1D, 0, 32]))
+
+    // A HelloRetryRequest for a group the options leave out is refused.
+    options.groups = [.X25519]
+    var only = TlsClientConnection(host: "localhost", options: options)
+    expect(holds(only.takeOutgoing(), [0, 10, 0, 4, 0, 2, 0, 0x1D]))
+    let error = expectThrows(TlsError.self) { try only.receive(retryRequest(group: 0x17)) }
     expect(error?.alert == .illegalParameter)
 }
 

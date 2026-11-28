@@ -261,6 +261,33 @@ public sealed class ProfileTests {
     ///     and a trap's backtrace names each frame by the function its debug
     ///     information says the frame is in, and the line, as before.
     /// </summary>
+    /// <summary>
+    ///     What a failure of the test below needs to be understood where it
+    ///     fails (Linux CI): each 'inner' symbol's binding and visibility, in
+    ///     the executable and in every object the build made, by readelf, or
+    ///     nm -m on macOS.
+    /// </summary>
+    static string StrippedSymbols(string executable, string root) {
+        var report = new System.Text.StringBuilder();
+        var files = Directory.EnumerateFiles(root, "*.o", SearchOption.AllDirectories).Prepend(executable);
+        foreach (var file in files) {
+            var (tool, arguments) = OperatingSystem.IsLinux() ? ("readelf", new[] { "-sW", file }) : ("nm", new[] { "-m", file });
+            try {
+                using var process = Process.Start(new ProcessStartInfo(tool, arguments) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8())!;
+                var text = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                report.Append("== ").Append(Path.GetRelativePath(root, file)).Append('\n');
+                foreach (var line in text.Split('\n').Where(static l => l.Contains("sable.App.", StringComparison.Ordinal))) {
+                    report.Append(line.Trim()).Append('\n');
+                }
+            } catch (System.ComponentModel.Win32Exception) {
+                report.Append("no ").Append(tool).Append('\n');
+            }
+        }
+
+        return report.ToString();
+    }
+
     [Fact]
     public async Task ABacktraceNamesFramesByTheirDebugInformationWhereTheSymbolsAreStripped() {
         if (!CanBuild || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())) {
@@ -294,7 +321,7 @@ public sealed class ProfileTests {
         using (var nm = Process.Start(new ProcessStartInfo("nm", [dev.Path]) { RedirectStandardOutput = true }.Utf8())!) {
             var symbols = nm.StandardOutput.ReadToEnd();
             nm.WaitForExit();
-            Assert.DoesNotContain("sable.App.inner", symbols, StringComparison.Ordinal);
+            Assert.True(!symbols.Contains("sable.App.inner", StringComparison.Ordinal), $"the program's symbols are still there:\n{StrippedSymbols(dev.Path, fixture.Root)}");
         }
 
         var start = new ProcessStartInfo(dev.Path) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();

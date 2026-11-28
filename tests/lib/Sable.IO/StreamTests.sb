@@ -202,3 +202,57 @@ fn anEmptyStreamHasNoText() throws {
     expect(try empty.readLine() == none)
     assertEqual(try empty.read(), "")
 }
+
+/// An async reader with only `read(upTo:)`, a few bytes at a time: it fills
+/// a slice by `AsyncReader`'s default `read(into:)`.
+final class AsyncTrickle: AsyncReader {
+    var bytes: U8[>..]
+    var position: Int
+    let most: Int
+    var reads: Int
+
+    init(_ bytes: U8[>..], most: Int) {
+        self.bytes = bytes
+        position = 0
+        self.most = most
+        reads = 0
+    }
+
+    fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        reads += 1
+        let take = most < count ? most : count
+        let end = position + take < bytes.count ? position + take : bytes.count
+        let got = bytes[position..<end].toArray()
+        position = end
+        return got
+    }
+}
+
+@test
+fn anAsyncReaderFillsASliceByItsReads() async throws {
+    let reader = AsyncTrickle([1, 2, 3, 4, 5, 6, 7], most: 3)
+    var buffer = U8[>..](repeating: 0, count: 8)
+
+    // A short read fills the start of the slice and leaves the rest.
+    expect(try await reader.read(into: &buffer[2..<7]) == 3)
+    expect(buffer == [0, 0, 1, 2, 3, 0, 0, 0])
+    expect(try await reader.read(into: &buffer[0..<2]) == 2)
+    expect(buffer == [4, 5, 1, 2, 3, 0, 0, 0])
+    expect(try await reader.read(into: &buffer[5..<8]) == 2)
+    expect(buffer == [4, 5, 1, 2, 3, 6, 7, 0])
+
+    // At the end of the stream it fills nothing.
+    expect(try await reader.read(into: &buffer[0..<8]) == 0)
+    expect(buffer == [4, 5, 1, 2, 3, 6, 7, 0])
+    expect(reader.reads == 4)
+}
+
+@test
+fn anEmptySliceIsFilledWithoutAReadOfTheStream() async throws {
+    let reader = AsyncTrickle([9, 8], most: 2)
+    var buffer = U8[>..](repeating: 0, count: 2)
+    expect(try await reader.read(into: &buffer[1..<1]) == 0)
+    expect(reader.reads == 0)
+    expect(try await reader.read(into: &buffer[0..<2]) == 2)
+    expect(buffer == [9, 8])
+}

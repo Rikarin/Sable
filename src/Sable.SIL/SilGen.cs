@@ -4065,18 +4065,31 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     Whether the method is another requirement's, told apart from this
-    ///     one by its labels: a type's 'sleep(until:)' does not implement
-    ///     'sleep(for:)', for which it takes the protocol's default.
+    ///     one by its labels or, where the labels are alike, by its parameters'
+    ///     types: a type's 'sleep(until:)' does not implement 'sleep(for:)',
+    ///     nor its 'visit(_ b: B)' 'visit(_ a: A)', for which it takes the
+    ///     protocol's default.
     /// </summary>
     static bool ImplementsOverload(FunctionSymbol method, FunctionSymbol requirement, NamedTypeSymbol? protocol) =>
-        !SameLabels(method, requirement)
-        && protocol is { TypeKind: TypeKind.Protocol }
-        && protocol.Members.OfType<FunctionSymbol>().Any(other =>
-            !ReferenceEquals(other, requirement)
-            && other.ContainingSymbol is NamedTypeSymbol
-            && other.Name == requirement.Name
-            && other.IsStatic == requirement.IsStatic
-            && SameLabels(other, method));
+        protocol is { TypeKind: TypeKind.Protocol }
+        && (!SameLabels(method, requirement)
+            ? protocol.Members.OfType<FunctionSymbol>().Any(other =>
+                !ReferenceEquals(other, requirement)
+                && other.ContainingSymbol is NamedTypeSymbol
+                && other.Name == requirement.Name
+                && other.IsStatic == requirement.IsStatic
+                && SameLabels(other, method))
+            // Or by its parameters' types, the labels alike: a visitor's
+            // 'visit(_ b: B)' does not implement 'visit(_ a: A)', for which
+            // it takes the protocol's default.
+            : !ParametersFit(method, requirement)
+              && protocol.Members.OfType<FunctionSymbol>().Any(other =>
+                  !ReferenceEquals(other, requirement)
+                  && other.ContainingSymbol is NamedTypeSymbol
+                  && other.Name == requirement.Name
+                  && other.IsStatic == requirement.IsStatic
+                  && SameLabels(other, method)
+                  && ParametersFit(method, other)));
 
     /// <summary>Whether an extension of the protocol has a default for the requirement with its labels.</summary>
     static bool HasLabelledDefault(NamedTypeSymbol? protocol, FunctionSymbol requirement) =>

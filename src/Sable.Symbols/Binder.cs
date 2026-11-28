@@ -5641,6 +5641,9 @@ public sealed partial class Binder {
     static bool IsFunctionSyntax(ExpressionSyntax expression) =>
         Unparenthesised(expression) is ClosureExpressionSyntax or BraceClosureExpressionSyntax or KeyPathExpressionSyntax;
 
+    static bool IsNoneSyntax(ExpressionSyntax expression) =>
+        Unparenthesised(expression) is LiteralExpressionSyntax { Token.Kind: SyntaxKind.NoneKeyword };
+
     static bool IsClosure(ExpressionSyntax expression) =>
         expression switch {
             ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
@@ -5663,8 +5666,9 @@ public sealed partial class Binder {
             DictionaryExpressionSyntax { Entries.Count: 0 } => true,
 
             // Nor is '[.Circle(radius: 1), .Square]' until the parameter
-            // says what its elements' leading dots name.
-            ArrayExpressionSyntax array => array.Elements.Any(IsClosure),
+            // says what its elements' leading dots name. A 'none' among
+            // elements of a type is an optional of it: '[a, none]' a 'G?[]'.
+            ArrayExpressionSyntax array => array.Elements.Any(static e => IsClosure(e) && !IsNoneSyntax(e)) || array.Elements.All(IsNoneSyntax),
 
             ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
 
@@ -8099,14 +8103,18 @@ public sealed partial class Binder {
         }
     }
 
-    /// <summary>The element type of an array of an existential, an optional of one, or such arrays: what an argument's literal is converted to element by element.</summary>
+    /// <summary>
+    ///     The element type of an array of an existential, of an optional, or of
+    ///     such arrays: what an argument's literal is converted to element by
+    ///     element, as no conversion makes a <c>G[]</c> a <c>G?[]</c>.
+    /// </summary>
     static TypeSymbol? BoxedElement(TypeSymbol target) =>
         (target is OptionalTypeSymbol optional ? optional.UnderlyingType : target) is ArrayTypeSymbol { ElementType: var element }
-        && (element is ExistentialTypeSymbol or OptionalTypeSymbol { UnderlyingType: ExistentialTypeSymbol } || BoxedElement(element) is not null)
+        && (element is ExistentialTypeSymbol or OptionalTypeSymbol || BoxedElement(element) is not null)
             ? element
             : null;
 
-    /// <summary>Whether a call's array literal, each element converted, is an array of an existential: <c>[1, "a"]</c> an <c>(any Any)[]</c>.</summary>
+    /// <summary>Whether a call's array literal, each element converted, is an array of an existential or an optional: <c>[1, "a"]</c> an <c>(any Any)[]</c>, <c>[a, b]</c> a <c>G?[]</c>.</summary>
     bool FitsBoxed(BoundExpression argument, TypeSymbol target) =>
         argument is BoundArray { AsWritten.IsDefaultOrEmpty: false } array && BoxedElement(target) is { } element
         && array.AsWritten.All(e => e is BoundArray && BoxedElement(element) is not null
@@ -8115,6 +8123,10 @@ public sealed partial class Binder {
                 // Its error has been reported, but for a literal's of no one type.
                 ? e is not BoundArray
                 : _conversions.Classify(e.Type, element, IsLiteral(e)) is not null);
+
+    /// <summary>A <c>none</c> no context gave a type: an optional of nothing yet.</summary>
+    static bool IsUntypedNone(BoundExpression expression) =>
+        expression.Type is OptionalTypeSymbol { UnderlyingType.IsError: true } && IsNone(expression);
 
     BoundExpression BindArray(ArrayExpressionSyntax syntax, TypeSymbol? expectedType) {
         var isArgument = _arrayArguments.Remove(syntax) && expectedType is null;
@@ -8155,7 +8167,7 @@ public sealed partial class Binder {
         }
 
         if (literalElements) {
-            var others = bound.First(static e => e is not null)!.Type;
+            var others = (bound.FirstOrDefault(static e => e is not null && !IsUntypedNone(e)) ?? bound.First(static e => e is not null)!).Type;
             for (var i = 0; i < bound.Length; i++) {
                 bound[i] ??= BindExpression(syntax.Elements[i], others.IsError ? null : others);
             }
@@ -8199,7 +8211,16 @@ public sealed partial class Binder {
         } else if (elements.IsEmpty) {
             elementType = ErrorTypeSymbol.Instance;
         } else {
-            elementType = elements[0].Type;
+            // '[a, none]' holds a 'G?': the elements that are something say
+            // what, and a 'none' among them makes it optional.
+            elementType = (elements.FirstOrDefault(static e => !IsUntypedNone(e)) ?? elements[0]).Type;
+            if (elementType is OptionalTypeSymbol { UnderlyingType.IsError: false } || !elementType.IsError && elements.Any(IsUntypedNone)) {
+                elementType = elementType as OptionalTypeSymbol ?? new OptionalTypeSymbol(elementType);
+                var typed = elementType;
+                elements = [..elements.Select(e => IsUntypedNone(e) ? BindExpression((ExpressionSyntax)e.Syntax, typed) : e)];
+                written = elements;
+            }
+
             foreach (var element in elements) {
                 if (element.Type.Equals(elementType)) {
                     continue;

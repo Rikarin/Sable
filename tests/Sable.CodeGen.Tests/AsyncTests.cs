@@ -508,6 +508,52 @@ public sealed class AsyncTests {
             """).Stdout);
     }
 
+    /// <summary>
+    ///     Nor by its overload of the same labels for another requirement's
+    ///     parameter types: a visitor's 'visit(_ b: B)' is not its 'visit(_ a: A)'.
+    /// </summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AnOverloadOfOtherParameterTypesDoesNotStandInForADefault(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal("1\n1\n11\n", AssertAgree("""
+            module Test
+            struct A { let x: Int }
+            struct B { let y: String }
+            protocol Visitor {
+                mutating fn visit(_ a: A) -> Bool
+                mutating fn visit(_ b: B) -> Bool
+            }
+            extension Visitor {
+                mutating fn visit(_ a: A) -> Bool { return true }
+                mutating fn visit(_ b: B) -> Bool { return true }
+                mutating fn walk() -> Int {
+                    var n = 0
+                    if visit(A { x: 1 }) { n += 1 }
+                    if visit(B { y: "b" }) { n += 10 }
+                    return n
+                }
+            }
+            struct OnlyB: Visitor {
+                var seen = 0
+                mutating fn visit(_ b: B) -> Bool {
+                    seen += 1
+                    return false
+                }
+            }
+            struct Neither: Visitor { }
+            @main
+            fn main() {
+                var v = OnlyB()
+                print(v.walk())
+                print(v.seen)
+                var w = Neither()
+                print(w.walk())
+            }
+            """).Stdout);
+    }
+
     /// <summary>An initialiser of a constrained extension settles the type parameters of the type it makes.</summary>
     [Fact]
     public void AConstrainedExtensionsInitialiserSettlesItsType() =>

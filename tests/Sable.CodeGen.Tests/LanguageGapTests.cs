@@ -826,6 +826,85 @@ public sealed class LanguageGapTests {
             }
             """).Stdout);
 
+    /// <summary>
+    ///     An array literal passed where the elements are optional is converted
+    ///     element by element, as no conversion makes a <c>G[]</c> a <c>G?[]</c>;
+    ///     an overload of the elements as they are still costs less.
+    /// </summary>
+    [Fact]
+    public void AnArrayLiteralTakesAParametersOptionalElements() =>
+        Assert.Equal(
+            """
+            2 3
+            some 2 1
+            nested 3
+            maybe 2
+            exact 2
+            optional 2
+            held 2 1
+
+            """,
+            Programs.AssertAgree("""
+            module Optionals
+
+            final class G {
+                let n: Int
+
+                init(_ n: Int) {
+                    self.n = n
+                }
+            }
+
+            fn count(_ xs: G?[>..]) -> Int {
+                return xs.count
+            }
+
+            fn present(_ xs: G?[]) -> Int {
+                var n = 0
+                for x in xs {
+                    if x != none {
+                        n += 1
+                    }
+                }
+                return n
+            }
+
+            fn rows(_ xs: G?[>..][>..]) -> Int {
+                var n = 0
+                for row in xs {
+                    n += row.count
+                }
+                return n
+            }
+
+            fn maybe(_ xs: G?[>..]?) -> Int {
+                return xs?.count ?? -1
+            }
+
+            fn pick(_ xs: G[>..]) -> String {
+                return "exact \(xs.count)"
+            }
+
+            fn pick(_ xs: G?[>..]) -> String {
+                return "optional \(xs.count)"
+            }
+
+            @main
+            fn main() {
+                let a = G(1)
+                let b = G(2)
+                print("\(count([a, b])) \(count([a, none, b]))")
+                print("some \(present([a, b])) \(present([none, b]))")
+                print("nested \(rows([[a, b], [a]]))")
+                print("maybe \(maybe([a, b]))")
+                print(pick([a, b]))
+                print(pick([none, b]))
+                let held = [a, none, b]
+                let ints = [1, none]
+                print("held \(present(held)) \(ints[0]! + (ints[1] ?? 0))")
+            }
+            """).Stdout);
+
     /// <summary>A leading dot is for the overload whose parameter has a member of its name: an Int has no '.All'.</summary>
     [Fact]
     public void ALeadingDotIsForTheOverloadWhoseTypeHasTheMember() =>

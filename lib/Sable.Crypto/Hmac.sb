@@ -69,7 +69,7 @@ public struct Hmac<H: HashFunction>: Sendable {
     public fn finalize() -> Digest {
         var end = outer
         end.update(inner.finalize().bytes)
-        return end.finalize()
+        return end.finalizeAndReset()
     }
 
     /// The code of the bytes, at once.

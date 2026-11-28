@@ -48,13 +48,15 @@ public struct Hkdf<H: HashFunction> {
         var block: U8[>..] = []
         var at = 0
         var counter = 1
+        var counted: U8[1] = [0]
         while at < byteCount {
             var code = keyed
             code.update(block)
             code.update(info)
-            code.update([counter unchecked as U8])
+            counted[0] = counter unchecked as U8
+            code.update(counted)
             block.zeroSecurely()
-            block = code.finalize().bytes
+            block = code.spend().bytes
             let taken = block.count < byteCount - at ? block.count : byteCount - at
             unsafe {
                 store(block[..<taken], at: derived.address + at)

@@ -409,7 +409,7 @@ fn opensslsClientSendsItsCertificateToTheServer(_ kind: String) async throws {
 
 /// `s_client` sends a share of its first group alone; a server that
 /// prefers another, or takes no other, asks it for a share of that.
-@test(arguments: [("P-256:X25519", "X25519", "X25519"), ("X25519:P-256", "P-256", "ECDH, prime256v1")])
+@test(arguments: [("P-256:X25519", "X25519", "X25519"), ("X25519:P-256", "P-256", "prime256v1|P-256|secp256r1")])
 fn theServerAsksOpensslsClientForAnotherShare(_ offered: String, _ taken: String, _ key: String) async throws {
     try skip(if: !(await hasOpenssl()), "no openssl program to test against")
     let pki = TestPki(key: EcdsaPrivateKey<P256>.generate().anyKey)
@@ -421,9 +421,14 @@ fn theServerAsksOpensslsClientForAnotherShare(_ offered: String, _ taken: String
     let server = Task.spawn { () -> String in await pongEach(listener, serving, 1) }
     let (output, well) = try await sClient(directory, listener.port, ["-groups", offered])
     expect(well && output.contains("pong"), output)
-    // OpenSSL 3.2 and later say "Peer Temp Key", 3.0 (as CI's runners have)
-    // "Server Temp Key".
-    expect(output.contains("Peer Temp Key: \(key)") || output.contains("Server Temp Key: \(key)"), output)
+    // The group is named by a line OpenSSL words by version ("Peer Temp Key",
+    // "Server Temp Key", "Negotiated TLS1.3 group"), and the curve by more than
+    // one name: any line of those that names any of the group's names.
+    let names = key.split(separator: '|')
+    let said = output.split(separator: '\n').contains { line in
+        (line.contains("Temp Key") || line.contains("group:")) && names.contains { line.contains($0) }
+    }
+    expect(said, output)
     expect(await server.value == "full ")
     try? directory.remove()
 }

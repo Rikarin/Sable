@@ -1303,7 +1303,7 @@ public sealed partial class LlvmEmitter {
 
     /// <summary>What a box holds — the class a local captured by reference lives in — or null for any other type.</summary>
     static SilType? BoxedType(SilType type) =>
-        type is ClassType { Fields: [("value", var boxed)] } box && box.Name.StartsWith("Box$of$", StringComparison.Ordinal) ? boxed : null;
+        (type as ClassType)?.Boxed;
 
     /// <summary>The LLVM struct an object of a class is: the header, then the fields.</summary>
     static string ObjectType(ClassType type) => ObjectLayout(type).Llvm;

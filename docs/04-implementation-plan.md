@@ -615,8 +615,17 @@ known — a closure value, a protocol requirement, a method an override may
 change, a function without a body — is kept unless the callee's type says
 its parameter is not `@escaping`: `@escaping` is part of the function type
 (SYNTAX.md §17), SilGen records the closures a call only lends on the
-`apply` (`apply [lent 1]`), and a conformance or an override may not add it
-(S3210). A closure made of an `inout` parameter holds what the caller's
+`apply` (`apply [lent 1]`) — a requirement called on a type parameter in
+code compiled once and a call that opens an existential included, from the
+requirement's declared parameters — and a conformance or an override may
+not add it (S3210). An optional closure, `(() -> Int)?`, is always kept.
+In a closure's body what it captured — through its context, a variable it
+shares in a box among it — is rooted in its captures, not the heap: a body
+that keeps any of it in an object, or gives it to a callee that keeps it,
+keeps its captures, and where the closure is made it may capture nothing
+that dies before the heap does. An
+expectation's `#expression` notes no value that holds a reference, in a
+struct's field or an array either. A closure made of an `inout` parameter holds what the caller's
 variable held, and one that took a reference before its region's
 `reset()` may not be called after it. A `var` closures share is a box that
 holds what is put in it, inside the region or out: the closures that

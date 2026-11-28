@@ -58,6 +58,42 @@ public static partial class RootChecker {
     sealed record ValueAnchor(SilValue Value, string Description) : Anchor;
 
     /// <summary>
+    ///     In a closure's body, what it captured: reached through its context,
+    ///     a variable it shares in a box among them. Rooted where the closure
+    ///     was made, which is checked there: a body that keeps any of it in
+    ///     memory that outlives the call keeps its captures
+    ///     (<see cref="KeepsCaptures" />), and the closure may then capture
+    ///     nothing that dies before the heap does.
+    /// </summary>
+    sealed record CapturesAnchor : Anchor {
+        public static readonly CapturesAnchor Instance = new();
+    }
+
+    /// <summary>In <see cref="Escaping" />'s sets, a closure's body that keeps what it captured past its call.</summary>
+    const int KeepsCaptures = -1;
+
+    /// <summary>A closure's body: given its context, an object of no type of its own (<c>$Object</c>), as an argument.</summary>
+    static bool IsClosureBody(SilFunction function) =>
+        function.Blocks.Count > 0 && function.Entry.Arguments.Any(static a => a.Type == SilType.Object);
+
+    /// <summary>
+    ///     In a closure's body, an address of what it captured: a field of its
+    ///     context, or the value of a box one holds.
+    /// </summary>
+    static bool IsCaptured(RefElementAddrInst element, SilFunction function) =>
+        element.Reference switch {
+            UncheckedRefCastInst { Value: SilArgument context } => context.Block == function.Entry && context.Type == SilType.Object,
+            LoadInst { Type: ClassType { Boxed: not null }, Address: RefElementAddrInst field } => IsCaptured(field, function),
+            LoadBorrowInst { Type: ClassType { Boxed: not null }, Address: RefElementAddrInst field } => IsCaptured(field, function),
+            CopyValueInst { Type: ClassType { Boxed: not null }, Value: LoadInst or LoadBorrowInst } copied => copied.Value switch {
+                LoadInst { Address: RefElementAddrInst field } => IsCaptured(field, function),
+                LoadBorrowInst { Address: RefElementAddrInst field } => IsCaptured(field, function),
+                _ => false,
+            },
+            _ => false,
+        };
+
+    /// <summary>
     ///     True for a type whose values may hold a reference: a reference
     ///     itself, an aggregate with one inside, or a closure, whose context
     ///     may have captured one.
@@ -146,7 +182,7 @@ public static partial class RootChecker {
 
         // The closure parameters each function keeps past its call, to a fixed point.
         var escaping = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
-        var takingClosures = module.Functions.Where(static f => f.Blocks.Count > 0 && f.Entry.Arguments.Any(static a => a.Type is ThickFunctionType || a.Type is AddressType { Pointee: var p } && ClosuresOnly(p))).ToList();
+        var takingClosures = module.Functions.Where(static f => f.Blocks.Count > 0 && (f.Entry.Arguments.Any(static a => IsClosureArgument(a.Type)) || IsClosureBody(f))).ToList();
         for (var round = 0; round < takingClosures.Count + 2; round++) {
             var changed = false;
             foreach (var function in takingClosures) {
@@ -267,7 +303,7 @@ public static partial class RootChecker {
 
         // A reference parameter, a region the caller lends and a closure it gives are rooted in the caller.
         for (var i = 0; i < function.Entry.Arguments.Count; i++) {
-            if (function.Entry.Arguments[i].Type is AddressType or InlinePointerType or ThickFunctionType || function.Entry.Arguments[i].Type == SilType.Region) {
+            if (function.Entry.Arguments[i].Type is AddressType or InlinePointerType || IsClosureArgument(function.Entry.Arguments[i].Type) || function.Entry.Arguments[i].Type == SilType.Region) {
                 Add(function.Entry.Arguments[i], [new ParameterAnchor(i)]);
             }
         }
@@ -305,6 +341,10 @@ public static partial class RootChecker {
 
                         case PartialApplyInst { Context: { } context } closure:
                             changed |= Add(closure, Of(context));
+                            break;
+
+                        case RefElementAddrInst element when IsCaptured(element, function):
+                            changed |= Add(element, [CapturesAnchor.Instance]);
                             break;
 
                         case RefElementAddrInst element:
@@ -565,7 +605,7 @@ public static partial class RootChecker {
     /// </summary>
     static bool HoldsOnlyItsOwn(Anchor anchor, SilFunction function) =>
         anchor switch {
-            HeapAnchor => true,
+            HeapAnchor or CapturesAnchor => true,
             LocalAnchor { Slot.ElementType: var element } => element == SilType.Region,
             ParameterAnchor { Index: var i } => i < function.Entry.Arguments.Count && function.Entry.Arguments[i].Type == SilType.Region,
             _ => false,
@@ -573,8 +613,16 @@ public static partial class RootChecker {
 
     /// <summary>A closure the caller gave, which the callee may keep only as the caller says (<see cref="Escaping" />).</summary>
     static bool IsClosureParameter(Anchor anchor, SilFunction function) =>
-        anchor is ParameterAnchor { Index: var i } && i < function.Entry.Arguments.Count
-        && (function.Entry.Arguments[i].Type is ThickFunctionType || function.Entry.Arguments[i].Type is AddressType { Pointee: var p } && ClosuresOnly(p));
+        anchor is ParameterAnchor { Index: var i } && i < function.Entry.Arguments.Count && IsClosureArgument(function.Entry.Arguments[i].Type);
+
+    /// <summary>
+    ///     A closure given as an argument: one, '(() -> Int)?' (which is
+    ///     always '@escaping'), or a variable of closures given by address.
+    /// </summary>
+    static bool IsClosureArgument(SilType type) =>
+        type is ThickFunctionType
+        || TypeMetadata.IsOptional(type) && ((EnumType)type).Cases[0].Payload is ThickFunctionType
+        || type is AddressType { Pointee: var p } && ClosuresOnly(p);
 
     /// <summary>The caller's storage, given by address ('inout', '&amp;'): what is in it, the caller put there.</summary>
     static bool IsStorageParameter(Anchor anchor, SilFunction function) =>
@@ -599,9 +647,10 @@ public static partial class RootChecker {
             case StoreInst store when HoldsReference(store.Value.Type) && !IntoVariable(store, contexts):
                 yield return (store, store.Address, store.Value);
                 break;
-            case BuiltinInst { Name: var name, Operands: [{ Type: AddressType { Pointee: var array } } at, ..] } builtin
-                when name.StartsWith("array_", StringComparison.Ordinal) && HoldsReference(array) && RootSlot(at) is null
-                     && !(at is RefElementAddrInst boxed && contexts.Of(boxed.Reference) is not null):
+            // An array changed where it is (what SharedStorage says of the builtin): what it is given goes in.
+            case BuiltinInst builtin when SharedStorage.AccessOf(builtin) is ({ Type: AddressType { Pointee: var array } } at, true)
+                                          && HoldsReference(array) && RootSlot(at) is null
+                                          && !(at is RefElementAddrInst boxed && contexts.Of(boxed.Reference) is not null):
                 foreach (var value in builtin.Operands.Skip(1).Where(static o => o.Type is not AddressType && HoldsReference(o.Type))) {
                     yield return (instruction, at, value);
                 }
@@ -613,26 +662,32 @@ public static partial class RootChecker {
     /// <summary>
     ///     The closure parameters a function keeps past its call: stores into
     ///     an object, a region or a global, or gives to a function that keeps
-    ///     them. What such a closure captured must outlive any call.
+    ///     them. What such a closure captured must outlive any call. Of a
+    ///     closure's body, <see cref="KeepsCaptures" /> too when it keeps what
+    ///     it captured so.
     /// </summary>
     static HashSet<int> Escaping(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors, Dictionary<string, HashSet<int>> escaping) {
         var kept = new HashSet<int>();
         var contexts = Contexts(function);
-        void Keep(SilValue value) {
+        void Keep(SilValue value, bool captures = true) {
             foreach (var anchor in anchors.GetValueOrDefault(value) ?? []) {
                 if (IsClosureParameter(anchor, function)) {
                     kept.Add(((ParameterAnchor)anchor).Index);
+                } else if (anchor is CapturesAnchor && captures) {
+                    kept.Add(KeepsCaptures);
                 }
             }
         }
 
         foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
             // What came from the caller's storage, put back there ('inout' written
-            // back), is not kept: the caller's variable holds it as it did.
+            // back), is not kept: the caller's variable holds it as it did. What
+            // is put in a variable the closure captured lives as its captures do.
             foreach (var (_, address, value) in Puts(instruction, contexts)) {
-                if (anchors.GetValueOrDefault(address) is not { Count: > 0 } into || !into.All(a => IsStorageParameter(a, function))
+                var into = anchors.GetValueOrDefault(address);
+                if (into is not { Count: > 0 } || !into.All(a => IsStorageParameter(a, function))
                     || !(anchors.GetValueOrDefault(value) ?? []).All(into.Contains)) {
-                    Keep(value);
+                    Keep(value, captures: into is not { Count: > 0 } || !into.All(static a => a is CapturesAnchor));
                 }
             }
 
@@ -657,6 +712,12 @@ public static partial class RootChecker {
     ///     conformance may not add '@escaping' (S3210).
     /// </summary>
     static (string? Keeper, List<SilValue> Arguments) KeptArguments(SilInstruction instruction, SilFunction function, Dictionary<string, HashSet<int>> escaping) {
+        // A closure whose body keeps what it captured: its context is kept, as an argument would be.
+        if (instruction is PartialApplyInst { Function: FunctionRefInst { Function: var body }, Context: { } context }
+            && escaping.TryGetValue(body, out var bodyKeeps) && bodyKeeps.Contains(KeepsCaptures)) {
+            return ("its body keeps what it captured past its call", [context]);
+        }
+
         (SilValue? callee, List<SilValue> arguments, ImmutableArray<int> lent) = instruction switch {
             ApplyInst apply => (apply.Callee, apply.Arguments.ToList(), apply.Lent),
             TryApplyInst tryApply => (tryApply.Callee, tryApply.Arguments.ToList(), tryApply.Lent),
@@ -668,11 +729,11 @@ public static partial class RootChecker {
 
         if (callee is FunctionRefInst { Function: var name } && function.Module?.Find(name) is { Blocks.Count: > 0 } known) {
             return escaping.TryGetValue(name, out var keeps)
-                ? ($"'{known.DisplayName ?? known.Name}' keeps it past the call", [..keeps.Order().Where(j => j < arguments.Count).Select(j => arguments[j])])
+                ? ($"'{known.DisplayName ?? known.Name}' keeps it past the call", [..keeps.Order().Where(j => j >= 0 && j < arguments.Count).Select(j => arguments[j])])
                 : (null, []);
         }
 
-        List<SilValue> closures = [..arguments.Where((a, i) => !lent.Contains(i) && (a.Type is ThickFunctionType || a.Type is AddressType { Pointee: var p } && ClosuresOnly(p)))];
+        List<SilValue> closures = [..arguments.Where((a, i) => !lent.Contains(i) && IsClosureArgument(a.Type))];
         return closures.Count == 0
             ? (null, [])
             : (callee switch {
@@ -729,7 +790,7 @@ public static partial class RootChecker {
         // a closure captures it: the variable holds only that box.
         var boxed = new Dictionary<AllocStackInst, AllocRefInst?>();
         foreach (var store in instructions.OfType<StoreInst>()) {
-            if (store.Address is AllocStackInst { ElementType: ClassType { Name: var slotName } } slot && slotName.StartsWith("Box$of$", StringComparison.Ordinal)) {
+            if (store.Address is AllocStackInst { ElementType: ClassType { Boxed: not null } } slot) {
                 boxed[slot] = (store.Value is CopyValueInst copied ? copied.Value : store.Value) is AllocRefInst made
                               && (!boxed.TryGetValue(slot, out var earlier) || ReferenceEquals(earlier, made))
                     ? made
@@ -745,8 +806,7 @@ public static partial class RootChecker {
 
         foreach (var store in instructions.OfType<StoreInst>()) {
             if (store.Address is RefElementAddrInst { Reference: AllocRefInst context } && contexts.Contains(context)
-                && contexts.Box(store.Value) is { Type: ClassType { Name: var name } } box
-                && name.StartsWith("Box$of$", StringComparison.Ordinal)) {
+                && contexts.Box(store.Value) is { Type: ClassType { Boxed: not null } } box) {
                 contexts.Add(box);
             }
         }
@@ -939,14 +999,20 @@ public static partial class RootChecker {
             foreach (var (instruction, address, value) in block.Instructions.SelectMany(i => Puts(i, contexts))) {
                 var destination = anchors.GetValueOrDefault(address) ?? [];
                 var heap = destination.Contains(HeapAnchor.Instance);
+                var captured = destination.Count > 0 && destination.All(static a => a is CapturesAnchor);
                 foreach (var anchor in anchors.GetValueOrDefault(value) ?? []) {
-                    // A closure parameter kept is the caller's to check (CheckEscapingClosures).
-                    if (destination.Contains(anchor) && !(heap && anchor is not HeapAnchor) || IsClosureParameter(anchor, function)) {
+                    // A closure parameter kept is the caller's to check, and what a
+                    // closure captured is checked where it is made (CheckEscapingClosures).
+                    // A variable it captured outlives its call, as the heap does.
+                    if (destination.Contains(anchor) && !(heap && anchor is not HeapAnchor) || IsClosureParameter(anchor, function)
+                        || anchor is CapturesAnchor && heap || captured && anchor is HeapAnchor) {
                         continue;
                     }
 
                     var into = heap
                         ? "an object's field, which may outlive it"
+                        : captured
+                        ? "a variable the closure captured, which outlives its call"
                         : destination.OfType<LocalAnchor>().FirstOrDefault() is { } region
                             ? Describe(region.Slot, function)
                             : destination.OfType<ParameterAnchor>().FirstOrDefault() is { } lent
@@ -955,6 +1021,7 @@ public static partial class RootChecker {
                     var root = anchor switch {
                         LocalAnchor local => Describe(local.Slot, function),
                         ParameterAnchor parameter => $"parameter '{(parameter.Index < function.ParameterNames.Count ? function.ParameterNames[parameter.Index] : "?")}'",
+                        CapturesAnchor => "what the closure captured",
                         _ => "the heap",
                     };
                     diagnostics.Error(

@@ -442,6 +442,21 @@ public sealed class RegionTests {
                           fn wrap(_ f: inout () -> Int) -> () -> Int {
                               return { f() + 1 }
                           }
+
+                          class MaybeHolder {
+                              var kept: (() -> Int)? = none
+                              fn hold(_ f: (() -> Int)?) {
+                                  kept = f
+                              }
+                          }
+
+                          fn holdMaybe(_ h: MaybeHolder, _ f: (() -> Int)?) {
+                              h.kept = f
+                          }
+
+                          fn peekWith<T: Peeker>(_ t: T, _ f: () -> Int) -> Int {
+                              return t.peek(f)
+                          }
                           """;
 
     const string InRegion = "region a {\n    let n = a.alloc(Node { value: 5, label: \"x\" })\n";
@@ -475,6 +490,15 @@ public sealed class RegionTests {
     [InlineData(GenericsMode.Specialised, "let t = KeepingTaker()\nlet taker: any Taker = t\n" + InRegion + "    taker.take({ n.value })\n}\nprint(t.kept())", "and the protocol requirement called here may keep it past the call")]
     [InlineData(GenericsMode.Specialised, "let c: Caller = LoudCaller()\n" + InRegion + "    c.hold({ n.value })\n}\nprint(c.kept())", "may keep it past the call (its parameter is '@escaping')")]
     [InlineData(GenericsMode.Unspecialised, "let c: Caller = LoudCaller()\n" + InRegion + "    c.hold({ n.value })\n}\nprint(c.kept())", "may keep it past the call (its parameter is '@escaping')")]
+    // An optional closure, which may always be kept: by a function of the module or a closure value.
+    [InlineData(GenericsMode.Specialised, "let h = MaybeHolder()\n" + InRegion + "    holdMaybe(h, { n.value })\n}\nprint(h.kept!())", "and 'Test.holdMaybe' keeps it past the call")]
+    [InlineData(GenericsMode.Unspecialised, "let h = MaybeHolder()\n" + InRegion + "    holdMaybe(h, { n.value })\n}\nprint(h.kept!())", "and 'Test.holdMaybe' keeps it past the call")]
+    [InlineData(GenericsMode.Specialised, "let h = MaybeHolder()\nlet k: ((() -> Int)?) -> () = h.hold\n" + InRegion + "    k({ n.value })\n}\nprint(h.kept!())", "and the closure called here may keep it past the call")]
+    // A closure whose body keeps what it captured, a variable it shares or a value, in an object.
+    [InlineData(GenericsMode.Specialised, "let keeper = Keeper()\n" + InRegion + "    var f: () -> Int = { n.value }\n    f = { n.value + 1 }\n    let g = { keeper.kept = f }\n    g()\n}\nprint(keeper.kept())", "and its body keeps what it captured past its call")]
+    [InlineData(GenericsMode.Unspecialised, "let keeper = Keeper()\n" + InRegion + "    var f: () -> Int = { n.value }\n    f = { n.value + 1 }\n    let g = { keeper.kept = f }\n    g()\n}\nprint(keeper.kept())", "and its body keeps what it captured past its call")]
+    [InlineData(GenericsMode.Specialised, "let keeper = Keeper()\n" + InRegion + "    let f: () -> Int = { n.value }\n    let g = { keeper.kept = f }\n    g()\n}\nprint(keeper.kept())", "and its body keeps what it captured past its call")]
+    [InlineData(GenericsMode.Specialised, "let keeper = Keeper()\n" + InRegion + "    let f: () -> Int = { n.value }\n    let g = { { keeper.kept = f }() }\n    g()\n}\nprint(keeper.kept())", "and its body keeps what it captured past its call")]
     // An array in a field of a variable, appended to there or through 'inout'.
     [InlineData(GenericsMode.Specialised, "var s = Bag(items: [])\n" + InRegion + "    s.items.append(n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
     [InlineData(GenericsMode.Unspecialised, "var s = Bag(items: [])\n" + InRegion + "    s.items.append(n)\n}\nprint(s.items[0].value)", "this reference refers to region 'a', which is gone — the region ended")]
@@ -501,7 +525,7 @@ public sealed class RegionTests {
     public void WhatTheRoutesUseInsideTheRegionIsAllowed(GenericsMode mode) {
         using var _ = SilGen.UseGenerics(mode);
         Assert.Equal(
-            "5\n6\n3\n4\n7\n1 5\n2\n6\n7\n5 6 10\n15\n6\n4\n5\n12\n9\n0 2\n1 2\n",
+            "5\n6\n3\n4\n7\n1 5\n2\n6\n7\n5 6 10\n15\n6\n6 6\n4\n5\n12\n9\n11\n11\n0 2\n1 2\n",
             AssertAgree(
                 Program(
                     Declarations + "\n" + Escapes + "\n" + Routes,
@@ -546,6 +570,7 @@ public sealed class RegionTests {
                             let bump = { cur = a.alloc(Node { value: cur.value + 1, label: "b" }) }
                             bump()
                             print(callNow({ cur.value }))
+                            print("\(peekWith(peeker, { n.value })) \(peekWith(Looker(), { n.value }))")
                         }
                         var later: () -> Int = { 0 }
                         for i in 0..<2 {
@@ -561,6 +586,14 @@ public sealed class RegionTests {
                         var heap: (() -> Int)[>..] = [{ 9 }]
                         keepFirst(keeper, &heap)
                         print(keeper.kept())
+                        let heapOnly: () -> Int = { 11 }
+                        let keepIt = { keeper.kept = heapOnly }
+                        keepIt()
+                        print(keeper.kept())
+                        var shared: () -> Int = { 0 }
+                        let setIt = { shared = heapOnly }
+                        setIt()
+                        print(shared())
                         region pool {
                             let mk = { pool.alloc(Node { value: 2, label: "y" }).value }
                             var f = { 0 }

@@ -139,8 +139,7 @@ public static class MoveChecker {
     /// </summary>
     static string? CapturedName(SilValue address) {
         // A box is the one-field class lowering keeps a captured variable in.
-        if (address is not RefElementAddrInst { Field: 0, Reference: { Type: ClassType boxType } box }
-            || !boxType.Name.StartsWith("Box$of$", StringComparison.Ordinal)) {
+        if (address is not RefElementAddrInst { Field: 0, Reference: { Type: ClassType { Boxed: not null } } box }) {
             return null;
         }
 

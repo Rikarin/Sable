@@ -2808,7 +2808,7 @@ public sealed partial class SilGen {
     ///     an object of one field, shared by the frame and every closure.
     /// </summary>
     internal ClassType BoxType(SilType type) {
-        var name = $"Box$of${Sanitise(type.ToString())}";
+        var name = ClassType.BoxPrefix + Sanitise(type.ToString());
         if (_module.FindType(name) is ClassType existing) {
             return existing;
         }
@@ -11961,7 +11961,7 @@ public sealed partial class SilGen {
 
             // The closures the callee's parameters say it does not keep: one argument each.
             var lentArguments = arguments.Count == firstArgument + passed
-                ? Lent(arguments, Enumerable.Range(0, passed).Where(i => i < callee.Parameters.Length && callee.Parameters[i] is { IsEscaping: false, IsCallersStorage: false, IsSynthesized: false, Type: FunctionTypeSymbol }).Select(i => firstArgument + i))
+                ? Lent(arguments, Enumerable.Range(0, passed).Where(i => i < callee.Parameters.Length && LendsClosure(callee.Parameters[i])).Select(i => firstArgument + i))
                 : [];
 
             if (variadicAt >= 0) {
@@ -12590,7 +12590,7 @@ public sealed partial class SilGen {
             List<SilValue> passed = [self, ..arguments, metadata];
             var lent = requirement is null || requirement.Parameters.Length != arguments.Count
                 ? []
-                : Lent(passed, Enumerable.Range(0, arguments.Count).Where(i => requirement.Parameters[i] is { IsEscaping: false, IsCallersStorage: false, IsSynthesized: false, Type: FunctionTypeSymbol }).Select(i => i + 1));
+                : Lent(passed, Enumerable.Range(0, arguments.Count).Where(i => LendsClosure(requirement.Parameters[i])).Select(i => i + 1));
             return Invoke(code, type, passed, borrows, at.Syntax, lent: lent);
         }
 
@@ -12971,10 +12971,19 @@ public sealed partial class SilGen {
             return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk.Name, thunk.Type)), boxed, thick));
         }
 
-        /// <summary>A call through a closure: the closure and the arguments, all borrowed for the call.</summary>
         /// <summary>Of these argument indices, the closures: what a call's <see cref="ApplyInst.Lent" /> names.</summary>
         static ImmutableArray<int> Lent(List<SilValue> arguments, IEnumerable<int> indices) =>
             [..indices.Where(i => i < arguments.Count && arguments[i].Type is ThickFunctionType)];
+
+        /// <summary>
+        ///     Of a callee's parameters, those that only lend the closure they
+        ///     are given: of function type, not '@escaping', declared (one no
+        ///     source declares is taken to keep it) and not the caller's storage.
+        /// </summary>
+        static bool LendsClosure(ParameterSymbol parameter) =>
+            parameter is { IsEscaping: false, IsCallersStorage: false, IsSynthesized: false, Type: FunctionTypeSymbol };
+
+        /// <summary>A call through a closure: the closure and the arguments, all borrowed for the call.</summary>
 
         SilValue? IndirectCall(BoundIndirectCall call) {
             Locate(call.Syntax);

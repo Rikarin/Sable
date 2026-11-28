@@ -3782,8 +3782,11 @@ public sealed partial class SilGen {
                 arguments.Add(self);
             }
 
+            // Where each of the call's arguments is passed: the closures the requirement only lends.
+            var positions = new List<int>();
             for (var i = 0; i < call.Arguments.Length; i++) {
                 SilValue? argument;
+                positions.Add(arguments.Count);
                 if (callee.Parameters[i].Modifier == ParameterModifier.InOut) {
                     argument = Address(call.Arguments[i], borrows);
                 } else if (SilType.IsIndirect(type.Parameters[arguments.Count])) {
@@ -3868,7 +3871,8 @@ public sealed partial class SilGen {
             }
 
             arguments.Add(metadata);
-            var invoked = Invoke(code, type, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot);
+            var lent = Lent(arguments, positions.Where((_, i) => i < callee.Parameters.Length && LendsClosure(callee.Parameters[i])));
+            var invoked = Invoke(code, type, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot, lent: lent);
             if (openedBuffer is not null) {
                 return invoked is null || _current is null ? invoked : openedBuffer;
             }

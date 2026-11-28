@@ -231,16 +231,20 @@ public sealed partial class Binder {
             && !IsLent(type);
 
         /// <summary>
-        ///     A region, or a value holding a reference or one: kept beside the
+        ///     A region, or a value holding a reference or one — in an
+        ///     optional, a tuple, an array or a struct's field: kept beside the
         ///     expression in its capture, an object that may outlive the region
         ///     (docs/04 §3.3), it would be rejected.
         /// </summary>
-        static bool IsLent(TypeSymbol type) =>
+        static bool IsLent(TypeSymbol type, HashSet<TypeSymbol>? seen = null) =>
             type switch {
                 ReferenceTypeSymbol => true,
                 NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Region" } => true,
-                OptionalTypeSymbol optional => IsLent(optional.UnderlyingType),
-                TupleTypeSymbol tuple => tuple.ElementTypes.Any(IsLent),
+                OptionalTypeSymbol optional => IsLent(optional.UnderlyingType, seen),
+                TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => IsLent(e, seen)),
+                ArrayTypeSymbol array => IsLent(array.ElementType, seen),
+                NamedTypeSymbol { TypeKind: TypeKind.Struct } named when (seen ??= []).Add(named) =>
+                    DerivedConformance.StoredFields(named.OriginalDefinition).Any(f => IsLent(TypeSubstitution.For(named).Apply(f.Type), seen)),
                 _ => false,
             };
 

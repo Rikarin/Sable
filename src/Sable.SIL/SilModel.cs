@@ -753,6 +753,16 @@ public sealed class EnumType(string name) : NominalType(name) {
 public sealed class ClassType(string name) : NominalType(name) {
     public List<(string Name, SilType Type)> Fields { get; } = [];
 
+    /// <summary>What a box's name starts with: <c>Box$of$Int</c>, the one a captured <c>Int</c> lives in.</summary>
+    public const string BoxPrefix = "Box$of$";
+
+    /// <summary>
+    ///     What a box holds — the one-field class a local captured by
+    ///     reference lives in, shared by the frame and every closure — or
+    ///     null for any other class.
+    /// </summary>
+    public SilType? Boxed => Fields is [("value", var held)] && Name.StartsWith(BoxPrefix, StringComparison.Ordinal) ? held : null;
+
     public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
 
     public ClassType? Superclass { get; set; }

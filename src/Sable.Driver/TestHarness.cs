@@ -137,20 +137,19 @@ public static partial class TestHarness {
         }
 
         SilModule module;
-        IReadOnlyList<Diagnostic> lowering;
+        IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         if (kind == TestKind.Fuzz) {
             // A library: libFuzzer's main, or the replay one, is the C side's.
-            var (lowered, placed) = SilGen.LowerLibraryByFile(compilation);
-            (module, lowering) = (lowered, [..placed.Select(static d => d.Diagnostic)]);
+            (module, lowering) = SilGen.LowerLibraryByFile(compilation);
         } else {
             var entry = harness[^1].Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().First(static f => f.Identifier.Text == EntryName);
             // Measured, the decisions are marked as they are lowered, for branch coverage.
-            (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null, onDemand: standard);
+            (module, lowering) = SilGen.LowerByFile(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null, onDemand: standard);
         }
 
         module.CheckExclusivity = checkExclusivity;
         if (lowering.Count > 0) {
-            return new(module, null, [..lowering.Select(d => d.Anchor is { } anchor && compilation.TreeOf(anchor) is { } file ? d.Format(file.Text) : Format(d, primary.Text))]);
+            return new(module, null, [..lowering.Select(d => d.Tree is { } file ? d.Diagnostic.Format(file.Text) : Format(d.Diagnostic, primary.Text))]);
         }
 
         var problems = SilVerifier.Verify(module);

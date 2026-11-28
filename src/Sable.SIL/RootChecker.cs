@@ -995,9 +995,19 @@ public static partial class RootChecker {
     static void CheckStores(SilFunction function, Dictionary<SilValue, HashSet<Anchor>> anchors, SourceText source, DiagnosticBag diagnostics) {
         // What a closure captures is held to where the closure goes, not to the heap its context is in.
         var contexts = Contexts(function);
+        var result = function.ParameterNames.IndexOf("$out");
         foreach (var block in function.Blocks) {
             foreach (var (instruction, address, value) in block.Instructions.SelectMany(i => Puts(i, contexts))) {
                 var destination = anchors.GetValueOrDefault(address) ?? [];
+
+                // The indirect result is the caller's variable, given back as a
+                // result is: no region's memory. What is stored there is held
+                // to rule 3 (LocalGenericResult), and to rule 4 where the
+                // caller puts it.
+                if (destination.Count > 0 && destination.All(a => a is ParameterAnchor { Index: var i } && i == result)) {
+                    continue;
+                }
+
                 var heap = destination.Contains(HeapAnchor.Instance);
                 var captured = destination.Count > 0 && destination.All(static a => a is CapturesAnchor);
                 foreach (var anchor in anchors.GetValueOrDefault(value) ?? []) {

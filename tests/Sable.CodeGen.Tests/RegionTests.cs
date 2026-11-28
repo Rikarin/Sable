@@ -336,6 +336,64 @@ public sealed class RegionTests {
         );
     }
 
+    // A generic result compiled once is given back through '$out', the
+    // caller's variable and no region: a closure read out of an object goes
+    // there as it would be returned (Sable.Testing's MockStub.next).
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AGenericResultFromTheHeapIsGivenBackThroughTheCallersVariable(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal(
+            "1\n42\n42\n",
+            AssertAgree(
+                Program(
+                    """
+                    union Answer<A, R, E: Error> {
+                        Value(R)
+                        Failure(E)
+                        Run((A) throws(E) -> R)
+                    }
+
+                    final class Stub<A, R, E: Error> {
+                        let matches: (A) -> Bool
+                        var answers: Answer<A, R, E>[>..]
+                        var at: Int
+
+                        init(_ matches: @escaping (A) -> Bool) {
+                            self.matches = matches
+                            answers = []
+                            at = 0
+                        }
+
+                        fn next() -> Answer<A, R, E> {
+                            let answer = answers[at < answers.count ? at : answers.count - 1]
+                            at += 1
+                            return answer
+                        }
+                    }
+
+                    fn answer<A, R, E: Error>(_ stub: Stub<A, R, E>, _ arguments: A) throws(E) -> R {
+                        match stub.next() {
+                            case .Value(let value) => { return value }
+                            case .Failure(let error) => { throw error }
+                            case .Run(let body) => { return try body(arguments) }
+                        }
+                    }
+                    """,
+                    """
+                        let stub = Stub<Int, Int, Never>({ _ in true })
+                        stub.answers.append(.Value(1))
+                        stub.answers.append(.Run({ x in x + 1 }))
+                        print(answer(stub, 41))
+                        print(answer(stub, 41))
+                        print(answer(stub, 41))
+                    """
+                )
+            ).Stdout
+        );
+    }
+
     // What a closure, a generic passed on, an array in a part of a variable
     // or a reset leaves a closure holding is followed too (#312).
     const string Routes = """

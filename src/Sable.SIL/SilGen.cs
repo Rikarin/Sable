@@ -187,7 +187,7 @@ public sealed partial class SilGen {
     ///     Lowering is only asked of a program that type-checks: a bound tree
     ///     with errors in it is not one it can take.
     /// </remarks>
-    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile" />): a library known to check cleanly.</param>
+    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile(Compilation, bool, Func{SyntaxTree, bool}?)" />): a library known to check cleanly.</param>
     public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation, Func<SyntaxTree, bool>? onDemand = null) {
         var generator = new SilGen(compilation) { _onDemand = onDemand };
         generator.LowerAll();
@@ -198,13 +198,15 @@ public sealed partial class SilGen {
     ///     Lowers every function, starting the program at the one given
     ///     rather than at '@main': what a test or bench build does, whose
     ///     harness is the entry point of a program that may have its own.
+    ///     Each diagnostic with its file, where lowering knows it.
     /// </summary>
     /// <param name="markDecisions">Marks the source's decisions and their outcomes, for branch coverage (<see cref="SilDecision" />).</param>
-    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile" />).</param>
-    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation, FunctionSymbol entryPoint, bool markDecisions = false, Func<SyntaxTree, bool>? onDemand = null) {
+    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile(Compilation, bool, Func{SyntaxTree, bool}?)" />).</param>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation, FunctionSymbol entryPoint, bool markDecisions = false,
+        Func<SyntaxTree, bool>? onDemand = null) {
         var generator = new SilGen(compilation) { _entryOverride = entryPoint, _markDecisions = markDecisions, _onDemand = onDemand };
         generator.LowerAll();
-        return (generator._module, generator.Diagnostics);
+        return (generator._module, generator.PlacedDiagnostics);
     }
 
     FunctionSymbol? _entryOverride;
@@ -282,7 +284,7 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     <see cref="LowerUnit" />, with the file each diagnostic is in where
-    ///     lowering knows it, as <see cref="LowerByFile" /> gives them: what a
+    ///     lowering knows it, as <see cref="LowerByFile(Compilation, bool, Func{SyntaxTree, bool}?)" /> gives them: what a
     ///     program compiled against its libraries' interfaces reports.
     /// </summary>
     public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerUnitByFile(
@@ -301,7 +303,7 @@ public sealed partial class SilGen {
     SilUnit? _unit;
     SilProgram? _program;
 
-    /// <summary>The files whose functions are lowered only where reached (<see cref="LowerByFile" />); null for none.</summary>
+    /// <summary>The files whose functions are lowered only where reached (<see cref="LowerByFile(Compilation, bool, Func{SyntaxTree, bool}?)" />); null for none.</summary>
     Func<SyntaxTree, bool>? _onDemand;
 
     /// <summary>The functions of <see cref="_onDemand" />'s files not reached yet, by name.</summary>

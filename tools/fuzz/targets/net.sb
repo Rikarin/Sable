@@ -1,9 +1,13 @@
 module FuzzNet
 
-// What Sable.Net reads from text: URLs, names and addresses.
+// What Sable.Net reads from text: URLs, names and addresses; and what
+// Sable.Net.Tls reads from the wire: records and handshake messages.
 
 import Sable.Testing
+import Sable.Crypto
+import Sable.Crypto.X509
 import Sable.Net
+import Sable.Net.Tls
 import Sable.Text
 
 /// A URL, on its own and relative to another: what it is written as parses as
@@ -75,4 +79,75 @@ fn addresses(_ data: U8[:]) {
     if let network = try? IpNetwork.parse(text) {
         assert((try? IpNetwork.parse(network.toString())) == network, "a network does not parse as it is written")
     }
+}
+
+/// The bytes given to the connection in two parts, split where the first
+/// byte says: as much as is read, or a fault, after which it takes no
+/// more.
+fn feed(_ data: U8[:], _ receive: (U8[:]) throws(TlsError) -> Void) -> Bool {
+    let cut = data.isEmpty ? 0 : Int(data[0]) % data.count
+    do {
+        try receive(data[0..<cut])
+        try receive(data[cut..<data.count])
+        return true
+    } catch {
+        _ = error.alert
+        _ = error.description()
+        return false
+    }
+}
+
+/// A server's end: what a client sends, records and the handshake messages
+/// in them, from the ClientHello on.
+@fuzz
+fn tlsServer(_ data: U8[:]) throws {
+    let key = PrivateKey.Ed25519(try Ed25519PrivateKey(seed: U8[>..](repeating: 7, count: 32)))
+    let certificate = try CertificateBuilder(subject: DistinguishedName(commonName: "fuzz"), host: "fuzz").selfSigned(with: key)
+    var options = TlsServerOptions(certificateChain: [certificate], privateKey: key)
+    options.applicationProtocols = ["h2"]
+    options.clientAuthentication = .Requested(CertificateVerifier(roots: TrustStore([certificate])))
+    var server = TlsServerConnection(options: options)
+    if !feed(data, { try server.receive($0) }) {
+        // A connection that failed takes nothing more.
+        assert((try? server.receive([22])) == none, "a failed connection read on")
+    }
+    _ = server.takeOutgoing()
+    _ = server.takeReceived()
+}
+
+/// A client's end: what a server answers its ClientHello with.
+@fuzz
+fn tlsClient(_ data: U8[:]) {
+    var options = TlsClientOptions(trust: .Pinned([]))
+    options.applicationProtocols = ["h2"]
+    var client = TlsClientConnection(host: "fuzz", options: options)
+    _ = client.takeOutgoing()
+    if !feed(data, { try client.receive($0) }) {
+        assert((try? client.receive([22])) == none, "a failed connection read on")
+    }
+    _ = client.takeOutgoing()
+}
+
+/// A record opened under a traffic secret, after the first byte, which
+/// picks the suite: refused unless it was sealed so, and what is sealed
+/// opens as it was.
+@fuzz
+fn tlsRecord(_ data: U8[:]) {
+    if data.isEmpty {
+        return
+    }
+    let suite = TlsCipherSuite.all[Int(data[0]) % 3]
+    let secret = SymmetricKey(U8[>..](repeating: 9, count: suite.hashAlgorithm.digestByteCount))
+    var reader = TlsRecordCipher(suite, trafficSecret: secret)
+    _ = try? reader.open(data[1..<data.count])
+    var writer = TlsRecordCipher(suite, trafficSecret: secret)
+    var again = TlsRecordCipher(suite, trafficSecret: secret)
+    let content = data[1..<data.count].count > TlsRecordCipher.maximumContentByteCount ? data[1..<1 + TlsRecordCipher.maximumContentByteCount] : data[1..<data.count]
+    guard let record = try? writer.seal(content, type: .ApplicationData) else {
+        fatalError("a record that does not seal")
+    }
+    guard let (type, opened) = try? again.open(record) else {
+        fatalError("a sealed record that does not open")
+    }
+    assert(type == .ApplicationData && opened == content.toArray(), "a record opens otherwise than it was sealed")
 }

@@ -899,9 +899,12 @@ public static class NativeBuild {
         // link (#300), which GNU ld's --discard-all leaves be — it discards the
         // symbols local in what it is given, and lld those it writes — so they
         // are discarded from the executable, by LLVM's objcopy or binutils'.
+        // Not every hidden one is made local: CI's GNU ld left a closure (the
+        // message of a precondition) GLOBAL HIDDEN in the executable, so every
+        // hidden symbol is made local here first, then the local ones go.
         foreach (var tool in (string[])[Path.Combine(Path.GetDirectoryName(CompilerPath) ?? "", "llvm-objcopy"), "llvm-objcopy", "objcopy"]) {
             try {
-                if (Run(tool, ["--discard-all", executable]).ExitCode == 0) {
+                if (Run(tool, ["--localize-hidden", "--discard-all", executable]).ExitCode == 0) {
                     return;
                 }
             } catch (System.ComponentModel.Win32Exception) {

@@ -128,6 +128,55 @@ public sealed class VectorizationTests {
         Assert.Contains("test.sb:6:9", execution.Stderr, StringComparison.Ordinal);
     }
 
+    const string Fields = """
+                          class Pool {
+                              var bytes: U8[>..] = []
+                              var starts: Int[>..] = []
+
+                              fn total() -> Int {
+                                  var sum = 0
+                                  var i = 0
+                                  while i < starts.count {
+                                      sum = sum + starts[i]
+                                      i += 1
+                                  }
+                                  return sum
+                              }
+
+                              fn same(_ from: Int, _ other: U8[>..], _ start: Int, _ count: Int) -> Bool {
+                                  var j = 0
+                                  while j < count {
+                                      if bytes[from + j] != other[start + j] {
+                                          return false
+                                      }
+                                      j += 1
+                                  }
+                                  return true
+                              }
+                          }
+                          """;
+
+    /// <summary>
+    ///     Loops over arrays in an object's fields, checked once before they
+    ///     run, at an offset too ('bytes[from + j]'): the same results, and
+    ///     where an index is out of range, the trap at the access the loop as
+    ///     written stops at, after what it did before.
+    /// </summary>
+    [Theory]
+    [InlineData("print(pool.total())\n    print(pool.same(2, [3, 4, 3], 0, 3))\n    print(pool.same(1, [3, 4], 0, 2))", "21\ntrue\nfalse\n", null)]
+    [InlineData("print(pool.same(2, [3, 4, 3, 4], 0, 4))", "", "test.sb:19:16")]
+    [InlineData("print(pool.same(0, [3, 4, 3], 0, 4))", "", "test.sb:19:35")]
+    [InlineData("print(pool.same(-1, [3], 0, 1))", "", "test.sb:19:16")]
+    [InlineData("print(pool.same(9223372036854775807, [3], 0, 1))", "", "test.sb:19:16")]
+    [InlineData("pool.starts.append(9223372036854775807)\n    print(pool.total())", "", "test.sb:10:19")]
+    public void LoopsOverFieldsTrapWhereTheyAlwaysDid(string body, string output, string? trap) {
+        var execution = Programs.AssertAgree(Programs.Program(Fields, "    let pool = Pool()\n    pool.bytes = [3, 4, 3, 4, 3]\n    pool.starts = [5, 7, 9]\n    " + body));
+        Assert.Equal(output, execution.Stdout);
+        if (trap is not null) {
+            Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>A loop that starts below zero reads index -1 first, and traps there.</summary>
     [Fact]
     public void ANegativeStartStillTraps() {
@@ -207,6 +256,15 @@ public sealed class VectorizationTests {
                                 i = i + 1
                             }
                         }
+
+                        // Zeros after: a loop of 16 turns or more runs as the copy whose overflow is checked after it.
+                        fn long(_ a: Int[>..]) -> Int[>..] {
+                            var b = a
+                            while b.count < 20 {
+                                b.append(blackBox(0))
+                            }
+                            return b
+                        }
                         """;
 
     /// <summary>Integer sums, differences and element-wise products vectorise, their overflow checked after the loop.</summary>
@@ -233,6 +291,11 @@ public sealed class VectorizationTests {
     [InlineData("print(fall([1, 2, 3], -4611686018427387904))", "-4611686018427387910\n", null)]
     [InlineData("print(sum([9223372036854775807, 1, -1]))", "", "test.sb:5:17")]
     [InlineData("print(fall([1, 2, 3], -9223372036854775806))", "", "test.sb:14:16")]
+    [InlineData("print(sum(long([1099511627776, 1099511627776, -5])))", "2199023255547\n", null)]
+    [InlineData("print(fall(long([1, 2, 3]), -4611686018427387904))", "-4611686018427387910\n", null)]
+    [InlineData("print(sum(long([9223372036854775807, 1, -1])))", "", "test.sb:5:17")]
+    [InlineData("print(fall(long([1, 2, 3]), -9223372036854775806))", "", "test.sb:14:16")]
+    [InlineData("print(sum(long([5, -2, 7])))", "10\n", null)]
     public void ARunningTotalTrapsWhereItAlwaysDid(string body, string output, string? trap) {
         var execution = Programs.AssertAgree(Programs.Program(Sums, "    " + body));
         Assert.Equal(output, execution.Stdout);
@@ -258,6 +321,122 @@ public sealed class VectorizationTests {
         Assert.Equal("", execution.Stdout);
         Assert.Contains("integer overflow", execution.Stderr, StringComparison.Ordinal);
         Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+
+        // Long enough to run as the copy.
+        execution = Programs.AssertAgree(Programs.Program(Sums, $"    var c = long([0, 0, 0, 0])\n    scaled(long({a}), long({b}), long({d}), &c)\n    print(c[0])"));
+        Assert.Equal("", execution.Stdout);
+        Assert.Contains("integer overflow", execution.Stderr, StringComparison.Ordinal);
+        Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+    }
+
+    const string Products = """
+                            fn dot(_ a: F64[:], _ b: F64[:]) -> F64 {
+                                var s = 0.0
+                                var i = 0
+                                while i < a.count {
+                                    s = s + a[i] * b[i]
+                                    i = i + 1
+                                }
+                                return s
+                            }
+
+                            fn dot32(_ a: I32[:], _ b: I32[:]) -> I32 {
+                                var s: I32 = 0
+                                var i = 0
+                                while i < a.count {
+                                    s = s + a[i] * b[i]
+                                    i = i + 1
+                                }
+                                return s
+                            }
+
+                            fn product32(_ a: I32[:], _ b: I32[:], _ c: inout I32[>..]) {
+                                var i = 0
+                                while i < a.count {
+                                    c[i] = a[i] * b[i]
+                                    i = i + 1
+                                }
+                            }
+
+                            // Zeros after: a loop of 16 turns or more runs as the copy whose overflow is checked after it.
+                            fn long(_ a: I32[>..]) -> I32[>..] {
+                                var b = a
+                                while b.count < 20 {
+                                    b.append(I32(blackBox(0)))
+                                }
+                                return b
+                            }
+                            """;
+
+    /// <summary>
+    ///     Dot products and products into a third array vectorise: of I32s,
+    ///     their overflow checked after the loop as an Int's is; of F64s, in
+    ///     order, which arm64 can do without reassociating. An Int dot
+    ///     product does not: NEON has no 64-bit multiply, and the cost model
+    ///     says so. On x86-64 a strict F64 sum needs the reassociation opt-in.
+    /// </summary>
+    [Fact]
+    public void DotProductsAndProductsIntoAThirdArrayVectorize() {
+        if (!Programs.CanBuild || System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.Arm64) {
+            return;
+        }
+
+        var loops = Report(Programs.Program(Products,
+            "    let one = blackBox(1)\n    let f = F64(one)\n    let h = I32(one)\n    var c: I32[>..] = [h]\n    product32([h], [h + 1], &c)\n    print(\"\\(dot([f], [f])) \\(dot32([h, h], [h, h])) \\(c[0])\")"));
+        Assert.True(loops.Any(l => l.Line is >= 4 and <= 8 && l.Vectorized), VectorizationReport.Format(loops));
+        Assert.True(loops.Any(l => l.Line is >= 14 and <= 18 && l.Vectorized), VectorizationReport.Format(loops));
+        Assert.True(loops.Any(l => l.Line is >= 23 and <= 27 && l.Vectorized), VectorizationReport.Format(loops));
+    }
+
+    /// <summary>An I32 total or product overflows, or nearly, where the loop as written says.</summary>
+    [Theory]
+    [InlineData("print(dot32([46340, 1], [46340, -1]))", "2147395599\n", null)] // a large term: the loop as written, again
+    [InlineData("print(dot32([46340, 46340], [46340, 46340]))", "", "test.sb:16:13")] // the total
+    [InlineData("print(dot32([1, 46341], [1, 46341]))", "", "test.sb:16:17")] // the product
+    [InlineData("var c: I32[>..] = [0, 0, 0]\n    product32([1, 65536, 2], [1, 65536, 2], &c)\n    print(c[0])", "", "test.sb:25:16")]
+    [InlineData("var c: I32[>..] = [0, 0, 0]\n    product32([3, -4, 5], [7, 6, 5], &c)\n    print(\"\\(c[0]) \\(c[1]) \\(c[2])\")", "21 -24 25\n", null)]
+    [InlineData("print(dot32(long([46340, 1]), long([46340, -1])))", "2147395599\n", null)]
+    [InlineData("print(dot32(long([46340, 46340]), long([46340, 46340])))", "", "test.sb:16:13")]
+    [InlineData("print(dot32(long([1, 46341]), long([1, 46341])))", "", "test.sb:16:17")]
+    [InlineData("print(dot32(long([3, -4, 5]), long([7, 6, 5])))", "22\n", null)]
+    [InlineData("var c = long([0, 0, 0])\n    product32(long([1, 65536, 2]), long([1, 65536, 2]), &c)\n    print(c[0])", "", "test.sb:25:16")]
+    [InlineData("var c = long([0, 0, 0])\n    product32(long([3, -4, 5]), long([7, 6, 5]), &c)\n    print(\"\\(c[0]) \\(c[1]) \\(c[2]) \\(c[19])\")", "21 -24 25 0\n", null)]
+    public void AnI32TotalOrProductTrapsWhereItAlwaysDid(string body, string output, string? trap) {
+        var execution = Programs.AssertAgree(Programs.Program(Products, "    " + body));
+        Assert.Equal(output, execution.Stdout);
+        if (trap is not null) {
+            Assert.Contains("integer overflow", execution.Stderr, StringComparison.Ordinal);
+            Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    ///     'contains' and a byte search have early exits LLVM's loop
+    ///     vectoriser does not take over an array it cannot see the end of
+    ///     ("potentially faulting early exit loop"), so they are not left to
+    ///     it: an Int array's 'contains' is Sable.Core's search a vector at a
+    ///     time (Array+VectorSearch.sb), and a byte array's 'firstIndex(of:)'
+    ///     the runtime's byte search.
+    /// </summary>
+    [Fact]
+    public void ContainsAndAByteSearchGoAVectorAtATime() {
+        var directory = Directory.CreateTempSubdirectory("sable-vectorize-");
+        try {
+            var source = Programs.Program(
+                """
+                fn has(_ a: Int[:], _ x: Int) -> Bool => a.contains(x)
+
+                fn position(_ a: U8[:], _ x: U8) -> Int? => a.firstIndex(of: x)
+                """,
+                "    let a: Int[>..] = [1, 2, 3]\n    let u: U8[>..] = [1, 2, 3]\n    print(\"\\(has(a, 2)) \\(position(u, 3) ?? -1)\")"
+            );
+            var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"))], directory.FullName, checkExclusivity: false, optimised: true);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            Assert.Matches(@"icmp eq <\d+ x i64>", result.LlvmIr!);
+            Assert.Contains("@sable_bytes_find(", result.LlvmIr!, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
     }
 
     /// <summary><c>sable build --vectorize-report</c> names each loop by its place, and says why one was not vectorised.</summary>

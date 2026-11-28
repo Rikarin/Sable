@@ -1036,6 +1036,14 @@ public sealed class BuiltinInst(string name, SilType type, params SilValue[] ope
     /// </summary>
     public bool InBounds { get; set; }
 
+    /// <summary>
+    ///     <c>builtin [no_overflow]</c>: wrapping arithmetic of an Int a pass
+    ///     has proved never wraps (<see cref="ProveNoOverflow" />), so that
+    ///     LLVM is told so (<c>add nsw</c>) as the checked operation told it:
+    ///     what it knew of an index's range it keeps.
+    /// </summary>
+    public bool NoOverflow { get; set; }
+
     public override SilType Type { get; } = type;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";
@@ -3058,12 +3066,14 @@ public static class SilBuiltins {
             Binary(op, SilType.Bool, SilType.Bool);
         }
 
-        // Int arithmetic whose overflow is checked later (VersionLoops): the
-        // result, wrapped; and, given the iteration and the first iteration
-        // that overflowed so far (Int.max for none), that first iteration.
-        foreach (var op in new[] { "add", "sub", "mul" }) {
-            Add($"wrapping_{op}_Int", SilType.Int, SilType.Int, SilType.Int);
-            Add($"overflow_at_{op}_Int", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // Signed arithmetic whose overflow is checked later (VersionLoops):
+        // given the operands, the iteration and the first iteration that
+        // overflowed so far (Int.max for none), that first iteration. The
+        // result is the operation's wrapping form.
+        foreach (var integer in SilType.Integers.Where(static t => SilType.IntegerInfo(t) is (<= 64, true))) {
+            foreach (var op in new[] { "add", "sub", "mul" }) {
+                Add($"overflow_at_{op}_{integer}", SilType.Int, integer, integer, SilType.Int, SilType.Int);
+            }
         }
 
         foreach (var type in SilType.Numbers.Concat([SilType.Bool, SilType.Char, SilType.String])) {

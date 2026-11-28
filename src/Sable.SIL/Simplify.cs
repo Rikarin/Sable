@@ -594,7 +594,7 @@ public sealed class Simplify : ISilPass {
     ///     <c>br</c> or <c>cond_br</c> is changed, as those can drop what they
     ///     pass.
     /// </summary>
-    static bool SimplifyArguments(SilFunction function) {
+    internal static bool SimplifyArguments(SilFunction function) {
         var edges = new Dictionary<SilBlock, List<SilInstruction>>();
         foreach (var block in function.Blocks) {
             foreach (var successor in block.Successors.Distinct()) {

@@ -1385,6 +1385,187 @@ public sealed class PassTests {
         Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.run", 9L)).Message);
     }
 
+    const string Pool = """
+                        class Pool {
+                            var bytes: U8[>..] = []
+                            var starts: Int[>..] = []
+                            var seen = 0
+
+                            fn total() -> Int {
+                                var sum = 0
+                                var i = 0
+                                while i < starts.count {
+                                    sum = sum &+ starts[i]
+                                    i += 1
+                                }
+                                return sum
+                            }
+
+                            // Writes a field each time round: what it reads is checked each time.
+                            fn counted() -> Int {
+                                var sum = 0
+                                var i = 0
+                                while i < starts.count {
+                                    sum = sum &+ starts[i]
+                                    seen += 1
+                                    i += 1
+                                }
+                                return sum
+                            }
+
+                            fn rising() -> Bool {
+                                var i = 1
+                                while i < starts.count {
+                                    if starts[i] < starts[i - 1] {
+                                        return false
+                                    }
+                                    i += 1
+                                }
+                                return true
+                            }
+
+                            // Another index, checked each time round: no copy, for a comparison saved of two.
+                            fn mixed(_ k: Int) -> Int {
+                                var sum = 0
+                                var j = 0
+                                while j < 2 {
+                                    sum = sum &+ Int(bytes[j + 1]) &+ starts[k]
+                                    j += 1
+                                }
+                                return sum
+                            }
+
+                            fn same(_ from: Int, _ other: U8[>..], _ start: Int, _ count: Int) -> Bool {
+                                var j = 0
+                                while j < count {
+                                    if bytes[from + j] != other[start + j] {
+                                        return false
+                                    }
+                                    j += 1
+                                }
+                                return true
+                            }
+                        }
+                        fn make() -> Pool {
+                            let pool = Pool()
+                            pool.bytes = [3, 4, 3, 4, 3]
+                            pool.starts = [5, 6, 7]
+                            return pool
+                        }
+                        fn total() -> Int { return make().total() }
+                        fn counted() -> Int { return make().counted() }
+                        fn rising(_ first: Int) -> Bool {
+                            let pool = make()
+                            pool.starts[0] = first
+                            return pool.rising()
+                        }
+                        fn mixed(_ k: Int) -> Int { return make().mixed(k) }
+                        fn same(_ from: Int, _ start: Int, _ count: Int) -> Bool { return make().same(from, [3, 4, 3], start, count) }
+                        """;
+
+    /// <summary>
+    ///     The index's step under its test, 'i + 1' under 'i < a.count' and
+    ///     'j - 1' under 'j > 0' in a loop not versioned (it counts down),
+    ///     checks no overflow; a step of two under a bound that is no count
+    ///     still does, and traps where it did.
+    /// </summary>
+    [Fact]
+    public void AnIndexsStepUnderItsTestChecksNoOverflow() {
+        var module = Lowered(
+            """
+            @inline(never)
+            fn note(_ x: Int) -> Int { return x }
+            fn walk(_ a: Int[:]) -> Int {
+                var s = 0
+                var i = 0
+                while i < a.count {
+                    s = s + note(a[i])
+                    i = i + 1
+                }
+                var j = a.count
+                while j > 0 {
+                    s = s + note(a[j - 1] * j)
+                    j = j - 1
+                }
+                return s
+            }
+            fn far(_ n: Int, _ k: Int) -> Int {
+                var i = k
+                var s = 0
+                while i < n {
+                    s = s + note(1)
+                    i = i + 2
+                }
+                return s
+            }
+            fn run() -> Int { return walk([1, 2, 3]) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        // The steps: an addition or subtraction of a constant.
+        static int Steps(SilFunction function, string name) =>
+            function.Blocks.Sum(b => b.Instructions.Count(i => i is BuiltinInst builtin && builtin.Name == name && builtin.Operands.Any(static o => o is IntegerLiteralInst)));
+
+        var walk = module.Find("M.walk")!;
+        Assert.Equal(0, Steps(walk, "add_Int") + Steps(walk, "sub_Int"));
+        Assert.True(Steps(walk, "wrapping_sub_Int") > 0);
+        // Marked as never wrapping, which LLVM is told (nsw), and kept so in SIL's text.
+        Assert.Contains(walk.Blocks.SelectMany(static b => b.Instructions).OfType<BuiltinInst>(), static b => b.Name is "wrapping_add_Int" or "wrapping_sub_Int" && b.NoOverflow);
+        var text = SilPrinter.Print(module);
+        Assert.Contains("builtin [no_overflow] \"wrapping_", text, StringComparison.Ordinal);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+        Assert.Equal(1, Steps(module.Find("M.far")!, "add_Int"));
+        Assert.Equal(20L, new SilInterpreter(module).Run("M.run"));
+        Assert.Equal(2L, new SilInterpreter(module).Run("M.far", 4L, 0L));
+        Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.far", long.MaxValue, long.MaxValue - 1));
+    }
+
+    /// <summary>
+    ///     A loop that reads an array kept in a field of an object, and
+    ///     writes no field, checks its indices once before it, as one over a
+    ///     local does; one at an offset ('a[from + j]') checks the offset with
+    ///     them, and adds it without an overflow check where all is in range.
+    ///     A loop that writes a field keeps every check.
+    /// </summary>
+    [Fact]
+    public void ALoopOverAFieldChecksItsIndicesOnceBeforeIt() {
+        var module = Lowered(Pool);
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        BuiltinInst[] Reads(string function) =>
+            [..Instructions(module.Find(function)!).OfType<BuiltinInst>().Where(static b => b.Name == "array_get")];
+
+        Assert.Equal(2, Reads("M.Pool.total").Length);
+        Assert.Single(Reads("M.Pool.total"), static r => r.InBounds);
+        Assert.DoesNotContain(Reads("M.Pool.counted"), static r => r.InBounds);
+        Assert.Equal(4, Reads("M.Pool.same").Length);
+        Assert.Equal(2, Reads("M.Pool.same").Count(static r => r.InBounds));
+        // In the copy that is checked once, the offsets are added without a check; in the other, with one.
+        // (The steps 'j + 1' under 'j < count' are proved not to overflow, and marked so: ProveNoOverflow.)
+        var adds = Instructions(module.Find("M.Pool.same")!).OfType<BuiltinInst>().Where(static b => b.Name.EndsWith("add_Int", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, adds.Count(static a => a.Name == "wrapping_add_Int" && !a.NoOverflow));
+        Assert.Contains(adds, static a => a.Name == "add_Int");
+        // Below the index ('starts[i - 1]'), with the start checked against the offset too.
+        Assert.Equal(2, Reads("M.Pool.rising").Count(static r => r.InBounds));
+        Assert.Contains(Instructions(module.Find("M.Pool.rising")!), static i => i is BuiltinInst { Name: "wrapping_sub_Int" });
+        Assert.DoesNotContain(Reads("M.Pool.mixed"), static r => r.InBounds);
+        Assert.Equal(true, new SilInterpreter(module).Run("M.rising", 5L));
+        Assert.Equal(false, new SilInterpreter(module).Run("M.rising", 7L));
+        Assert.Equal(19L, new SilInterpreter(module).Run("M.mixed", 1L));
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.mixed", 3L)).Message);
+
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(18L, interpreter.Run("M.total"));
+        Assert.Equal(18L, interpreter.Run("M.counted"));
+        Assert.Equal(true, interpreter.Run("M.same", 2L, 0L, 3L));
+        Assert.Equal(false, interpreter.Run("M.same", 1L, 0L, 2L));
+        // Out of range, either array, past the end or before the start: the traps of the loop as written.
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.same", 2L, 0L, 4L)).Message);
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.same", 0L, 0L, 4L)).Message);
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.same", -1L, 0L, 2L)).Message);
+    }
+
     /// <summary>A program lowered as a release build lowers it: Sable.Core's '#if RELEASE' side.</summary>
     static SilModule LoweredForRelease(string source) {
         var options = ParseOptions.Default.WithSymbols("RELEASE");
@@ -1671,6 +1852,89 @@ public sealed class PassTests {
         Assert.Equal([StoreKind.Init, StoreKind.Init], stores.Where(static s => s.IntoFresh).Take(2).Select(static s => s.Kind));
         Assert.Contains(stores, static s => s.Kind == StoreKind.Assign);
         Assert.Equal(2L, new SilInterpreter(module).Run("M.run"));
+    }
+
+    /// <summary>
+    ///     An array kept in a field and passed to a function that writes no
+    ///     field is lent to it, not copied: the object holds it while the
+    ///     callee runs. Passed to one that may write a field — this one, so
+    ///     that the array would go while lent — it is copied as before.
+    /// </summary>
+    [Fact]
+    public void AFieldsArrayIsLentToACalleeThatWritesNoField() {
+        var module = Lowered(
+            """
+            class Pool {
+                var bytes: U8[>..] = []
+                var seen = 0
+            }
+            @inline(never)
+            fn sum(_ a: U8[>..]) -> Int {
+                var total = 0
+                for b in a {
+                    total += Int(b)
+                }
+                return total
+            }
+            @inline(never)
+            fn replace(_ a: U8[>..], _ pool: Pool) -> Int {
+                pool.bytes = []
+                return sum(a)
+            }
+            @inline(never)
+            fn lent(_ pool: Pool) -> Int { return sum(pool.bytes) }
+            @inline(never)
+            fn copied(_ pool: Pool) -> Int { return replace(pool.bytes, pool) }
+            fn run() -> Int {
+                let pool = Pool()
+                pool.bytes = [1, 2, 3]
+                let first = lent(pool)
+                return first * 100 + copied(pool) * 10 + lent(pool)
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.Equal(0, Copies(module, "M.lent"));
+        Assert.Equal(1, Copies(module, "M.copied"));
+        Assert.Equal(660L, new SilInterpreter(module).Run("M.run"));
+    }
+
+
+    /// <summary>
+    ///     What a callee may write is summarised again each time the pass
+    ///     runs: a store into a field a pass between two runs took out of the
+    ///     callee no longer keeps its caller's array from being lent, and one
+    ///     put into it would not be missed.
+    /// </summary>
+    [Fact]
+    public void WhatACalleeWritesIsSummarisedForEachRun() {
+        var module = Lowered(
+            """
+            class Pool {
+                var bytes: U8[>..] = []
+                var seen = 0
+            }
+            @inline(never)
+            fn count(_ a: U8[>..], _ pool: Pool) -> Int {
+                pool.seen = 1
+                return a.count
+            }
+            @inline(never)
+            fn lent(_ pool: Pool) -> Int { return count(pool.bytes, pool) }
+            """
+        );
+        var pass = new BorrowLoads();
+        pass.Run(module);
+        Assert.Equal(1, Copies(module, "M.lent"));
+
+        // As a later pass might: the store goes, and with it what 'count' writes.
+        foreach (var block in module.Find("M.count")!.Blocks) {
+            block.Instructions.RemoveAll(static i => i is StoreInst { Address: RefElementAddrInst });
+        }
+
+        pass.Run(module);
+        Assert.Equal(0, Copies(module, "M.lent"));
     }
 
     /// <summary>

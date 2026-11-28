@@ -503,9 +503,41 @@ public sealed class BorrowLoads : ISilPass {
             // An exclusivity marker or check reads where an access is; it writes nothing the program sees.
             BuiltinInst builtin => !SharedStorage.IsMarker(builtin.Name)
                 && (SilBuiltins.RunsWork(builtin.Name) || builtin.Operands.Any(static o => o.Type is AddressType)),
+            // A call of a function that writes no field and runs no deinit, nor calls one that may: a class's
+            // array lent to it, as 'same(pool, ...)', stays in its field while it runs (BorrowFields.Summarise).
+            ApplyInst { Callee: FunctionRefInst { Function: var callee } } => WritesOf(module, callee),
+            TryApplyInst { Callee: FunctionRefInst { Function: var thrower } } => WritesOf(module, thrower),
             _ => true,
         };
     }
+
+    /// <summary>
+    ///     Runs the pass over a module with what each of its functions may
+    ///     write summarised as it is now: made again for every run, as the
+    ///     passes between two runs change bodies — what a callee releases,
+    ///     where it moves out of a field — and a summary kept from an earlier
+    ///     run could call a function that now writes a field one that does not.
+    ///     A run only turns copies into borrows, which writes less, so the
+    ///     summary holds while it lasts.
+    /// </summary>
+    public void Run(SilModule module) {
+        var (outerModule, outerWrites) = (_summarised, _writes);
+        (_summarised, _writes) = (module, BorrowFields.Summarise(module));
+        try {
+            foreach (var function in module.Functions) {
+                Run(function);
+            }
+        } finally {
+            (_summarised, _writes) = (outerModule, outerWrites);
+        }
+    }
+
+    // What the module this thread's run of the pass is over may write; outside a run, every call may write.
+    [ThreadStatic] static SilModule? _summarised;
+    [ThreadStatic] static Dictionary<string, bool>? _writes;
+
+    static bool WritesOf(SilModule? module, string callee) =>
+        module is null || !ReferenceEquals(module, _summarised) || _writes!.GetValueOrDefault(callee, true);
 }
 
 /// <summary>

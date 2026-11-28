@@ -72,7 +72,7 @@ public struct TlsRecordCipher: Sendable {
         nextNonce()
         // Sealed in a buffer of its own, kept from one record to the next,
         // and the tag in another: each whole, which an inout slice of a
-        // range of an array is not without a copy of the array (#ISSUE).
+        // range of an array is not without a copy of the array (#354).
         var sealing = text
         text = []
         var sealingTag = tag

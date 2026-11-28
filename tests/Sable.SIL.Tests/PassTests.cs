@@ -1464,6 +1464,64 @@ public sealed class PassTests {
                         """;
 
     /// <summary>
+    ///     The index's step under its test, 'i + 1' under 'i < a.count' and
+    ///     'j - 1' under 'j > 0' in a loop not versioned (it counts down),
+    ///     checks no overflow; a step of two under a bound that is no count
+    ///     still does, and traps where it did.
+    /// </summary>
+    [Fact]
+    public void AnIndexsStepUnderItsTestChecksNoOverflow() {
+        var module = Lowered(
+            """
+            @inline(never)
+            fn note(_ x: Int) -> Int { return x }
+            fn walk(_ a: Int[:]) -> Int {
+                var s = 0
+                var i = 0
+                while i < a.count {
+                    s = s + note(a[i])
+                    i = i + 1
+                }
+                var j = a.count
+                while j > 0 {
+                    s = s + note(a[j - 1] * j)
+                    j = j - 1
+                }
+                return s
+            }
+            fn far(_ n: Int, _ k: Int) -> Int {
+                var i = k
+                var s = 0
+                while i < n {
+                    s = s + note(1)
+                    i = i + 2
+                }
+                return s
+            }
+            fn run() -> Int { return walk([1, 2, 3]) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        // The steps: an addition or subtraction of a constant.
+        static int Steps(SilFunction function, string name) =>
+            function.Blocks.Sum(b => b.Instructions.Count(i => i is BuiltinInst builtin && builtin.Name == name && builtin.Operands.Any(static o => o is IntegerLiteralInst)));
+
+        var walk = module.Find("M.walk")!;
+        Assert.Equal(0, Steps(walk, "add_Int") + Steps(walk, "sub_Int"));
+        Assert.True(Steps(walk, "wrapping_sub_Int") > 0);
+        // Marked as never wrapping, which LLVM is told (nsw), and kept so in SIL's text.
+        Assert.Contains(walk.Blocks.SelectMany(static b => b.Instructions).OfType<BuiltinInst>(), static b => b.Name is "wrapping_add_Int" or "wrapping_sub_Int" && b.NoOverflow);
+        var text = SilPrinter.Print(module);
+        Assert.Contains("builtin [no_overflow] \"wrapping_", text, StringComparison.Ordinal);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+        Assert.Equal(1, Steps(module.Find("M.far")!, "add_Int"));
+        Assert.Equal(20L, new SilInterpreter(module).Run("M.run"));
+        Assert.Equal(2L, new SilInterpreter(module).Run("M.far", 4L, 0L));
+        Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.far", long.MaxValue, long.MaxValue - 1));
+    }
+
+    /// <summary>
     ///     A loop that reads an array kept in a field of an object, and
     ///     writes no field, checks its indices once before it, as one over a
     ///     local does; one at an offset ('a[from + j]') checks the offset with
@@ -1484,8 +1542,10 @@ public sealed class PassTests {
         Assert.Equal(4, Reads("M.Pool.same").Length);
         Assert.Equal(2, Reads("M.Pool.same").Count(static r => r.InBounds));
         // In the copy that is checked once, the offsets are added without a check; in the other, with one.
+        // (The steps 'j + 1' under 'j < count' are proved not to overflow, and marked so: ProveNoOverflow.)
         var adds = Instructions(module.Find("M.Pool.same")!).OfType<BuiltinInst>().Where(static b => b.Name.EndsWith("add_Int", StringComparison.Ordinal)).ToList();
-        Assert.Equal(2, adds.Count(static a => a.Name == "wrapping_add_Int"));
+        Assert.Equal(2, adds.Count(static a => a.Name == "wrapping_add_Int" && !a.NoOverflow));
+        Assert.Contains(adds, static a => a.Name == "add_Int");
         // Below the index ('starts[i - 1]'), with the start checked against the offset too.
         Assert.Equal(2, Reads("M.Pool.rising").Count(static r => r.InBounds));
         Assert.Contains(Instructions(module.Find("M.Pool.rising")!), static i => i is BuiltinInst { Name: "wrapping_sub_Int" });

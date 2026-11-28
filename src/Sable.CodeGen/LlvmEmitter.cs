@@ -7906,7 +7906,7 @@ public sealed partial class LlvmEmitter {
                         break;
                     }
                     case var arithmetic:
-                        Line($"{wresult} = {arithmetic} {wt} {operands[0]}, {operands[1]}");
+                        Line($"{wresult} = {arithmetic}{(builtin.NoOverflow ? " nsw" : "")} {wt} {operands[0]}, {operands[1]}");
                         break;
                 }
 

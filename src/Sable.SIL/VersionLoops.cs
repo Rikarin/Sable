@@ -517,7 +517,10 @@ public sealed class VersionLoops : ISilPass {
                 var below = new BuiltinInst("cmp_le_Int", SilType.Bool, term, negative) { Block = block, Location = site.Location };
                 var either = new BuiltinInst("or_Bool", SilType.Bool, above, below) { Block = block, Location = site.Location };
                 var anyNext = new BuiltinInst("or_Bool", SilType.Bool, any, either) { Block = block, Location = site.Location };
-                block.Instructions.InsertRange(at, [above, below, either, anyNext]);
+                // After the addition, not before: the vectorised body then adds
+                // each register in before testing it, and keeps fewer live at once
+                // (arm64's Int sum spilled four registers the other way).
+                block.Instructions.InsertRange(at + 1, [above, below, either, anyNext]);
                 any = anyNext;
             }
 

@@ -1042,16 +1042,22 @@ public sealed class SilParser {
                 break;
 
             case "builtin": {
-                var inBounds = Accept("[");
-                if (inBounds) {
-                    Expect("in_bounds");
+                var (inBounds, noOverflow) = (false, false);
+                if (Accept("[")) {
+                    if (Accept("no_overflow")) {
+                        noOverflow = true;
+                    } else {
+                        Expect("in_bounds");
+                        inBounds = true;
+                    }
+
                     Expect("]");
                 }
 
                 var name = Expect(TokenKind.String, "a builtin name").Text;
                 var arguments = OperandList(0);
                 Expect(":");
-                instruction = new BuiltinInst(name, ParseType(), [..arguments]) { InBounds = inBounds };
+                instruction = new BuiltinInst(name, ParseType(), [..arguments]) { InBounds = inBounds, NoOverflow = noOverflow };
                 break;
             }
 

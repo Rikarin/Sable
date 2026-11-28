@@ -1036,6 +1036,14 @@ public sealed class BuiltinInst(string name, SilType type, params SilValue[] ope
     /// </summary>
     public bool InBounds { get; set; }
 
+    /// <summary>
+    ///     <c>builtin [no_overflow]</c>: wrapping arithmetic of an Int a pass
+    ///     has proved never wraps (<see cref="ProveNoOverflow" />), so that
+    ///     LLVM is told so (<c>add nsw</c>) as the checked operation told it:
+    ///     what it knew of an index's range it keeps.
+    /// </summary>
+    public bool NoOverflow { get; set; }
+
     public override SilType Type { get; } = type;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";
